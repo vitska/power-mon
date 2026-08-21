@@ -86,9 +86,12 @@ the console says so once and disables editing:
 Terminal does not support escape sequences; line editing disabled.
 ```
 
-The framing is unaffected. A script may drive USB exactly as a BLE client would; the
-prompt string `batmon> ` is the only extra output, and it carries no CR/LF, so it
-appears immediately before the next echo line.
+The framing is unaffected. A script may drive USB exactly as a BLE client would, with
+one parsing caveat: the prompt string `batmon> ` carries **no CR/LF**, so whatever
+follows it shares its line — the next echo line, or the next stream record. A USB parser
+matching `^#` or `^f,` will miss the first record after a prompt. Either strip a leading
+`batmon> `, or split on the prompt as well as on newlines. BLE has no prompt and no such
+hazard.
 
 ---
 
@@ -226,13 +229,21 @@ sending current at the temperature rate loses the event you were watching for.
 |---|---|---|---|
 | fast | `f` | **100 ms (10 Hz)** | voltage, current — the measurement itself |
 | calculated | `c` | **500 ms (2 Hz)** | power, SoC, charge, state, OCV, Peukert |
+| diagnostics | `d` | **1000 ms + on change** | raw shunt drop, active range, saturation |
 | environmental | `e` | **10 000 ms** | temperature, humidity, pressure |
+
+**Diagnostics is emitted on change as well as on its period.** A range step or the
+saturation flag flipping is exactly what invalidates the fast group's numbers, so
+waiting up to a second to hear about it would mean a second of readings already
+believed. Measured: a `d` record appears within 400 ms of a range change, carrying the
+new range — so 1 s is a cheap floor rather than the latency that matters.
 
 ```
 stream csv                enable, CSV grouped records, re-emit headers
 stream text               human one-liner instead, at the calc rate
 stream fast <ms|off>      20..60000
 stream calc <ms|off>      20..60000
+stream diag <ms|off>      20..60000, and always also on change
 stream env  <ms|off>      20..600000, and it also sets how often the sensor is read
 stream on | off           all groups
 stream                    show the current state
@@ -249,11 +260,18 @@ parser can either use them or skip them on that one character.
 ```
 #f,ms,volts,amps
 #c,ms,watts,soc_pct,charge_ah,state,ocv_v,peukert
+#d,ms,shunt_mv,pga,sat
 #e,ms,temp_c,humid_pct,press_hpa
 f,7073,13.113,-0.0006
 c,7213,-0.007,90.2,39.696,RESTING,13.117,1.000
+d,19203,0.030,/1 (+/-40mV),0
 e,7033,26.97,48.9,1001.64
 ```
+
+**Ignore record prefixes you do not recognise.** New types may be added without a
+protocol bump — that is the point of prefixing them, and a client that skips unknown
+ones keeps working across firmware it has never seen. Only a change to an *existing*
+record's fields bumps the version.
 
 Records are **never duplicated**: a group emits only when the underlying sample is new.
 Ask for 10 Hz from a 7.3 Hz sensor and you get 7.3 Hz of distinct records rather than
@@ -292,6 +310,9 @@ records.
 | `state` | `UNKNOWN` \| `COUNTING` \| `RESTING` \| `FULL` \| `EMPTY` |
 | `ocv_v` | I·R-compensated open-circuit estimate — what the SoC map actually uses |
 | `peukert` | the discharge multiplier in force right now; `1.000` while charging |
+| `shunt_mv` | raw shunt drop before any scaling — the wiring diagnostic |
+| `pga` | active range, e.g. `/8 (+/-320mV)`. Contains spaces and parentheses but **no comma**, so the field count is stable |
+| `sat` | `1` when the shunt channel is at its range limit. **Treat the matching `f` records as having no valid current** — the number is a limit, not a measurement |
 | `temp_c` | board temperature, °C to 2 dp. **Empty when no sensor is fitted** |
 | `humid_pct` | relative humidity, 1 dp. **Empty on a BMP280**, which has no humidity channel |
 | `press_hpa` | pressure, hPa to 2 dp. Empty when no sensor is fitted |
@@ -300,9 +321,8 @@ The environmental fields are **empty rather than zero** when unavailable: 0.00 �
 plausible temperature and would be indistinguishable from a real reading. The field
 count never changes, so a positional parser stays valid — it just sees `,,`.
 
-Raw diagnostics — `shunt_mv`, `pga`, `sat` — are no longer in the stream. They belong to
-a single measurement rather than to telemetry, and `read` reports them on demand. A
-client that needs to know whether the shunt channel is saturated should call `read`.
+`read` still reports the same diagnostics for a single on-demand measurement, alongside
+the load voltage and idle offset that are not streamed at all.
 
 **The stream reaches both transports**, emitted by the sampler task directly to USB
 and to the BLE TX characteristic, so a phone gets it without polling. Lines end

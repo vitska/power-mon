@@ -81,6 +81,14 @@ typedef struct {
     volatile uint32_t rate_fast_ms;
     volatile uint32_t rate_calc_ms;
     volatile uint32_t rate_env_ms;
+    /*
+     * Diagnostics: raw shunt drop, active range, saturation. Mostly static, so a low
+     * periodic rate suffices -- but it is ALSO emitted the moment the range or the
+     * saturation flag changes, because those are exactly the events that invalidate
+     * the fast group's numbers, and learning about them a second late means a second
+     * of readings already believed.
+     */
+    volatile uint32_t rate_diag_ms;
 
     /*
      * Environmental sensor, read on its own slow cadence (§4.4) and cached. Nothing
@@ -129,7 +137,7 @@ typedef struct {
  * 2: the CSV stream gained temp_c, humid_pct and press_hpa columns.
  */
 #define BATMON_CLI_PROTOCOL 3
-#define BATMON_FW_VERSION   "0.4.0-m2"
+#define BATMON_FW_VERSION   "0.5.0-m2"
 #define BATMON_EOT          '\x04'
 
 app_ctx_t *app_ctx(void);

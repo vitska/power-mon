@@ -274,12 +274,14 @@ prefixed record types:
 |---|---|---|---|
 | fast | `f` | 100 ms (10 Hz) | voltage, current |
 | calculated | `c` | 500 ms (2 Hz) | power, SoC, charge, state, OCV, Peukert |
+| diagnostics | `d` | 1 s **and on change** | raw shunt drop, range, saturation |
 | environmental | `e` | 10 s | temperature, humidity, pressure |
 
 ```
 stream csv                 grouped records, headers re-emitted
 stream fast 100            10 Hz voltage and current
 stream calc 500            2 Hz derived values
+stream diag 1000           1 s diagnostics, plus immediately on any change
 stream env 10000           10 s environmental; also sets the sensor read cadence
 stream env off             disable one group without touching the others
 ```

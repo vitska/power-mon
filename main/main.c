@@ -422,6 +422,7 @@ static void emit_headers(app_ctx_t *ctx)
     ctx->stream_csv_header_done = true;
     if (ctx->rate_fast_ms) stream_emit("#f,ms,volts,amps");
     if (ctx->rate_calc_ms) stream_emit("#c,ms,watts,soc_pct,charge_ah,state,ocv_v,peukert");
+    if (ctx->rate_diag_ms) stream_emit("#d,ms,shunt_mv,pga,sat");
     if (ctx->rate_env_ms)  stream_emit("#e,ms,temp_c,humid_pct,press_hpa");
 }
 
@@ -448,6 +449,15 @@ static void emit_calc(const power_sample_t *s)
              fg_state_str(fg.state),
              FMT_V(bo, fg.ocv_uv),
              fixed_fmt(bk, sizeof(bk), fg.peukert_factor_q16, 65536, 3));
+    stream_emit(line);
+}
+
+static void emit_diag(const power_sample_t *s)
+{
+    char line[112], bsh[24];
+    snprintf(line, sizeof(line), "d,%lu,%s,%s,%d",
+             (unsigned long)(s->t_us / 1000), FMT_MV(bsh, s->v_shunt_uv),
+             ina219_pga_str(s->pga), s->saturated ? 1 : 0);
     stream_emit(line);
 }
 
@@ -505,6 +515,12 @@ static void sampler_task(void *arg)
      * that a client would count as real samples. */
     int64_t last_fast_t  = 0;
     int64_t last_calc_t  = 0;
+    int64_t next_diag_us = next_fast_us;
+    /* Previous range and saturation, so a change can be reported the instant it
+     * happens rather than at the next periodic slot. */
+    ina219_pga_t last_pga = (ina219_pga_t)0xFF;
+    bool         last_sat = false;
+    bool         diag_primed = false;
     bool    warned_unresolved = false;
 
     for (;;) {
@@ -593,6 +609,25 @@ static void sampler_task(void *arg)
                     next_calc_us = now + (int64_t)ctx->rate_calc_ms * 1000;
                     last_calc_t  = ctx->last.t_us;
                     emit_calc(&ctx->last);
+                }
+                if (ctx->rate_diag_ms) {
+                    /* Change-or-deadline, whichever comes first. The change test is
+                     * what makes a 1 s period acceptable for something a client needs
+                     * to know about immediately. */
+                    const bool changed = diag_primed &&
+                                         (ctx->last.pga != last_pga ||
+                                          ctx->last.saturated != last_sat);
+                    if (changed || now >= next_diag_us) {
+                        next_diag_us = now + (int64_t)ctx->rate_diag_ms * 1000;
+                        last_pga     = ctx->last.pga;
+                        last_sat     = ctx->last.saturated;
+                        diag_primed  = true;
+                        emit_diag(&ctx->last);
+                    } else if (!diag_primed) {
+                        last_pga    = ctx->last.pga;
+                        last_sat    = ctx->last.saturated;
+                        diag_primed = true;
+                    }
                 }
                 if (ctx->rate_env_ms && now >= next_env_us) {
                     next_env_us = now + (int64_t)ctx->rate_env_ms * 1000;
@@ -763,6 +798,7 @@ void app_main(void)
     ctx->stream_enabled   = BATMON_STREAM_ON_BOOT;
     ctx->rate_fast_ms     = CONFIG_BATMON_STREAM_FAST_MS;
     ctx->rate_calc_ms     = CONFIG_BATMON_STREAM_CALC_MS;
+    ctx->rate_diag_ms     = CONFIG_BATMON_STREAM_DIAG_MS;
     ctx->rate_env_ms      = CONFIG_BATMON_STREAM_ENV_MS;
     stats_reset(&ctx->window);
 

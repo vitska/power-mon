@@ -233,6 +233,8 @@ static bool stream_set_rate(const char *what, const char *val)
         target = &s_ctx->rate_fast_ms;
     } else if (strcmp(what, "calc") == 0) {
         target = &s_ctx->rate_calc_ms;
+    } else if (strcmp(what, "diag") == 0) {
+        target = &s_ctx->rate_diag_ms;
     } else if (strcmp(what, "env") == 0) {
         target = &s_ctx->rate_env_ms;
         maxms  = 600000; /* a thermal mass may legitimately be reported once a minute */
@@ -278,10 +280,13 @@ static void stream_show(void)
            (unsigned long)s_ctx->rate_fast_ms);
     printf("  calc  %-6lu ms   power, SoC, charge, state, OCV, Peukert\n",
            (unsigned long)s_ctx->rate_calc_ms);
+    printf("  diag  %-6lu ms   shunt drop, range, saturation (plus on change)\n",
+           (unsigned long)s_ctx->rate_diag_ms);
     printf("  env   %-6lu ms   temperature, humidity, pressure\n",
            (unsigned long)s_ctx->rate_env_ms);
-    printf("0 means that group is off. Records are prefixed f, c and e; header lines\n");
-    printf("start with '#'.\n");
+    printf("0 means that group is off. Records are prefixed f, c, d and e; header\n");
+    printf("lines start with '#'. Ignore prefixes you do not know -- new record types\n");
+    printf("may appear without a protocol bump.\n");
 }
 
 static int cmd_stream(int argc, char **argv)
@@ -291,7 +296,7 @@ static int cmd_stream(int argc, char **argv)
         printf("\n");
         printf("  stream on | off\n");
         printf("  stream csv | text\n");
-        printf("  stream fast|calc|env <ms|off>\n");
+        printf("  stream fast|calc|diag|env <ms|off>\n");
         return 0;
     }
 
@@ -310,7 +315,7 @@ static int cmd_stream(int argc, char **argv)
         s_ctx->stream_csv_header_done = false; /* the header set may have changed */
         return 0;
     } else {
-        printf("usage: stream <on|off|csv|text|fast <ms>|calc <ms>|env <ms>>\n");
+        printf("usage: stream <on|off|csv|text|fast|calc|diag|env <ms|off>>\n");
         return 1;
     }
 
@@ -2196,10 +2201,10 @@ static int cmd_options(int argc, char **argv)
     char b1[24], b2[24];
 
     printf("== monitoring ============================ (stream, stats, profile)\n");
-    printf("stream        %s, %s   fast %lu / calc %lu / env %lu ms\n",
+    printf("stream        %s, %s   fast %lu / calc %lu / diag %lu / env %lu ms\n",
            s_ctx->stream_enabled ? "on" : "off", s_ctx->stream_csv ? "CSV" : "text",
            (unsigned long)s_ctx->rate_fast_ms, (unsigned long)s_ctx->rate_calc_ms,
-           (unsigned long)s_ctx->rate_env_ms);
+           (unsigned long)s_ctx->rate_diag_ms, (unsigned long)s_ctx->rate_env_ms);
     printf("samples       %lu taken, window n=%lu\n",
            (unsigned long)s_ctx->n_samples, (unsigned long)s_ctx->window.n);
     printf("errors        bus %lu, not-ready %lu, range %lu, unresolved %lu\n",

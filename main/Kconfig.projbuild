@@ -236,6 +236,16 @@ menu "bat-monitor"
             default 500
             range 0 60000
 
+        config BATMON_STREAM_DIAG_MS
+            int "Diagnostics group period (ms) -- shunt drop, range, saturation"
+            default 1000
+            range 0 60000
+            help
+                Low by default because these barely move. A range change or the
+                saturation flag flipping is emitted immediately regardless of this
+                period, so 1 s costs almost nothing and never delays the news that
+                matters.
+
         config BATMON_STREAM_ENV_MS
             int "Environmental group period (ms) -- temperature, humidity, pressure"
             default 10000
