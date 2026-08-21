@@ -9,7 +9,12 @@ This document is written to be sufficient for building a client — an Android a
 script, a logger — without reading the firmware. Anything configurable from the local
 console is configurable over BLE, with one documented exception (`mon`).
 
-Protocol version **1**. Check it with `ver` before anything else.
+Protocol version **2**. Check it with `ver` before anything else.
+
+> **Changed in 2:** the CSV stream gained `temp_c`, `humid_pct` and `press_hpa`
+> columns, and `env` was added. Appending columns changes the shape of an existing
+> command's output, which is exactly what the version number exists to signal — a
+> client counting fields would otherwise silently misread every row.
 
 ---
 
@@ -130,6 +135,7 @@ hard-coding one:
 |---|---|---|
 | `ver`, `help`, and every setter | — | **< 100 ms** |
 | `read` | 1 both | **0.4 s** |
+| `env` | 1 forced conversion | **~12 ms** |
 | `cal top i\|v`, `cal vpath` | 64 both | **~17 s** |
 | `cal zero i` | 256 one | **~35 s** (8.8 s at 64) |
 | `cal zero v` | 256 both | **~68 s** (8.5 s at 32) |
@@ -154,8 +160,8 @@ Send `ver` first. Output is stable, fixed order, one `key value` pair per line �
 only command designed for machine parsing rather than human reading:
 
 ```
-protocol 1
-firmware 0.2.0-m2
+protocol 2
+firmware 0.3.0-m2
 idf v5.3.5-1161-g6d0016c3c1f
 chip esp32c6 rev2 cores1
 mac CC:8D:A2:F2:DC:FA
@@ -199,8 +205,8 @@ This is the intended path for live data. `stream csv` switches the periodic dump
 and enables it; the header is re-emitted on every switch.
 
 ```
-ms,volts,amps,watts,shunt_mv,pga,sat,soc_pct,charge_ah,state
-15663,13.088,0.0003,0.003,0.030,/1 (+/-40mV),0,82.6,36.349,RESTING
+ms,volts,amps,watts,shunt_mv,pga,sat,soc_pct,charge_ah,state,temp_c,humid_pct,press_hpa
+5533,13.113,-0.0006,-0.007,0.030,/1 (+/-40mV),0,90.2,39.696,RESTING,27.02,48.6,1001.53
 ```
 
 | column | meaning |
@@ -215,6 +221,15 @@ ms,volts,amps,watts,shunt_mv,pga,sat,soc_pct,charge_ah,state
 | `soc_pct` | state of charge, one decimal |
 | `charge_ah` | accumulated charge, 3 decimals |
 | `state` | `UNKNOWN` \| `COUNTING` \| `RESTING` \| `FULL` \| `EMPTY` |
+| `temp_c` | board temperature, °C to 2 dp. **Empty when no sensor is fitted** |
+| `humid_pct` | relative humidity, 1 dp. **Empty on a BMP280**, which has no humidity channel |
+| `press_hpa` | pressure, hPa to 2 dp. Empty when no sensor is fitted |
+
+The three environmental fields are **empty rather than zero** when unavailable: 0.00 °C
+is a plausible temperature and would be indistinguishable from a real reading. The
+column count never changes, so a positional parser stays valid — it just sees `,,`.
+They refresh on their own 60 s cadence (§4.4), not per row, so consecutive rows repeat
+the same value; that is the sensor's cadence, not a stuck reading.
 
 Cadence is `stream <ms>`, default 1000 ms, range 100–60000. The sampler itself runs at
 ~7 Hz; the stream decimates it.
@@ -261,7 +276,8 @@ Grouped by what they touch. "Persists" means it survives a power cycle.
 
 | Command | Notes |
 |---|---|
-| `read` | One blocking sample. ~300 ms. Prose output, 4–7 lines. |
+| `read` | One blocking sample. ~0.4 s. Prose output, 4–7 lines. |
+| `env` | Temperature, pressure, humidity — a **fresh** forced-mode read, ~12 ms |
 | `stats` | Mean / σ / min / max over the window, plus error counters. |
 | `stats reset` | Clear the window. |
 | `scan` | I²C bus scan; identifies expected devices, flags unexpected ones. |

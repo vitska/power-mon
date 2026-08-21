@@ -25,7 +25,7 @@ Three documents, three jobs:
 | M3 | Integrator, SoC, anchor state machine, NVS | **partly done** — gauge and calibration persist; event log and A/B slots outstanding |
 | M4 | BLE / JBD emulation | not started — a NUS console exists instead |
 | M5 | Battery Service + vendor service | not started; pairing (§8.5) **done** |
-| M5b | OLED + button + BME280 + temperature corrections | **OLED done**; button, BME280 and §5.6 corrections outstanding |
+| M5b | OLED + button + BME280 + temperature corrections | **OLED and BME280 done**; button and §5.6 corrections outstanding |
 | M6 | Low power (tiers down to the light-sleep floor) | not started |
 | M7 | OTA, docs | docs in progress |
 
@@ -37,6 +37,8 @@ Three documents, three jobs:
 - **Fuel gauge**: coulomb counting with I·R-compensated OCV re-anchoring, Peukert
   compensation, capacity learning, full/empty/rest anchors.
 - **OLED**: SoC in large digits with volts and amps beside it, plus diagnostic screens.
+- **Environmental sensor**: BME280 or BMP280 probed by chip ID, read once a minute,
+  surfaced on the console, in the stream and on the panel.
 - **BLE console**: the entire command set over Nordic UART Service, with LE Secure
   Connections passkey pairing.
 - **Live monitoring**: a repainting dashboard (`mon`) and a CSV stream to both
@@ -64,7 +66,7 @@ length; the short version:
 ## Build
 
 Requires **ESP-IDF v5.3 or newer** (the ESP32-C6 needs ≥5.1; the `i2c_master` driver
-needs ≥5.2). BLE pulls in NimBLE, so the binary is ~766 KB — 57 % of the app partition
+needs ≥5.2). BLE pulls in NimBLE, so the binary is ~769 KB — 57 % of the app partition
 still free.
 
 ### Option A — Docker (no local IDF install)
@@ -207,6 +209,7 @@ see [CLI.md](CLI.md) for the framing a programmatic client needs.
 | `ver` | Protocol and firmware version — machine-parseable |
 | `mon [ms]` | Live repainting dashboard of the whole device state |
 | `read` | One sample, with raw registers and the active range |
+| `env` | Temperature, pressure and humidity from the BME/BMP280 |
 | `stream <on\|off\|csv\|text\|ms>` | Periodic dump; `csv` for logging or plotting |
 | `stats [reset]` | Mean / σ / min / max over the window, plus error counters |
 | `scan` | I²C bus scan, with hints for unexpected devices |
@@ -234,6 +237,32 @@ channel needs two points — `cal zero` fixes the offset with nothing applied, `
 fixes the gain against a meter reading. Both write themselves to flash. The full
 procedure, including the two-point algebra if you want to check it, is in
 [CALIBRATION.md](CALIBRATION.md).
+
+### Environmental sensor
+
+`env` does a fresh forced-mode read and prints all three channels:
+
+```
+chip        BME280 at 0x76
+temperature 27.02 C
+pressure    1001.65 hPa
+humidity    48.6 %RH
+```
+
+Either part works — the chip ID is probed (0x60 BME280, 0x58 BMP280) and humidity is
+reported only if a BME280 answered. The address defaults to probing 0x76 then 0x77,
+because SDO strapping decides between them and breakouts disagree about which they use.
+
+The sampler reads it **once a minute** (§4.4 — thermal mass makes anything faster
+pointless) and caches the value for the stream and the display; `env` bypasses the cache
+so a person asking gets the current value rather than one up to a minute old.
+
+> **It measures the board, not the cells** (§2.7). Every temperature correction in §5.6
+> inherits that error, which is why each of them is individually switchable. A pack in a
+> separate enclosure may be better served by no correction than by this one.
+
+Absence is a configuration, not a fault: the gauge runs without it and the §5.6
+corrections stay disabled rather than being guessed from the die sensor.
 
 ### Fuel gauge
 
@@ -310,6 +339,7 @@ components/
   ina219/               register-level driver, PGA auto-ranging, raw→SI, trims
   sensors/              dual-sensor roles, harness-drop correction
   fuelgauge/            counting, anchors, Peukert, capacity learning
+  bme280/               BME280/BMP280, chip-ID probe, Bosch integer compensation
   ssd1306/              128×32 OLED, 6×8 and pixel-doubled text
   ble_serial/           NUS transport, pairing, bond store
 tools/
@@ -318,7 +348,7 @@ tools/
   monitor.ps1           host-side serial console
 ```
 
-Still to come — `nvstore` (A/B slots, event log), `ble_svc` (JBD emulation), `bme280`,
+Still to come — `nvstore` (A/B slots, event log), `ble_svc` (JBD emulation),
 `ui` (button gestures), `config` — are specified in DESIGN.md §3.2 and are deliberately
 absent rather than stubbed. An empty module is a claim that its interface is settled.
 `lp_gauge` will never exist: §9.3 records why.

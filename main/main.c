@@ -18,6 +18,7 @@
 #include "app_ctx.h"
 #include "ble_console.h"
 #include "ble_serial.h"
+#include "bme280.h"
 #include "cal_store.h"
 #include "display_debug.h"
 #include "driver/gpio.h"
@@ -405,7 +406,8 @@ static void print_sample_csv(app_ctx_t *ctx, const power_sample_t *s)
 
     if (!ctx->stream_csv_header_done) {
         ctx->stream_csv_header_done = true;
-        stream_emit("ms,volts,amps,watts,shunt_mv,pga,sat,soc_pct,charge_ah,state");
+        stream_emit("ms,volts,amps,watts,shunt_mv,pga,sat,soc_pct,charge_ah,state,"
+                    "temp_c,humid_pct,press_hpa");
     }
 
     fg_status_t fg;
@@ -414,7 +416,20 @@ static void print_sample_csv(app_ctx_t *ctx, const power_sample_t *s)
     /* Unquoted, no spaces, fixed column order: parseable by anything, including a
      * five-line awk script. Milliseconds since boot rather than a wall clock, because
      * this device has no idea what time it is. */
-    snprintf(line, sizeof(line), "%lu,%s,%s,%s,%s,%s,%d,%s,%s,%s",
+    /* Environmental fields are left EMPTY when no sensor is fitted, rather than zero:
+     * 0.00 °C is a plausible temperature and would be indistinguishable from a real
+     * reading. An empty CSV field is the conventional way to say "no value" and keeps
+     * the column count stable either way. */
+    char btc[16] = "", bhc[16] = "", bpc[16] = "";
+    if (ctx->env_valid) {
+        fixed_fmt(btc, sizeof(btc), ctx->env.temp_centi_c, 100, 2);
+        fixed_fmt(bpc, sizeof(bpc), (int64_t)ctx->env.press_pa, 100, 2);
+        if (ctx->env.have_humidity) {
+            fixed_fmt(bhc, sizeof(bhc), ctx->env.humid_centi, 100, 1);
+        }
+    }
+
+    snprintf(line, sizeof(line), "%lu,%s,%s,%s,%s,%s,%d,%s,%s,%s,%s,%s,%s",
            (unsigned long)(s->t_us / 1000),
            FMT_V(bv, s->v_pack_uv),
            FMT_A(bi, s->i_ua),
@@ -424,7 +439,7 @@ static void print_sample_csv(app_ctx_t *ctx, const power_sample_t *s)
            s->saturated ? 1 : 0,
            fixed_fmt(bsoc, sizeof(bsoc), fg.soc_permille, 10, 1),
            fixed_fmt(bq, sizeof(bq), fg.charge_uas / 3600, 1000000, 3),
-           fg_state_str(fg.state));
+           fg_state_str(fg.state), btc, bhc, bpc);
     stream_emit(line);
 }
 
@@ -509,6 +524,22 @@ static void sampler_task(void *arg)
         }
 
         const int64_t now = esp_timer_get_time();
+
+        /* §4.4: 60 s at the idle tiers. One forced read costs ~12 ms, which is
+         * cheerfully affordable once a minute and would not be at 7 Hz. */
+        if (ctx->bme && now >= ctx->env_next_us) {
+            ctx->env_next_us = now + 60 * 1000000LL;
+            bme280_sample_t e;
+            if (bme280_read(ctx->bme, &e) == ESP_OK) {
+                ctx->env       = e;
+                ctx->env_valid = true;
+            } else {
+                /* §10: a temperature fault is not a gauge fault. Keep the last good
+                 * value, keep counting, and retry on the next cadence. */
+                ESP_LOGW(TAG, "environmental read failed; keeping last value");
+            }
+        }
+
         if (ctx->stream_enabled && ctx->last_valid && now >= next_print_us) {
             next_print_us = now + (int64_t)ctx->stream_period_ms * 1000;
             if (ctx->stream_csv) {
@@ -643,6 +674,20 @@ void app_main(void)
          * seeding it from an uncalibrated reading would anchor it to the wrong
          * number. */
         ESP_ERROR_CHECK(fg_init());
+
+#if CONFIG_BATMON_BME_ENABLE
+        /*
+         * Absence is a configuration, not a failure (§10, TEMP_UNAVAILABLE): the gauge
+         * runs without it and the §5.6 corrections simply stay disabled rather than
+         * being guessed from the die sensor.
+         */
+        bme280_config_t bcfg = BME280_CONFIG_DEFAULT();
+        bcfg.i2c_addr        = CONFIG_BATMON_BME_ADDR;
+        bcfg.scl_speed_hz    = CONFIG_BATMON_I2CA_FREQ_HZ;
+        if (bme280_init(ctx->bus_a, &bcfg, &ctx->bme) != ESP_OK) {
+            ESP_LOGI(TAG, "no BME/BMP280 fitted -- temperature unavailable");
+        }
+#endif
 
         sensors_report(ctx->sensors);
 #if !defined(CONFIG_BATMON_INSTALL_MODE_P)

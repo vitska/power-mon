@@ -166,6 +166,26 @@ menu "bat-monitor"
                 For enclosure fit; DESIGN.md 8.3 tag 0x0074.
     endmenu
 
+    menu "Environmental sensor (BME280 / BMP280)"
+        comment "DESIGN.md 2.4: either part works -- the chip ID is probed and the"
+        comment "humidity channel is used only if a BME280 answered. 2.7 warns that"
+        comment "it measures the BOARD, not the cells, which every 5.6 correction"
+        comment "inherits. Absence is a configuration, not a fault (10)."
+
+        config BATMON_BME_ENABLE
+            bool "Read a BME280/BMP280 if one is present"
+            default y
+
+        config BATMON_BME_ADDR
+            hex "I2C address (0 probes 0x76 then 0x77)"
+            depends on BATMON_BME_ENABLE
+            default 0x00
+            range 0x00 0x77
+            help
+                SDO strapping picks between 0x76 and 0x77 and breakouts disagree about
+                which they use, so 0 tries both rather than making you check.
+    endmenu
+
     menu "BLE console (NUS)"
         comment "The bring-up console over Bluetooth, as a Nordic UART Service."
         comment "DESIGN.md 7.3 puts NUS alongside the JBD service in the final GATT"

@@ -19,6 +19,7 @@
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "bme280.h"
 #include "sensors.h"
 
 /** Running statistics over a window of samples — the basis of the zero-current
@@ -67,6 +68,17 @@ typedef struct {
     volatile bool     stream_csv;
     volatile bool     stream_csv_header_done;
 
+    /*
+     * Environmental sensor, read on its own slow cadence (§4.4) and cached. Nothing
+     * needs it at the sample rate -- thermal mass makes anything faster pointless --
+     * and a blocking forced-mode read on every pass would cost 12 ms in the sampler
+     * for a value that moves in minutes.
+     */
+    bme280_handle_t bme;
+    bme280_sample_t env;
+    bool            env_valid;
+    int64_t         env_next_us;
+
     /* Guarded by nothing: M1 is single-writer (the sampler task) and the console
      * only reads. Promoted to the seqlock of DESIGN.md §3.3 in M3. */
     sample_stats_t window;
@@ -93,8 +105,13 @@ typedef struct {
  * doing something interesting. 0x04 is invisible in a terminal, so the same stream
  * stays comfortable for a human.
  */
-#define BATMON_CLI_PROTOCOL 1
-#define BATMON_FW_VERSION   "0.2.0-m2"
+/*
+ * 2: the CSV stream gained temp_c, humid_pct and press_hpa columns. Appending columns
+ * changes the shape of an existing command's output, which is exactly what this number
+ * exists to signal -- a client counting fields would otherwise silently misread.
+ */
+#define BATMON_CLI_PROTOCOL 2
+#define BATMON_FW_VERSION   "0.3.0-m2"
 #define BATMON_EOT          '\x04'
 
 app_ctx_t *app_ctx(void);

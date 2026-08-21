@@ -20,6 +20,7 @@
 
 #include "app_ctx.h"
 #include "ble_serial.h"
+#include "bme280.h"
 #include "cal_store.h"
 #include "console_io.h"
 #include "esp_app_desc.h"
@@ -633,8 +634,8 @@ static int cmd_scan(int argc, char **argv)
             if (addr == CONFIG_BATMON_ADDR_POS_POLE)      { hint = "  (positive-pole INA219)"; ina++; }
             else if (addr == CONFIG_BATMON_ADDR_NEG_POLE) { hint = "  (negative-pole INA219)"; ina++; }
             else if (addr >= 0x40 && addr <= 0x4F) hint = "  (INA219 range, unexpected address -- check A0/A1)";
-            else if (addr == 0x3C || addr == 0x3D) hint = "  (SSD1306 OLED -- shares this bus, not driven until M5b)";
-            else if (addr == 0x76 || addr == 0x77) hint = "  (BME280/BMP280 -- shares this bus, not driven until M5b)";
+            else if (addr == 0x3C || addr == 0x3D) hint = "  (SSD1306 OLED -- shares this bus)";
+            else if (addr == 0x76 || addr == 0x77) hint = "  (BME280/BMP280 -- shares this bus, see 'env')";
             printf("  0x%02X%s\n", addr, hint);
             found++;
         }
@@ -995,6 +996,51 @@ static int cmd_curve(int argc, char **argv)
     return 1;
 }
 
+/* --- environmental sensor (DESIGN.md 2.4, 4.4) -------------------------------- */
+
+/*
+ * A fresh forced-mode read rather than the sampler's cached value. The cache exists so
+ * the stream and the display cost nothing; someone typing `env` is asking what the
+ * sensor says NOW, and waiting 12 ms for the truth beats being handed a value up to a
+ * minute old with no way to tell.
+ */
+static int cmd_env(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+
+    if (!s_ctx->bme) {
+        printf("no BME280/BMP280 fitted.\n");
+        printf("Absence is a configuration, not a fault: the gauge runs without it and\n");
+        printf("the temperature corrections of DESIGN.md 5.6 stay disabled rather than\n");
+        printf("being guessed. 'scan' shows whether anything answers at 0x76 or 0x77.\n");
+        return 1;
+    }
+
+    bme280_sample_t e;
+    const esp_err_t err = bme280_read(s_ctx->bme, &e);
+    if (err != ESP_OK) {
+        printf("read failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+
+    char b1[24];
+    printf("chip        %s at 0x%02X\n", bme280_chip_str(bme280_chip(s_ctx->bme)),
+           bme280_addr(s_ctx->bme));
+    printf("temperature %s C\n", fixed_fmt(b1, sizeof(b1), e.temp_centi_c, 100, 2));
+    printf("pressure    %s hPa\n",
+           fixed_fmt(b1, sizeof(b1), (int64_t)e.press_pa, 100, 2));
+    if (e.have_humidity) {
+        printf("humidity    %s %%RH\n",
+               fixed_fmt(b1, sizeof(b1), e.humid_centi, 100, 1));
+    } else {
+        printf("humidity    not available on a BMP280\n");
+    }
+    printf("\n");
+    printf("This measures the BOARD, not the cells (DESIGN.md 2.7). Every correction\n");
+    printf("in 5.6 inherits that error, which is why each one is switchable.\n");
+    return 0;
+}
+
 /* --- version / handshake ------------------------------------------------------ */
 
 /*
@@ -1151,6 +1197,17 @@ static int cmd_mon(int argc, char **argv)
             printf("  OCV   %9s V   I*R %7s mV   Peukert x%s\033[K\n",
                    FMT_V(b1, fg.ocv_uv), FMT_MV(b2, fg.ir_drop_uv),
                    fixed_fmt(b3, sizeof(b3), fg.peukert_factor_q16, 65536, 3));
+            if (s_ctx->env_valid) {
+                printf("  env   %8s C   %8s hPa%s%s\033[K\n",
+                       fixed_fmt(b1, sizeof(b1), s_ctx->env.temp_centi_c, 100, 2),
+                       fixed_fmt(b2, sizeof(b2), (int64_t)s_ctx->env.press_pa, 100, 2),
+                       s_ctx->env.have_humidity ? "   " : "",
+                       s_ctx->env.have_humidity
+                           ? fixed_fmt(b3, sizeof(b3), s_ctx->env.humid_centi, 100, 1)
+                           : "");
+            } else {
+                printf("  env   no sensor\033[K\n");
+            }
         }
 
         printf("--------------------------------------------------------------\033[K\n");
@@ -2117,6 +2174,21 @@ static int cmd_options(int argc, char **argv)
     }
 #endif
 
+    printf("== environment =========================== (env)\n");
+    if (s_ctx->bme) {
+        char be[24];
+        printf("sensor        %s at 0x%02X\n",
+               bme280_chip_str(bme280_chip(s_ctx->bme)), bme280_addr(s_ctx->bme));
+        if (s_ctx->env_valid) {
+            printf("last reading  %s C (cached, refreshed every 60 s)\n",
+                   fixed_fmt(be, sizeof(be), s_ctx->env.temp_centi_c, 100, 2));
+        } else {
+            printf("last reading  none yet\n");
+        }
+    } else {
+        printf("sensor        none fitted\n");
+    }
+
     printf("== fuel gauge ============================ (soc)\n");
     {
         fg_status_t st;
@@ -2186,6 +2258,7 @@ void console_start(app_ctx_t *ctx)
 
     register_cmd("ver",     "Protocol and firmware version, for clients",   NULL,             cmd_ver);
     register_cmd("read",    "Take and print one sample",                    NULL,             cmd_read);
+    register_cmd("env",     "Temperature, pressure and humidity",           NULL,             cmd_env);
     register_cmd("sensors", "Show or set the dual-sensor install mode",     "[mode <p|n|single|auto>]", cmd_sensors);
     register_cmd("detect",  "Work out which pole carries the shunt (needs a load)", "[samples]", cmd_detect);
     register_cmd("stream",  "Toggle or set the periodic dump",              "<on|off|csv|ms>", cmd_stream);

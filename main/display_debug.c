@@ -28,6 +28,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "fixed_fmt.h"
+#include "bme280.h"
 #include "fuelgauge.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -146,8 +147,16 @@ static void draw_live(const power_sample_t *s, bool valid, char spin)
                    FMT_V(b1, s->v_pack_uv), FMT_A(b2, s->i_ua), spin);
     ssd1306_printf(s_disp.oled, 1, "P %9sW pga%s",
                    FMT_W(b1, s->p_uw), ina219_pga_str(s->pga));
-    ssd1306_printf(s_disp.oled, 2, "shunt %7suV%s",
-                   FMT_MV(b1, s->v_shunt_uv), s->saturated ? " SAT" : "");
+    /* Temperature shares this row with the shunt drop: both are diagnostics, and a
+     * 21-column line has room for exactly these two. */
+    if (s_disp.ctx->env_valid) {
+        ssd1306_printf(s_disp.oled, 2, "sh%7suV %sC",
+                       FMT_MV(b1, s->v_shunt_uv),
+                       fixed_fmt(b2, sizeof(b2), s_disp.ctx->env.temp_centi_c, 100, 1));
+    } else {
+        ssd1306_printf(s_disp.oled, 2, "shunt %7suV%s",
+                       FMT_MV(b1, s->v_shunt_uv), s->saturated ? " SAT" : "");
+    }
 
     const uint32_t up_s = (uint32_t)(esp_timer_get_time() / 1000000);
     ssd1306_printf(s_disp.oled, 3, "n%-7lu up%lu:%02lu:%02lu",
