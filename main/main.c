@@ -17,6 +17,7 @@
 
 #include "app_ctx.h"
 #include "ble_console.h"
+#include "ble_serial.h"
 #include "cal_store.h"
 #include "display_debug.h"
 #include "driver/gpio.h"
@@ -374,13 +375,35 @@ esp_err_t run_zero_voltage_calibration(app_ctx_t *ctx, uint32_t n_samples,
 
 /* --- sampler ----------------------------------------------------------------- */
 
+/*
+ * The stream goes to BOTH transports.
+ *
+ * This is not symmetry for its own sake. main/ble_console.c captures stdout only for
+ * the worker task, and only while a command is running -- so anything the sampler task
+ * prints reaches USB and nothing else. That left a BLE client with no way to obtain
+ * live telemetry at all, which is the one thing a phone app most needs. Emitting here
+ * covers both, and ble_serial_write() is a no-op when nobody is subscribed.
+ *
+ * CRLF for the radio, bare LF for the terminal: the BLE side matches the framing that
+ * command responses use, so one client-side line splitter handles everything.
+ */
+static void stream_emit(const char *line)
+{
+    printf("%s\n", line);
+#if CONFIG_BATMON_BLE_ENABLE
+    ble_serial_write(line, 0);
+    ble_serial_write("\r\n", 2);
+#endif
+}
+
 static void print_sample_csv(app_ctx_t *ctx, const power_sample_t *s)
 {
     char bv[24], bi[24], bp[24], bsh[24], bsoc[24], bq[24];
+    char line[192];
 
     if (!ctx->stream_csv_header_done) {
         ctx->stream_csv_header_done = true;
-        printf("ms,volts,amps,watts,shunt_mv,pga,sat,soc_pct,charge_ah,state\n");
+        stream_emit("ms,volts,amps,watts,shunt_mv,pga,sat,soc_pct,charge_ah,state");
     }
 
     fg_status_t fg;
@@ -389,7 +412,7 @@ static void print_sample_csv(app_ctx_t *ctx, const power_sample_t *s)
     /* Unquoted, no spaces, fixed column order: parseable by anything, including a
      * five-line awk script. Milliseconds since boot rather than a wall clock, because
      * this device has no idea what time it is. */
-    printf("%lu,%s,%s,%s,%s,%s,%d,%s,%s,%s\n",
+    snprintf(line, sizeof(line), "%lu,%s,%s,%s,%s,%s,%d,%s,%s,%s",
            (unsigned long)(s->t_us / 1000),
            FMT_V(bv, s->v_pack_uv),
            FMT_A(bi, s->i_ua),
@@ -400,14 +423,17 @@ static void print_sample_csv(app_ctx_t *ctx, const power_sample_t *s)
            fixed_fmt(bsoc, sizeof(bsoc), fg.soc_permille, 10, 1),
            fixed_fmt(bq, sizeof(bq), fg.charge_uas / 3600, 1000000, 3),
            fg_state_str(fg.state));
+    stream_emit(line);
 }
 
 static void print_sample_line(const power_sample_t *s, const sample_stats_t *w)
 {
     char bv[24], bi[24], bp[24], bsh[24], bmean[24], bsd[24];
+    char line[224];
 
-    printf("V=%9s V  I=%11s A  P=%10s W  | shunt %8s mV  pga %-14s%s | "
-           "win n=%-5lu mean %9s A  sd %9s A\n",
+    snprintf(line, sizeof(line),
+           "V=%9s V  I=%11s A  P=%10s W  | shunt %8s mV  pga %-14s%s | "
+           "win n=%-5lu mean %9s A  sd %9s A",
            FMT_V(bv, s->v_pack_uv),
            FMT_A(bi, s->i_ua),
            FMT_W(bp, s->p_uw),
@@ -417,6 +443,7 @@ static void print_sample_line(const power_sample_t *s, const sample_stats_t *w)
            (unsigned long)w->n,
            FMT_A(bmean, stats_mean_ua(w)),
            FMT_A(bsd, stats_stddev_ua(w)));
+    stream_emit(line);
 }
 
 /*

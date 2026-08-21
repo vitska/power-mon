@@ -5,5 +5,5 @@ idf_component_register(
                 "ble_console.c"
                 "cal_store.c"
     INCLUDE_DIRS "."
-    REQUIRES     driver esp_timer console nvs_flash ina219 sensors ssd1306 ble_serial fuelgauge
+    REQUIRES     driver esp_timer console nvs_flash esp_app_format ina219 sensors ssd1306 ble_serial fuelgauge
 )

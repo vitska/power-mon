@@ -80,6 +80,23 @@ typedef struct {
     uint32_t n_samples;
 } app_ctx_t;
 
+/*
+ * CLI contract, for anything parsing this console programmatically.
+ *
+ * BATMON_CLI_PROTOCOL is bumped whenever an existing command's OUTPUT changes shape,
+ * an argument's meaning changes, or the framing changes. Adding a new command does not
+ * bump it: a client that does not know the command simply never sends it.
+ *
+ * BATMON_EOT terminates every response on the BLE transport. Without it a client can
+ * only guess when a reply has finished -- a quiet-period heuristic, which is wrong
+ * exactly when the device is slow, which is exactly when a command like `cal top` is
+ * doing something interesting. 0x04 is invisible in a terminal, so the same stream
+ * stays comfortable for a human.
+ */
+#define BATMON_CLI_PROTOCOL 1
+#define BATMON_FW_VERSION   "0.2.0-m2"
+#define BATMON_EOT          '\x04'
+
 app_ctx_t *app_ctx(void);
 
 /** Sensor-acquisition lock. Returns false on timeout, in which case the caller must

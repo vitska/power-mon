@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "app_ctx.h"
 #include "ble_serial.h"
 #include "display_debug.h"
 #include "esp_console.h"
@@ -90,24 +91,32 @@ static void on_line(const char *line, void *user)
         ble_serial_write("\r\n[output truncated -- use the USB console]\r\n", 0);
     }
 
+    /*
+     * Always emit an exit status, not only on failure. A client that has to infer
+     * success from the absence of a line has no way to tell "succeeded" from
+     * "the reply is still coming".
+     */
+    int status = ret;
     switch (err) {
     case ESP_OK:
-        if (ret != 0) {
-            char b[48];
-            snprintf(b, sizeof(b), "(exit %d)\r\n", ret);
-            ble_serial_write(b, 0);
-        }
         break;
     case ESP_ERR_NOT_FOUND:
         ble_serial_write("unknown command -- try 'help'\r\n", 0);
+        status = -2;
         break;
     case ESP_ERR_INVALID_ARG:
         ble_serial_write("empty command\r\n", 0);
+        status = -3;
         break;
     default:
         ble_serial_write("command failed to run\r\n", 0);
+        status = -1;
         break;
     }
+
+    char tail[24];
+    snprintf(tail, sizeof(tail), "exit %d\r\n%c", status, BATMON_EOT);
+    ble_serial_write(tail, 0);
 }
 
 /*

@@ -21,6 +21,9 @@
 #include "app_ctx.h"
 #include "ble_serial.h"
 #include "cal_store.h"
+#include "esp_app_desc.h"
+#include "esp_chip_info.h"
+#include "esp_mac.h"
 #include "display_debug.h"
 #include "esp_console.h"
 #include "esp_err.h"
@@ -989,6 +992,34 @@ static int cmd_curve(int argc, char **argv)
 
     printf("unknown: %s\n", argv[2]);
     return 1;
+}
+
+/* --- version / handshake ------------------------------------------------------ */
+
+/*
+ * The first thing a programmatic client should send. Everything here is stable, fixed
+ * order, one `key value` pair per line -- so a client can parse it without knowing any
+ * of the prose formatting the other commands use.
+ */
+static int cmd_ver(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+
+    esp_chip_info_t chip;
+    esp_chip_info(&chip);
+
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_BT);
+
+    printf("protocol %d\n", BATMON_CLI_PROTOCOL);
+    printf("firmware %s\n", BATMON_FW_VERSION);
+    printf("idf %s\n", esp_get_idf_version());
+    printf("chip esp32c6 rev%d cores%d\n", chip.revision, chip.cores);
+    printf("mac %02X:%02X:%02X:%02X:%02X:%02X\n", mac[0], mac[1], mac[2], mac[3],
+           mac[4], mac[5]);
+    printf("built %s %s\n", __DATE__, __TIME__);
+    printf("units micro\n"); /* every numeric argument is an integer micro-unit */
+    return 0;
 }
 
 /* --- live dashboard ----------------------------------------------------------- */
@@ -2143,6 +2174,7 @@ void console_start(app_ctx_t *ctx)
 
     ESP_ERROR_CHECK(esp_console_register_help_command());
 
+    register_cmd("ver",     "Protocol and firmware version, for clients",   NULL,             cmd_ver);
     register_cmd("read",    "Take and print one sample",                    NULL,             cmd_read);
     register_cmd("sensors", "Show or set the dual-sensor install mode",     "[mode <p|n|single|auto>]", cmd_sensors);
     register_cmd("detect",  "Work out which pole carries the shunt (needs a load)", "[samples]", cmd_detect);
