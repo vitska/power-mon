@@ -389,7 +389,9 @@ esp_err_t run_zero_voltage_calibration(app_ctx_t *ctx, uint32_t n_samples,
  */
 static void stream_emit(const char *line)
 {
-    printf("%s\n", line);
+    /* CRLF on both transports. The framing is defined in CRLF, so a stream line using
+     * bare LF locally would leave the two wires subtly different after all. */
+    printf("%s\r\n", line);
 #if CONFIG_BATMON_BLE_ENABLE
     ble_serial_write(line, 0);
     ble_serial_write("\r\n", 2);

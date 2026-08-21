@@ -21,6 +21,7 @@
 #include "app_ctx.h"
 #include "ble_serial.h"
 #include "cal_store.h"
+#include "console_io.h"
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
 #include "esp_mac.h"
@@ -1059,6 +1060,21 @@ static void mon_bar(char *out, size_t n, uint32_t permille)
 
 static int cmd_mon(int argc, char **argv)
 {
+    /*
+     * This one command genuinely cannot be transport-agnostic: it repaints until a
+     * keypress arrives on stdin, and a remote caller's keystrokes are not on stdin.
+     * Left unguarded it would repaint into the BLE link for its whole 600 s timeout.
+     * Refusing with the alternative named is better than either hanging or silently
+     * doing something different depending on the wire.
+     */
+    if (console_is_remote()) {
+        printf("'mon' is a local-terminal dashboard: it repaints until a key is\n");
+        printf("pressed on the console it was started from, and a remote caller has\n");
+        printf("no way to send that. Use 'stream csv' for live data over BLE -- it\n");
+        printf("carries the same values and needs no terminal.\n");
+        return 1;
+    }
+
     uint32_t period_ms = 500;
     if (argc >= 2) {
         const long v = strtol(argv[1], NULL, 10);
@@ -2156,22 +2172,16 @@ void console_start(app_ctx_t *ctx)
 {
     s_ctx = ctx;
 
-    esp_console_repl_t       *repl        = NULL;
-    esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
-    repl_config.prompt             = "batmon>";
-    repl_config.max_cmdline_length = 128;
-
-#if defined(CONFIG_ESP_CONSOLE_UART_DEFAULT) || defined(CONFIG_ESP_CONSOLE_UART_CUSTOM)
-    esp_console_dev_uart_config_t hw = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_console_new_repl_uart(&hw, &repl_config, &repl));
-#elif defined(CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG)
-    esp_console_dev_usb_serial_jtag_config_t hw =
-        ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_console_new_repl_usb_serial_jtag(&hw, &repl_config, &repl));
-#else
-#error "No supported console device selected; see sdkconfig.defaults"
-#endif
-
+    /*
+     * esp_console_init() rather than a REPL. The REPL owns the read loop and prints its
+     * own results -- including its own text for an unknown command -- so a wrapper
+     * cannot give the local console the same framing the BLE one has. console_io.c runs
+     * the loop instead, and both transports go through console_exec_line().
+     */
+    esp_console_config_t cc = ESP_CONSOLE_CONFIG_DEFAULT();
+    cc.max_cmdline_length   = 160; /* matches the BLE line limit */
+    cc.max_cmdline_args     = 12;
+    ESP_ERROR_CHECK(esp_console_init(&cc));
     ESP_ERROR_CHECK(esp_console_register_help_command());
 
     register_cmd("ver",     "Protocol and firmware version, for clients",   NULL,             cmd_ver);
@@ -2199,11 +2209,12 @@ void console_start(app_ctx_t *ctx)
     register_cmd("options", "Everything that is set, in one place",         NULL,             cmd_options);
 
     printf("\n");
-    printf("bat-monitor M1 bring-up console. 'help' lists commands.\n");
+    printf("bat-monitor console, protocol %d. 'help' lists commands, 'ver' for a\n",
+           BATMON_CLI_PROTOCOL);
+    printf("machine-readable handshake. Same commands and framing over BLE.\n");
     printf("Typical first run:  scan  ->  shunt loc  ->  cal zero i  ->  cal top i\n");
-    printf("'cal' walks the two calibration points; 'options' shows everything.\n");
     printf("\n");
 
-    ESP_ERROR_CHECK(esp_console_start_repl(repl));
-    ESP_LOGI(TAG, "console ready");
+    console_usb_start();
+    ESP_LOGI(TAG, "console ready, protocol %d", BATMON_CLI_PROTOCOL);
 }

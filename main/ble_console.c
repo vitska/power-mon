@@ -21,102 +21,28 @@
 
 #include "app_ctx.h"
 #include "ble_serial.h"
+#include "console_io.h"
 #include "display_debug.h"
-#include "esp_console.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "ble_con";
 
-/* One command's worth of output. `help` with every command registered is ~1.5 KB. */
-static char s_out[2560];
+/* Output buffering, LF->CRLF translation, framing and the exit status all live in
+ * console_io.c now, shared with the local console. What is left here is the sink. */
 
-/*
- * printf writes '\n'; a BLE terminal wants "\r\n". Translating on the way out keeps
- * every command's format strings unchanged and correct for both transports.
- */
-static void write_crlf(const char *s, size_t n)
+static void ble_sink(void *user, const char *data, size_t len)
 {
-    size_t start = 0;
-    for (size_t i = 0; i < n; i++) {
-        if (s[i] == '\n') {
-            if (i > start) {
-                ble_serial_write(&s[start], i - start);
-            }
-            ble_serial_write("\r\n", 2);
-            start = i + 1;
-        }
-    }
-    if (n > start) {
-        ble_serial_write(&s[start], n - start);
-    }
+    (void)user;
+    ble_serial_write(data, len);
 }
 
 static void on_line(const char *line, void *user)
 {
     (void)user;
-
-    FILE *saved = stdout;
-    FILE *mem   = fmemopen(s_out, sizeof(s_out), "w");
-    if (mem) {
-        setvbuf(mem, NULL, _IONBF, 0);
-        stdout = mem;
-    }
-
-    int             ret = 0;
-    const esp_err_t err = esp_console_run(line, &ret);
-
-    /* Restore before touching the BLE transport: ble_serial_write() may log, and a
-     * log line landing in the capture buffer would be confusing at best. */
-    stdout = saved;
-
-    size_t n = 0;
-    if (mem) {
-        fflush(mem);
-        n = (size_t)ftell(mem);
-        if (n > sizeof(s_out)) {
-            n = sizeof(s_out);
-        }
-        fclose(mem);
-    }
-
-    if (n > 0) {
-        write_crlf(s_out, n);
-    }
-
-    /* fmemopen stops writing at the buffer end, so a long output is silently short.
-     * Say so -- a missing tail that looks like a complete answer is the worst
-     * possible failure for a diagnostic console. */
-    if (n >= sizeof(s_out) - 1) {
-        ble_serial_write("\r\n[output truncated -- use the USB console]\r\n", 0);
-    }
-
-    /*
-     * Always emit an exit status, not only on failure. A client that has to infer
-     * success from the absence of a line has no way to tell "succeeded" from
-     * "the reply is still coming".
-     */
-    int status = ret;
-    switch (err) {
-    case ESP_OK:
-        break;
-    case ESP_ERR_NOT_FOUND:
-        ble_serial_write("unknown command -- try 'help'\r\n", 0);
-        status = -2;
-        break;
-    case ESP_ERR_INVALID_ARG:
-        ble_serial_write("empty command\r\n", 0);
-        status = -3;
-        break;
-    default:
-        ble_serial_write("command failed to run\r\n", 0);
-        status = -1;
-        break;
-    }
-
-    char tail[24];
-    snprintf(tail, sizeof(tail), "exit %d\r\n%c", status, BATMON_EOT);
-    ble_serial_write(tail, 0);
+    /* remote = true: `mon` refuses rather than repainting into a link that cannot
+     * carry the keypress that would stop it. */
+    console_exec_line(line, ble_sink, NULL, true);
 }
 
 /*

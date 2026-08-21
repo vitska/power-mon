@@ -1,8 +1,13 @@
 # CLI reference and client protocol
 
 The same command interface is reachable two ways: over USB serial, and over BLE as a
-Nordic UART Service. This document is written to be sufficient for building a client —
-an Android app, a script, a logger — without reading the firmware.
+Nordic UART Service. **The protocol is byte-identical on both** — the same echo, the
+same line endings, the same exit status and terminator, including on the error paths.
+Both transports call one execution function; only the sink differs.
+
+This document is written to be sufficient for building a client — an Android app, a
+script, a logger — without reading the firmware. Anything configurable from the local
+console is configurable over BLE, with one documented exception (`mon`).
 
 Protocol version **1**. Check it with `ver` before anything else.
 
@@ -41,9 +46,16 @@ assuming one notification is one line.**
 
 ### USB serial
 
-115200 8N1 on the ESP32-C6's native USB (USB-Serial-JTAG). Interactive: line editing,
-history, tab completion, a `batmon> ` prompt. The prompt and editing exist **only**
-here — the BLE transport has neither.
+115200 8N1 on the ESP32-C6's native USB (USB-Serial-JTAG).
+
+Adds, on top of the identical protocol: a `batmon> ` prompt, line editing, history and
+tab completion. Those are *local conveniences layered over* the same framing, not a
+different protocol — a command typed here produces exactly the bytes it would produce
+over the air, so a USB transcript is a valid reference for a BLE client.
+
+One consequence to expect: your typed characters are echoed locally by the line editor
+**and** the protocol emits its own `> command` echo. That duplication is the price of
+identical framing, and it is deliberate.
 
 ---
 
@@ -51,7 +63,7 @@ here — the BLE transport has neither.
 
 A command is an ASCII line terminated by `\n` or `\r`. Both are accepted; CRLF is fine.
 
-Over BLE each command produces exactly this, in order:
+Every command, **on either transport**, produces exactly this, in order:
 
 ```
 > <the command as received>\r\n      <- echo
@@ -77,9 +89,9 @@ stream stays readable by a human.
 
 Other framing rules:
 
-- **Output is capped at 2.5 KB per command.** On overflow the response ends with
-  `[output truncated -- use the USB console]` before `exit`. Only `help` realistically
-  approaches this.
+- **Output is capped at 4 KB per command**, the same on both transports. On overflow
+  the response ends with `[output truncated]` before `exit`. Only `help` comes close,
+  at ~1.5 KB.
 - **Lines are capped at 160 characters.** An overlong line is discarded whole, with
   `line too long, discarded` — never executed truncated, because a shortened `zero 512`
   would silently become `zero 5`.
@@ -101,10 +113,13 @@ a long time:
 | `cal top …`, `cal vpath …` | ~18 s (64 averaged samples) |
 | `cal zero i 512` | ~35 s |
 | `detect` | seconds, scales with the sample count |
-| `mon` | runs until a key arrives — **do not send this from an app** |
+| `mon` | local terminal only — **refuses when invoked remotely**, with `exit 1` |
 
-`mon` is an interactive ANSI dashboard that repaints until it receives input. A client
-should use `stream csv` instead.
+`mon` is the one command that cannot be transport-agnostic: it repaints until a keypress
+arrives on the console it was started from, and a remote caller's keystrokes are not on
+that stdin. Rather than hang or behave differently depending on the wire, it refuses with
+`exit 1` and names the alternative. Clients use `stream csv`, which carries the same
+values and needs no terminal.
 
 ---
 
@@ -187,11 +202,9 @@ stream text        human format, enable
 stream 500         set period to 500 ms and enable
 ```
 
-**The stream reaches both transports.** It is emitted by the sampler task directly to
-USB and to the BLE TX characteristic, so a phone gets it without polling. Lines end
-`
-` on BLE and `
-` on USB.
+**The stream reaches both transports**, emitted by the sampler task directly to USB
+and to the BLE TX characteristic, so a phone gets it without polling. Lines end
+`CR LF` on both.
 
 **It is asynchronous and sits outside the framing.** Stream lines arrive between command
 responses, with no echo, no `exit` and no EOT of their own. A client must attribute each
@@ -385,4 +398,9 @@ Stated plainly, because a client author will hit them.
 5. **The JBD/Xiaoxiang protocol of DESIGN.md §7 is not implemented yet.** This NUS
    console is the whole interface today; an app written against it will need to change
    when the binary service lands.
-6. **Log output on USB serial can interleave** with command output. BLE is clean.
+6. **Log output on USB serial can interleave** with command output — it is written by
+   whichever task logged it, outside the framing. BLE never carries log lines, so a
+   client sees a clean stream; a USB transcript may contain `I (1234) tag: …` lines
+   belonging to no command. Filter by prefix if you parse USB captures.
+7. **`mon` is local-only** — the single command whose behaviour differs by transport.
+   It refuses remotely rather than degrading silently.
