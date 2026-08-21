@@ -48,8 +48,9 @@ CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
-# One connection: this is a monitor, not a hub (DESIGN.md §7.1).
-CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+# Three connections: a phone watching telemetry while a laptop configures. Each costs
+# a NimBLE connection slot and ~200 bytes of line buffer in ble_serial.c.
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
 # 512-byte ATT MTU so a 'help' dump is a handful of notifications, not dozens.
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=512
 CONFIG_BT_NIMBLE_SVC_GAP_DEVICE_NAME="batmon"

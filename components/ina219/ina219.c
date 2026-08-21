@@ -553,6 +553,26 @@ esp_err_t ina219_set_vbus_gain_ppm(ina219_handle_t h, uint32_t g)
     return ESP_OK;
 }
 
+esp_err_t ina219_set_continuous_adc(ina219_handle_t h, ina219_adc_t adc)
+{
+    ESP_RETURN_ON_FALSE(h, ESP_ERR_INVALID_ARG, TAG, "null");
+    h->cfg.bus_adc_continuous   = adc;
+    h->cfg.shunt_adc_continuous = adc;
+    /* Re-apply immediately: the caller changed the sample rate and expects the next
+     * read to be at the new one, not after some later reconfiguration. */
+    return apply_config(h);
+}
+
+ina219_adc_t ina219_get_continuous_adc(ina219_handle_t h)
+{
+    return h ? h->cfg.shunt_adc_continuous : INA219_ADC_128AVG;
+}
+
+ina219_profile_t ina219_get_profile(ina219_handle_t h)
+{
+    return h ? h->profile : INA219_PROFILE_CONTINUOUS;
+}
+
 esp_err_t ina219_set_autorange(ina219_handle_t h, bool en)
 {
     ESP_RETURN_ON_FALSE(h, ESP_ERR_INVALID_ARG, TAG, "null");

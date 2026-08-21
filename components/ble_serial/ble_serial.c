@@ -1,20 +1,21 @@
 /*
  * ble_serial.c — see ble_serial.h.
  *
- * Two structural decisions worth stating, because both are easy to get wrong and
- * expensive to debug:
+ * Three structural decisions, each of which is easy to get wrong and expensive to
+ * debug:
  *
- * 1. RECEIVED BYTES ARE QUEUED, NOT EXECUTED IN PLACE. The GATT write callback runs
- *    on the NimBLE host task. Running a command there would block the host for as
- *    long as the command takes -- and `zero 512` is several seconds of blocking I2C.
- *    The link would drop mid-command, which looks exactly like a BLE bug and is not
- *    one. So the callback only pushes into a stream buffer; a worker task assembles
- *    lines and runs them.
+ * 1. RECEIVED BYTES ARE QUEUED, NOT EXECUTED IN PLACE. The GATT write callback runs on
+ *    the NimBLE host task. Running a command there would block the host for as long as
+ *    the command takes -- and `cal zero i 512` is seventy seconds of blocking I2C. The
+ *    link would drop mid-command, which looks exactly like a BLE bug and is not one.
  *
- * 2. OUTPUT IS CHUNKED TO THE NEGOTIATED MTU. A notification longer than ATT_MTU-3
- *    is silently truncated by the stack, so `help` would arrive with its tail
- *    missing. ble_serial_write() splits instead, and re-reads the MTU each call
- *    because it changes when the central negotiates after connecting.
+ * 2. LINE ASSEMBLY IS PER CONNECTION. Two centrals writing at once into one buffer
+ *    produce a spliced command. The failure is intermittent, depends on timing, and
+ *    gets blamed on the radio. A buffer per slot removes the possibility.
+ *
+ * 3. RESPONSES ARE UNICAST, TELEMETRY IS BROADCAST. The queue carries the originating
+ *    connection handle so a reply goes back to the client that asked. Only the stream
+ *    goes to everyone.
  */
 
 #include "ble_serial.h"
@@ -25,33 +26,33 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_random.h"
-#include "nvs.h"
-#include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/stream_buffer.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 #include "host/ble_hs.h"
 #include "host/util/util.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
+#include "nvs.h"
+#include "nvs_flash.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 
-/* Declared in NimBLE's store/config module but not exported through a public header
- * in ESP-IDF; every ESP-IDF NimBLE example forward-declares it the same way. Without
- * it, bonds live in RAM and evaporate on reboot, which defeats the point of bonding. */
+/* Declared in NimBLE's store/config module but not exported through a public header in
+ * ESP-IDF; every ESP-IDF NimBLE example forward-declares it the same way. Without it,
+ * bonds live in RAM and evaporate on reboot, which defeats the point of bonding. */
 void ble_store_config_init(void);
 
-#define NVS_NS   "ble_ser"
+#define NVS_NS          "ble_ser"
 #define NVS_KEY_MODE    "secmode"
 #define NVS_KEY_PASSKEY "passkey"
 #define PASSKEY_RANDOM  0xFFFFFFFFu
 
 static const char *TAG = "ble_ser";
 
-#define RX_BUF_BYTES  512
 #define BLE_LINE_MAX  160
 #define BLE_NAME_MAX  31
+#define CMD_QUEUE_LEN 4
 
 /* Nordic UART Service. The byte arrays are the UUIDs least-significant byte first,
  * which is what BLE_UUID128_DECLARE takes -- writing them in text order here is the
@@ -60,89 +61,203 @@ static const char *TAG = "ble_ser";
     BLE_UUID128_DECLARE(0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 0x93, 0xF3, \
                         0xA3, 0xB5, (b0), (b1), 0x40, 0x6E)
 
-/* 6E400001-B5A3-F393-E0A9-E50E24DCCA9E and its two characteristics. */
 #define NUS_SVC_UUID NUS_UUID_BASE(0x01, 0x00)
 #define NUS_RX_UUID  NUS_UUID_BASE(0x02, 0x00) /* central -> device, write */
 #define NUS_TX_UUID  NUS_UUID_BASE(0x03, 0x00) /* device -> central, notify */
+
+typedef struct {
+    uint16_t handle;
+    bool     subscribed;
+    char     line[BLE_LINE_MAX];
+    size_t   len;
+} conn_slot_t;
+
+typedef struct {
+    uint16_t handle;
+    char     line[BLE_LINE_MAX];
+} cmd_msg_t;
 
 static struct {
     char                 name[BLE_NAME_MAX + 1];
     ble_serial_line_cb_t on_line;
     void                *user;
 
-    StreamBufferHandle_t rx;
-    uint16_t             conn_handle;
-    uint16_t             tx_val_handle;
-    bool                 subscribed;
-    bool                 advertising;
-    uint8_t              addr_type;
+    conn_slot_t     conns[BLE_SERIAL_MAX_CONNS];
+    QueueHandle_t   cmdq;
+    uint16_t        tx_val_handle;
+    bool            advertising;
+    uint8_t         addr_type;
 
-    ble_serial_stats_t   stats;
+    ble_serial_stats_t stats;
 
     ble_sec_mode_t          mode;
-    uint32_t                passkey_cfg;  /* PASSKEY_RANDOM or a fixed value */
-    uint32_t                passkey_live; /* the one currently displayed */
+    uint32_t                passkey_cfg;
     ble_serial_passkey_cb_t on_passkey;
-} s_ble = {.conn_handle = BLE_HS_CONN_HANDLE_NONE,
-           .passkey_cfg = PASSKEY_RANDOM};
+} s_ble = {.passkey_cfg = PASSKEY_RANDOM};
 
 static void advertise(void);
+
+/* --- connection slots ---------------------------------------------------------- */
+
+static conn_slot_t *slot_by_handle(uint16_t h)
+{
+    for (int i = 0; i < BLE_SERIAL_MAX_CONNS; i++) {
+        if (s_ble.conns[i].handle == h) {
+            return &s_ble.conns[i];
+        }
+    }
+    return NULL;
+}
+
+static conn_slot_t *slot_alloc(uint16_t h)
+{
+    for (int i = 0; i < BLE_SERIAL_MAX_CONNS; i++) {
+        if (s_ble.conns[i].handle == BLE_HS_CONN_HANDLE_NONE) {
+            s_ble.conns[i].handle     = h;
+            s_ble.conns[i].subscribed = false;
+            s_ble.conns[i].len        = 0;
+            return &s_ble.conns[i];
+        }
+    }
+    return NULL;
+}
+
+static void slot_free(uint16_t h)
+{
+    conn_slot_t *s = slot_by_handle(h);
+    if (s) {
+        s->handle     = BLE_HS_CONN_HANDLE_NONE;
+        s->subscribed = false;
+        s->len        = 0;
+    }
+}
+
+static int conn_count(void)
+{
+    int n = 0;
+    for (int i = 0; i < BLE_SERIAL_MAX_CONNS; i++) {
+        if (s_ble.conns[i].handle != BLE_HS_CONN_HANDLE_NONE) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static int sub_count(void)
+{
+    int n = 0;
+    for (int i = 0; i < BLE_SERIAL_MAX_CONNS; i++) {
+        if (s_ble.conns[i].handle != BLE_HS_CONN_HANDLE_NONE &&
+            s_ble.conns[i].subscribed) {
+            n++;
+        }
+    }
+    return n;
+}
 
 /* --- GATT ---------------------------------------------------------------------- */
 
 static int gatt_rx_write(uint16_t conn_handle, uint16_t attr_handle,
                          struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
-    (void)conn_handle; (void)attr_handle; (void)arg;
+    (void)attr_handle; (void)arg;
 
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
         return BLE_ATT_ERR_UNLIKELY;
     }
 
     /*
-     * Enforce the security mode here rather than through characteristic flags: the
-     * mode is switchable at runtime and flags are fixed when the service registers.
+     * Enforce the security mode here rather than through characteristic flags: the mode
+     * is switchable at runtime and flags are fixed when the service registers.
      *
      * Both bits are required, not just encryption. An unauthenticated ("Just Works")
-     * pairing is encrypted but gives no protection against an active man in the
-     * middle, and this characteristic can run `zero` and `curve` -- commands that
-     * silently corrupt a year of accumulated charge. Encryption alone is not the bar.
+     * pairing is encrypted but gives no protection against an active man in the middle,
+     * and this characteristic can run `cal` -- commands that silently corrupt a year of
+     * accumulated charge. Encryption alone is not the bar.
      */
     if (s_ble.mode == BLE_SEC_BONDED) {
         struct ble_gap_conn_desc desc;
-        if (ble_gap_conn_find(conn_handle, &desc) != 0 ||
-            !desc.sec_state.encrypted || !desc.sec_state.authenticated) {
+        if (ble_gap_conn_find(conn_handle, &desc) != 0 || !desc.sec_state.encrypted ||
+            !desc.sec_state.authenticated) {
             s_ble.stats.rejected++;
             return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
         }
     }
 
-    /* Flatten the mbuf chain and push it on. Dropping the excess rather than
-     * blocking is deliberate: this runs on the host task (see the file header), so
-     * waiting here for a slow consumer would stall the whole BLE stack. A dropped
-     * command line is recoverable by retyping; a stalled host is not. */
+    conn_slot_t *slot = slot_by_handle(conn_handle);
+    if (!slot) {
+        return BLE_ATT_ERR_UNLIKELY; /* write from a connection we never saw */
+    }
+
+    /* Flatten the mbuf and assemble lines into THIS connection's buffer. Nothing here
+     * blocks: it runs on the host task, and waiting for a slow consumer would stall the
+     * whole stack. A dropped command is recoverable by retyping; a stalled host is not. */
     uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
     char     buf[128];
+    uint16_t off = 0;
 
     while (len > 0) {
         const uint16_t take = len > sizeof(buf) ? (uint16_t)sizeof(buf) : len;
         if (ble_hs_mbuf_to_flat(ctxt->om, buf, take, NULL) != 0) {
             break;
         }
-        const size_t sent = xStreamBufferSend(s_ble.rx, buf, take, 0);
-        s_ble.stats.rx_bytes += sent;
+        s_ble.stats.rx_bytes += take;
+
+        for (uint16_t i = 0; i < take; i++) {
+            const char c = buf[i];
+
+            if (c == '\r' || c == '\n') {
+                if (slot->len == 0) {
+                    continue; /* bare newline: terminals send CRLF */
+                }
+                slot->line[slot->len] = '\0';
+
+                cmd_msg_t msg;
+                msg.handle = conn_handle;
+                memcpy(msg.line, slot->line, slot->len + 1);
+                slot->len = 0;
+
+                if (xQueueSend(s_ble.cmdq, &msg, 0) != pdTRUE) {
+                    /* The worker is busy with a long command. Dropping is honest and
+                     * recoverable; blocking the host task is neither. */
+                    s_ble.stats.dropped++;
+                } else {
+                    s_ble.stats.lines++;
+                }
+                continue;
+            }
+
+            if (c == 0x08 || c == 0x7F) { /* backspace, for interactive terminals */
+                if (slot->len > 0) {
+                    slot->len--;
+                }
+                continue;
+            }
+
+            if (slot->len < sizeof(slot->line) - 1) {
+                slot->line[slot->len++] = c;
+            } else {
+                /* Overlong line: discard it whole rather than execute a truncated
+                 * command. A silently shortened command is how you run `zero 5`
+                 * instead of `zero 512`. */
+                slot->len = 0;
+                ble_serial_write_conn(conn_handle, "\r\nline too long, discarded\r\n", 0);
+            }
+        }
+
         os_mbuf_adj(ctxt->om, take);
         len -= take;
+        off += take;
     }
     return 0;
 }
 
 /*
- * TX is notify-only and nothing ever reads it -- but NimBLE requires an access
- * callback on EVERY characteristic: ble_gatts_count_resources() returns
- * BLE_HS_EINVAL (rc=3) for a NULL one, which surfaces as a service that fails to
- * register and a device that never advertises. Refuse the read explicitly rather
- * than hand back whatever the value handle points at.
+ * TX is notify-only and nothing ever reads it -- but NimBLE requires an access callback
+ * on EVERY characteristic: ble_gatts_count_resources() returns BLE_HS_EINVAL (rc=3) for
+ * a NULL one, which surfaces as a service that fails to register and a device that
+ * never advertises. Refuse the read explicitly rather than hand back whatever the value
+ * handle points at.
  */
 static int gatt_tx_access(uint16_t conn_handle, uint16_t attr_handle,
                           struct ble_gatt_access_ctxt *ctxt, void *arg)
@@ -158,10 +273,10 @@ static const struct ble_gatt_chr_def nus_chrs[] = {
         .flags     = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
     },
     {
-        .uuid      = NUS_TX_UUID,
-        .access_cb = gatt_tx_access,
+        .uuid       = NUS_TX_UUID,
+        .access_cb  = gatt_tx_access,
         .val_handle = &s_ble.tx_val_handle,
-        .flags     = BLE_GATT_CHR_F_NOTIFY,
+        .flags      = BLE_GATT_CHR_F_NOTIFY,
     },
     {0},
 };
@@ -184,78 +299,83 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT:
         if (event->connect.status == 0) {
-            s_ble.conn_handle = event->connect.conn_handle;
-            s_ble.advertising = false;
-            ESP_LOGI(TAG, "connected, handle %u", s_ble.conn_handle);
+            if (slot_alloc(event->connect.conn_handle) == NULL) {
+                ESP_LOGW(TAG, "no free slot; dropping connection %u",
+                         event->connect.conn_handle);
+                ble_gap_terminate(event->connect.conn_handle,
+                                  BLE_ERR_REM_USER_CONN_TERM);
+                return 0;
+            }
+            ESP_LOGI(TAG, "connected, handle %u (%d of %d)",
+                     event->connect.conn_handle, conn_count(), BLE_SERIAL_MAX_CONNS);
 
-            /* In BONDED mode ask for security immediately rather than waiting for
-             * the first rejected write. A phone that is already bonded encrypts
-             * silently and the user sees nothing; one that is not gets the pairing
-             * prompt at the moment it makes sense, not after a confusing failure. */
             if (s_ble.mode == BLE_SEC_BONDED) {
-                const int rc = ble_gap_security_initiate(s_ble.conn_handle);
+                const int rc = ble_gap_security_initiate(event->connect.conn_handle);
                 if (rc != 0 && rc != BLE_HS_EALREADY) {
                     ESP_LOGW(TAG, "security_initiate: %d", rc);
                 }
             }
-        } else {
-            ESP_LOGW(TAG, "connect failed (%d), re-advertising",
-                     event->connect.status);
+        }
+        /*
+         * Keep advertising while a slot remains. Without this a second central can
+         * never find the device -- the first connection would silently make it
+         * invisible, which is the whole reason multi-connection support looks broken
+         * when it is not.
+         */
+        s_ble.advertising = false;
+        if (conn_count() < BLE_SERIAL_MAX_CONNS) {
             advertise();
         }
         return 0;
 
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGI(TAG, "disconnected (reason %d)", event->disconnect.reason);
-        s_ble.conn_handle    = BLE_HS_CONN_HANDLE_NONE;
-        s_ble.subscribed     = false;
-        s_ble.passkey_live   = 0;
-        /* Always come back up. A monitor that stops advertising after one session
-         * is a monitor someone has to power-cycle in an awkward place. */
+        slot_free(event->disconnect.conn.conn_handle);
+        if (s_ble.on_passkey && sub_count() == 0) {
+            s_ble.on_passkey(0, s_ble.user); /* clear any passkey left on screen */
+        }
         advertise();
         return 0;
 
-    case BLE_GAP_EVENT_SUBSCRIBE:
-        if (event->subscribe.attr_handle == s_ble.tx_val_handle) {
-            s_ble.subscribed = event->subscribe.cur_notify;
-            ESP_LOGI(TAG, "notifications %s",
-                     s_ble.subscribed ? "enabled" : "disabled");
-            if (s_ble.subscribed) {
-                /* A terminal app shows a blank screen until something arrives, so
-                 * say hello: it proves the link works before anything is typed. */
-                ble_serial_write("\r\nbat-monitor console over BLE. 'help' lists "
-                                 "commands.\r\n", 0);
+    case BLE_GAP_EVENT_SUBSCRIBE: {
+        if (event->subscribe.attr_handle != s_ble.tx_val_handle) {
+            return 0;
+        }
+        conn_slot_t *slot = slot_by_handle(event->subscribe.conn_handle);
+        if (slot) {
+            slot->subscribed = event->subscribe.cur_notify;
+            ESP_LOGI(TAG, "handle %u notifications %s", event->subscribe.conn_handle,
+                     slot->subscribed ? "enabled" : "disabled");
+            if (slot->subscribed) {
+                /* A terminal app shows nothing until something arrives, so say hello:
+                 * it proves the link works before anything is typed. Unicast -- the
+                 * other clients do not need to see it. */
+                ble_serial_write_conn(event->subscribe.conn_handle,
+                                      "\r\nbat-monitor console over BLE. 'help' lists "
+                                      "commands.\r\n", 0);
             }
         }
         return 0;
+    }
 
     case BLE_GAP_EVENT_MTU:
-        ESP_LOGI(TAG, "MTU %u", event->mtu.value);
+        ESP_LOGI(TAG, "handle %u MTU %u", event->mtu.conn_handle, event->mtu.value);
         return 0;
 
     case BLE_GAP_EVENT_PASSKEY_ACTION:
-        /* io_cap is DISPLAY_ONLY, so the only action we can be asked for is DISP:
-         * we choose the number, show it, and the phone types it back. That is what
-         * makes the pairing authenticated (MITM-protected) rather than Just Works. */
+        /* io_cap is DISPLAY_ONLY, so the only action we can be asked for is DISP: we
+         * choose the number, show it, and the phone types it back. That is what makes
+         * the pairing authenticated rather than Just Works. */
         if (event->passkey.params.action == BLE_SM_IOACT_DISP) {
             struct ble_sm_io io = {.action = BLE_SM_IOACT_DISP};
-
-            /* A random passkey per pairing by default. esp_random() is fed by the
-             * RF noise source once the radio is up, which it is by definition here.
-             * The modulo bias across 2^32 / 1e6 is ~1e-4 of a digit and irrelevant
-             * against a six-digit space used once. */
             io.passkey = (s_ble.passkey_cfg == PASSKEY_RANDOM)
                              ? (esp_random() % 1000000u)
                              : s_ble.passkey_cfg;
-            s_ble.passkey_live = io.passkey;
 
-            /* Log it as well as displaying it: on a board with no panel fitted the
-             * USB console is the only way to read it, and this is a bench tool. */
             ESP_LOGW(TAG, "PAIRING passkey: %06lu", (unsigned long)io.passkey);
             if (s_ble.on_passkey) {
                 s_ble.on_passkey(io.passkey, s_ble.user);
             }
-
             const int rc = ble_sm_inject_io(event->passkey.conn_handle, &io);
             if (rc != 0) {
                 ESP_LOGE(TAG, "inject_io: %d", rc);
@@ -269,23 +389,23 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_ENC_CHANGE: {
         struct ble_gap_conn_desc desc;
         if (ble_gap_conn_find(event->enc_change.conn_handle, &desc) == 0) {
-            ESP_LOGI(TAG, "encryption %s: encrypted=%d authenticated=%d bonded=%d",
+            ESP_LOGI(TAG, "handle %u encryption %s: enc=%d auth=%d bonded=%d",
+                     event->enc_change.conn_handle,
                      event->enc_change.status == 0 ? "established" : "FAILED",
                      desc.sec_state.encrypted, desc.sec_state.authenticated,
                      desc.sec_state.bonded);
         }
-        s_ble.passkey_live = 0;
         if (s_ble.on_passkey) {
-            s_ble.on_passkey(0, s_ble.user); /* 0 = take the passkey off the screen */
+            s_ble.on_passkey(0, s_ble.user); /* take the passkey off the screen */
         }
         return 0;
     }
 
     case BLE_GAP_EVENT_REPEAT_PAIRING:
-        /* The peer wants to pair again while we still hold a bond for it. Deleting
-         * the old bond and allowing the new one is what every phone expects after
-         * "forget this device" on its side; refusing leaves a link that can never
-         * be re-established without physical access here. */
+        /* The peer wants to pair again while we still hold a bond for it. Deleting the
+         * old bond and allowing the new one is what every phone expects after "forget
+         * this device" on its side; refusing leaves a link that can never be
+         * re-established without physical access here. */
         ESP_LOGW(TAG, "repeat pairing -- replacing the stored bond");
         {
             struct ble_gap_conn_desc desc;
@@ -306,13 +426,17 @@ static int gap_event(struct ble_gap_event *event, void *arg)
 
 static void advertise(void)
 {
+    if (conn_count() >= BLE_SERIAL_MAX_CONNS || s_ble.advertising) {
+        return;
+    }
+
     struct ble_hs_adv_fields fields = {0};
-    fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-    fields.name  = (uint8_t *)s_ble.name;
-    fields.name_len        = (uint8_t)strlen(s_ble.name);
-    fields.name_is_complete = 1;
+    fields.flags                 = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+    fields.name                  = (uint8_t *)s_ble.name;
+    fields.name_len              = (uint8_t)strlen(s_ble.name);
+    fields.name_is_complete      = 1;
     fields.tx_pwr_lvl_is_present = 1;
-    fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
+    fields.tx_pwr_lvl            = BLE_HS_ADV_TX_PWR_LVL_AUTO;
 
     int rc = ble_gap_adv_set_fields(&fields);
     if (rc != 0) {
@@ -320,14 +444,14 @@ static void advertise(void)
         return;
     }
 
-    /* The 128-bit NUS UUID goes in the scan response: a 16-byte UUID plus a name
-     * does not fit in one 31-byte advertisement, and dropping the name is worse --
-     * the name is how a person finds the right board. */
+    /* The 128-bit NUS UUID goes in the scan response: a 16-byte UUID plus a name does
+     * not fit in one 31-byte advertisement, and dropping the name is worse -- the name
+     * is how a person finds the right board. */
     struct ble_hs_adv_fields rsp = {0};
     ble_uuid128_t            svc = *(ble_uuid128_t *)NUS_SVC_UUID;
-    rsp.uuids128            = &svc;
-    rsp.num_uuids128        = 1;
-    rsp.uuids128_is_complete = 1;
+    rsp.uuids128                 = &svc;
+    rsp.num_uuids128             = 1;
+    rsp.uuids128_is_complete     = 1;
     rc = ble_gap_adv_rsp_set_fields(&rsp);
     if (rc != 0) {
         ESP_LOGW(TAG, "adv_rsp_set_fields: %d (continuing without it)", rc);
@@ -336,36 +460,31 @@ static void advertise(void)
     struct ble_gap_adv_params adv = {
         .conn_mode = BLE_GAP_CONN_MODE_UND,
         .disc_mode = BLE_GAP_DISC_MODE_GEN,
-        /* 500 ms, matching the T0/T1 advertising interval of DESIGN.md §9.5.
-         * Units are 0.625 ms. */
+        /* 500 ms, matching the T0/T1 advertising interval of DESIGN.md §9.5. Units are
+         * 0.625 ms. */
         .itvl_min = 800,
         .itvl_max = 800,
     };
-    rc = ble_gap_adv_start(s_ble.addr_type, NULL, BLE_HS_FOREVER, &adv, gap_event,
-                           NULL);
+    rc = ble_gap_adv_start(s_ble.addr_type, NULL, BLE_HS_FOREVER, &adv, gap_event, NULL);
     if (rc != 0) {
         ESP_LOGE(TAG, "adv_start: %d", rc);
         return;
     }
     s_ble.advertising = true;
-    ESP_LOGI(TAG, "advertising as '%s'", s_ble.name);
 }
 
 /* --- host callbacks ------------------------------------------------------------ */
 
 static void on_sync(void)
 {
-    int rc = ble_hs_util_ensure_addr(0);
-    if (rc != 0) {
-        ESP_LOGE(TAG, "ensure_addr: %d", rc);
-        return;
-    }
-    rc = ble_hs_id_infer_auto(0, &s_ble.addr_type);
-    if (rc != 0) {
-        ESP_LOGE(TAG, "infer_auto: %d", rc);
+    if (ble_hs_util_ensure_addr(0) != 0 ||
+        ble_hs_id_infer_auto(0, &s_ble.addr_type) != 0) {
+        ESP_LOGE(TAG, "address setup failed");
         return;
     }
     advertise();
+    ESP_LOGI(TAG, "advertising as '%s', up to %d connections", s_ble.name,
+             BLE_SERIAL_MAX_CONNS);
 }
 
 static void on_reset(int reason)
@@ -373,8 +492,11 @@ static void on_reset(int reason)
     /* DESIGN.md §10: a BLE fault must never stop the gauge. Log and let NimBLE come
      * back; nothing above this line depends on the link. */
     ESP_LOGW(TAG, "stack reset, reason %d", reason);
-    s_ble.conn_handle = BLE_HS_CONN_HANDLE_NONE;
-    s_ble.subscribed  = false;
+    for (int i = 0; i < BLE_SERIAL_MAX_CONNS; i++) {
+        s_ble.conns[i].handle     = BLE_HS_CONN_HANDLE_NONE;
+        s_ble.conns[i].subscribed = false;
+        s_ble.conns[i].len        = 0;
+    }
     s_ble.advertising = false;
 }
 
@@ -387,23 +509,12 @@ static void host_task(void *param)
 
 /* --- output -------------------------------------------------------------------- */
 
-void ble_serial_write(const char *data, size_t n)
+static void notify_one(uint16_t conn, const char *data, size_t n)
 {
-    if (!data) {
-        return;
-    }
-    if (n == 0) {
-        n = strlen(data);
-    }
-    if (!ble_serial_ready()) {
-        s_ble.stats.dropped += n;
-        return;
-    }
-
-    /* ATT_MTU includes the 3-byte notification header. Re-read it every call: the
-     * central usually negotiates upward a moment after connecting, and caching the
-     * initial 23 would cap every later notification at 20 bytes. */
-    uint16_t mtu = ble_att_mtu(s_ble.conn_handle);
+    /* ATT_MTU includes the 3-byte notification header. Re-read it per call and per
+     * connection: centrals negotiate upward a moment after connecting, and they do not
+     * all agree, so a cached or shared value caps somebody at 20 bytes. */
+    uint16_t mtu = ble_att_mtu(conn);
     if (mtu < 23) {
         mtu = 23;
     }
@@ -415,14 +526,12 @@ void ble_serial_write(const char *data, size_t n)
 
         struct os_mbuf *om = ble_hs_mbuf_from_flat(&data[off], (uint16_t)take);
         if (!om) {
-            /* Out of mbufs: the central is not draining. Drop the rest rather than
+            /* Out of mbufs: this central is not draining. Drop the rest rather than
              * spin -- console output is not worth stalling a task for. */
             s_ble.stats.dropped += (n - off);
             return;
         }
-        const int rc = ble_gatts_notify_custom(s_ble.conn_handle,
-                                               s_ble.tx_val_handle, om);
-        if (rc != 0) {
+        if (ble_gatts_notify_custom(conn, s_ble.tx_val_handle, om) != 0) {
             s_ble.stats.dropped += (n - off);
             return;
         }
@@ -431,9 +540,45 @@ void ble_serial_write(const char *data, size_t n)
     }
 }
 
+void ble_serial_write_conn(uint16_t conn, const char *data, size_t n)
+{
+    if (!data) {
+        return;
+    }
+    if (n == 0) {
+        n = strlen(data);
+    }
+    const conn_slot_t *s = slot_by_handle(conn);
+    if (!s || !s->subscribed) {
+        s_ble.stats.dropped += n;
+        return;
+    }
+    notify_one(conn, data, n);
+}
+
+void ble_serial_write(const char *data, size_t n)
+{
+    if (!data) {
+        return;
+    }
+    if (n == 0) {
+        n = strlen(data);
+    }
+    if (sub_count() == 0) {
+        s_ble.stats.dropped += n;
+        return;
+    }
+    for (int i = 0; i < BLE_SERIAL_MAX_CONNS; i++) {
+        if (s_ble.conns[i].handle != BLE_HS_CONN_HANDLE_NONE &&
+            s_ble.conns[i].subscribed) {
+            notify_one(s_ble.conns[i].handle, data, n);
+        }
+    }
+}
+
 bool ble_serial_ready(void)
 {
-    return s_ble.conn_handle != BLE_HS_CONN_HANDLE_NONE && s_ble.subscribed;
+    return sub_count() > 0;
 }
 
 const char *ble_serial_name(void)
@@ -446,19 +591,33 @@ void ble_serial_get_stats(ble_serial_stats_t *out)
     if (!out) {
         return;
     }
-    *out = s_ble.stats;
-    out->advertising = s_ble.advertising;
-    out->connected   = s_ble.conn_handle != BLE_HS_CONN_HANDLE_NONE;
-    out->subscribed  = s_ble.subscribed;
-    out->mtu         = out->connected ? ble_att_mtu(s_ble.conn_handle) : 0;
-    out->mode        = s_ble.mode;
+    *out              = s_ble.stats;
+    out->advertising  = s_ble.advertising;
+    out->connections  = conn_count();
+    out->subscribers  = sub_count();
+    out->mode         = s_ble.mode;
 
-    if (out->connected) {
+    /* The security flags describe the WEAKEST link, not the best one: with several
+     * centrals attached, "encrypted" must not read true because one of them is. */
+    out->encrypted     = out->connections > 0;
+    out->authenticated = out->connections > 0;
+    out->mtu           = 0;
+
+    for (int i = 0; i < BLE_SERIAL_MAX_CONNS; i++) {
+        const uint16_t h = s_ble.conns[i].handle;
+        if (h == BLE_HS_CONN_HANDLE_NONE) {
+            continue;
+        }
+        const uint16_t m = ble_att_mtu(h);
+        if (out->mtu == 0 || m < out->mtu) {
+            out->mtu = m;
+        }
         struct ble_gap_conn_desc desc;
-        if (ble_gap_conn_find(s_ble.conn_handle, &desc) == 0) {
-            out->encrypted     = desc.sec_state.encrypted;
-            out->authenticated = desc.sec_state.authenticated;
-            out->bonded_peer   = desc.sec_state.bonded;
+        if (ble_gap_conn_find(h, &desc) == 0) {
+            if (!desc.sec_state.encrypted)     out->encrypted     = false;
+            if (!desc.sec_state.authenticated) out->authenticated = false;
+        } else {
+            out->encrypted = out->authenticated = false;
         }
     }
 
@@ -508,11 +667,11 @@ esp_err_t ble_serial_set_sec_mode(ble_sec_mode_t mode)
     s_ble.mode = mode;
     sec_persist();
 
-    /* Tightening must not leave the existing link with the access it had under the
-     * old rules. Dropping it forces the peer through the new path immediately, which
-     * is also the only way the change is visible to the person who made it. */
-    if (tightening && s_ble.conn_handle != BLE_HS_CONN_HANDLE_NONE) {
-        ble_gap_terminate(s_ble.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    /* Tightening must not leave existing links with the access they had under the old
+     * rules. Dropping them forces every peer through the new path, which is also the
+     * only way the change is visible to the person who made it. */
+    if (tightening) {
+        (void)ble_serial_disconnect();
     }
     return ESP_OK;
 }
@@ -562,73 +721,39 @@ int ble_serial_list_bonds(char out[][24], int max)
 
 esp_err_t ble_serial_clear_bonds(void)
 {
-    /* ble_store_clear() drops the current encrypted link's keys too, so terminate
-     * first: an encrypted connection whose keys have been deleted underneath it is a
-     * connection in an undefined state. */
-    if (s_ble.conn_handle != BLE_HS_CONN_HANDLE_NONE) {
-        ble_gap_terminate(s_ble.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
-    }
+    /* ble_store_clear() drops the live links' keys too, so terminate first: an
+     * encrypted connection whose keys have been deleted underneath it is a connection
+     * in an undefined state. */
+    (void)ble_serial_disconnect();
     return ble_store_clear() == 0 ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t ble_serial_disconnect(void)
 {
-    if (s_ble.conn_handle == BLE_HS_CONN_HANDLE_NONE) {
-        return ESP_ERR_INVALID_STATE;
+    int n = 0;
+    for (int i = 0; i < BLE_SERIAL_MAX_CONNS; i++) {
+        const uint16_t h = s_ble.conns[i].handle;
+        if (h != BLE_HS_CONN_HANDLE_NONE) {
+            ble_gap_terminate(h, BLE_ERR_REM_USER_CONN_TERM);
+            n++;
+        }
     }
-    return ble_gap_terminate(s_ble.conn_handle, BLE_ERR_REM_USER_CONN_TERM) == 0
-               ? ESP_OK : ESP_FAIL;
+    return n ? ESP_OK : ESP_ERR_INVALID_STATE;
 }
 
-/* --- worker: bytes to lines to commands ---------------------------------------- */
+/* --- worker: queued lines to commands ------------------------------------------ */
 
 static void worker_task(void *arg)
 {
     (void)arg;
-    static char line[BLE_LINE_MAX];
-    size_t      len = 0;
+    cmd_msg_t msg;
 
     for (;;) {
-        char c;
-        if (xStreamBufferReceive(s_ble.rx, &c, 1, portMAX_DELAY) != 1) {
+        if (xQueueReceive(s_ble.cmdq, &msg, portMAX_DELAY) != pdTRUE) {
             continue;
         }
-
-        if (c == '\r' || c == '\n') {
-            if (len == 0) {
-                continue; /* bare newline: a terminal app sends CRLF */
-            }
-            line[len] = '\0';
-            s_ble.stats.lines++;
-
-            /* Echo the command back. A BLE terminal shows only what it received, so
-             * without this the output has no visible connection to what was typed. */
-            ble_serial_write("> ", 2);
-            ble_serial_write(line, len);
-            ble_serial_write("\r\n", 2);
-
-            if (s_ble.on_line) {
-                s_ble.on_line(line, s_ble.user);
-            }
-            len = 0;
-            continue;
-        }
-
-        if (c == 0x08 || c == 0x7F) { /* backspace, for the interactive terminals */
-            if (len > 0) {
-                len--;
-            }
-            continue;
-        }
-
-        if (len < sizeof(line) - 1) {
-            line[len++] = c;
-        } else {
-            /* Overlong line: drop it whole rather than execute a truncated command.
-             * A silently shortened command is how you end up running `zero 5`
-             * instead of `zero 512`. */
-            ble_serial_write("\r\nline too long, discarded\r\n", 0);
-            len = 0;
+        if (s_ble.on_line) {
+            s_ble.on_line(msg.line, msg.handle, s_ble.user);
         }
     }
 }
@@ -644,6 +769,9 @@ esp_err_t ble_serial_start(const ble_serial_config_t *cfg)
     s_ble.on_line    = cfg->on_line;
     s_ble.on_passkey = cfg->on_passkey;
     s_ble.user       = cfg->user;
+    for (int i = 0; i < BLE_SERIAL_MAX_CONNS; i++) {
+        s_ble.conns[i].handle = BLE_HS_CONN_HANDLE_NONE;
+    }
 
     snprintf(s_ble.name, sizeof(s_ble.name), "%s", cfg->device_name);
     if (cfg->append_mac) {
@@ -655,8 +783,8 @@ esp_err_t ble_serial_start(const ble_serial_config_t *cfg)
         }
     }
 
-    s_ble.rx = xStreamBufferCreate(RX_BUF_BYTES, 1);
-    if (!s_ble.rx) {
+    s_ble.cmdq = xQueueCreate(CMD_QUEUE_LEN, sizeof(cmd_msg_t));
+    if (!s_ble.cmdq) {
         return ESP_ERR_NO_MEM;
     }
 
@@ -670,14 +798,14 @@ esp_err_t ble_serial_start(const ble_serial_config_t *cfg)
     ble_hs_cfg.reset_cb = on_reset;
 
     /*
-     * Security manager (DESIGN.md §8.5). Configured unconditionally, even in OPEN
-     * mode: these settings only describe what happens IF a peer asks to pair, and a
-     * peer may ask at any time. Enforcement -- whether an unpaired peer can actually
-     * run commands -- is the mode check in gatt_rx_write(), not these flags.
+     * Security manager (DESIGN.md §8.5). Configured unconditionally, even in OPEN mode:
+     * these settings only describe what happens IF a peer asks to pair, and a peer may
+     * ask at any time. Enforcement -- whether an unpaired peer can actually run
+     * commands -- is the mode check in gatt_rx_write(), not these flags.
      *
      * DISPLAY_ONLY with sm_mitm gives passkey-display pairing: the device picks six
-     * digits, the phone types them, and the exchange is authenticated. sm_sc selects
-     * LE Secure Connections (ECDH) over legacy pairing, which matters because legacy
+     * digits, the phone types them, and the exchange is authenticated. sm_sc selects LE
+     * Secure Connections (ECDH) over legacy pairing, which matters because legacy
      * passkey pairing is offline-crackable from a single sniffed exchange.
      */
     ble_hs_cfg.sm_io_cap         = BLE_HS_IO_DISPLAY_ONLY;
@@ -688,7 +816,6 @@ esp_err_t ble_serial_start(const ble_serial_config_t *cfg)
     ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
     ble_hs_cfg.store_status_cb   = ble_store_util_status_rr;
 
-    /* Bonds in NVS, so pairing survives a reboot. */
     ble_store_config_init();
     sec_load();
 

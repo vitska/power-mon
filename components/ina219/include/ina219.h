@@ -158,6 +158,19 @@ esp_err_t ina219_deinit(ina219_handle_t h);
 esp_err_t ina219_set_profile(ina219_handle_t h, ina219_profile_t profile);
 
 /**
+ * Hardware averaging used in the continuous profile, applied to both channels.
+ *
+ * This is the sample-rate knob. Each channel converts in the time its setting names and
+ * the two are sequential, so the pair rate is 1/(2·t): 128AVG gives 7.3 Hz, 64AVG gives
+ * 14.7 Hz, 32AVG gives 29 Hz. Less averaging is proportionally noisier -- halving it
+ * costs about 40 % more noise per sample -- which is a real trade against the 3 mA
+ * deadband of §5.2, not a free speed-up.
+ */
+esp_err_t ina219_set_continuous_adc(ina219_handle_t h, ina219_adc_t adc);
+ina219_adc_t ina219_get_continuous_adc(ina219_handle_t h);
+ina219_profile_t ina219_get_profile(ina219_handle_t h);
+
+/**
  * Start one conversion. Required in TRIGGERED profile before each read; a no-op
  * (returns ESP_OK) in CONTINUOUS.
  */

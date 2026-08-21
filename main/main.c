@@ -399,47 +399,72 @@ static void stream_emit(const char *line)
 #endif
 }
 
-static void print_sample_csv(app_ctx_t *ctx, const power_sample_t *s)
+/*
+ * Three record types, one per group, each prefixed so a client can demultiplex a single
+ * stream without tracking which command produced what:
+ *
+ *   f,<ms>,<volts>,<amps>
+ *   c,<ms>,<watts>,<soc_pct>,<charge_ah>,<state>,<ocv_v>,<peukert>
+ *   e,<ms>,<temp_c>,<humid_pct>,<press_hpa>
+ *
+ * Header lines are emitted once per group when the stream is enabled and start with
+ * '#', so a parser can either use them or skip them by that single character.
+ *
+ * Splitting them is not cosmetic. A load step is an event you either catch at 10 Hz or
+ * miss; SoC cannot meaningfully change faster than the gauge integrates; and a thermal
+ * mass reported ten times a second is ten times the airtime for the same number.
+ */
+static void emit_headers(app_ctx_t *ctx)
 {
-    char bv[24], bi[24], bp[24], bsh[24], bsoc[24], bq[24];
-    char line[192];
-
-    if (!ctx->stream_csv_header_done) {
-        ctx->stream_csv_header_done = true;
-        stream_emit("ms,volts,amps,watts,shunt_mv,pga,sat,soc_pct,charge_ah,state,"
-                    "temp_c,humid_pct,press_hpa");
+    if (ctx->stream_csv_header_done) {
+        return;
     }
+    ctx->stream_csv_header_done = true;
+    if (ctx->rate_fast_ms) stream_emit("#f,ms,volts,amps");
+    if (ctx->rate_calc_ms) stream_emit("#c,ms,watts,soc_pct,charge_ah,state,ocv_v,peukert");
+    if (ctx->rate_env_ms)  stream_emit("#e,ms,temp_c,humid_pct,press_hpa");
+}
 
+static void emit_fast(const power_sample_t *s)
+{
+    char line[96], bv[24], bi[24];
+    snprintf(line, sizeof(line), "f,%lu,%s,%s",
+             (unsigned long)(s->t_us / 1000), FMT_V(bv, s->v_pack_uv),
+             FMT_A(bi, s->i_ua));
+    stream_emit(line);
+}
+
+static void emit_calc(const power_sample_t *s)
+{
     fg_status_t fg;
     fg_get(&fg);
 
-    /* Unquoted, no spaces, fixed column order: parseable by anything, including a
-     * five-line awk script. Milliseconds since boot rather than a wall clock, because
-     * this device has no idea what time it is. */
-    /* Environmental fields are left EMPTY when no sensor is fitted, rather than zero:
-     * 0.00 °C is a plausible temperature and would be indistinguishable from a real
-     * reading. An empty CSV field is the conventional way to say "no value" and keeps
-     * the column count stable either way. */
-    char btc[16] = "", bhc[16] = "", bpc[16] = "";
+    char line[160], bp[24], bsoc[24], bq[24], bo[24], bk[24];
+    snprintf(line, sizeof(line), "c,%lu,%s,%s,%s,%s,%s,%s",
+             (unsigned long)(s->t_us / 1000),
+             FMT_W(bp, s->p_uw),
+             fixed_fmt(bsoc, sizeof(bsoc), fg.soc_permille, 10, 1),
+             fixed_fmt(bq, sizeof(bq), fg.charge_uas / 3600, 1000000, 3),
+             fg_state_str(fg.state),
+             FMT_V(bo, fg.ocv_uv),
+             fixed_fmt(bk, sizeof(bk), fg.peukert_factor_q16, 65536, 3));
+    stream_emit(line);
+}
+
+static void emit_env(app_ctx_t *ctx, int64_t now_us)
+{
+    /* Empty fields, not zeros, when there is no sensor: 0.00 C is a plausible reading
+     * and would be indistinguishable from a real one. */
+    char line[112], bt[16] = "", bh[16] = "", bpr[16] = "";
     if (ctx->env_valid) {
-        fixed_fmt(btc, sizeof(btc), ctx->env.temp_centi_c, 100, 2);
-        fixed_fmt(bpc, sizeof(bpc), (int64_t)ctx->env.press_pa, 100, 2);
+        fixed_fmt(bt, sizeof(bt), ctx->env.temp_centi_c, 100, 2);
+        fixed_fmt(bpr, sizeof(bpr), (int64_t)ctx->env.press_pa, 100, 2);
         if (ctx->env.have_humidity) {
-            fixed_fmt(bhc, sizeof(bhc), ctx->env.humid_centi, 100, 1);
+            fixed_fmt(bh, sizeof(bh), ctx->env.humid_centi, 100, 1);
         }
     }
-
-    snprintf(line, sizeof(line), "%lu,%s,%s,%s,%s,%s,%d,%s,%s,%s,%s,%s,%s",
-           (unsigned long)(s->t_us / 1000),
-           FMT_V(bv, s->v_pack_uv),
-           FMT_A(bi, s->i_ua),
-           FMT_W(bp, s->p_uw),
-           FMT_MV(bsh, s->v_shunt_uv),
-           ina219_pga_str(s->pga),
-           s->saturated ? 1 : 0,
-           fixed_fmt(bsoc, sizeof(bsoc), fg.soc_permille, 10, 1),
-           fixed_fmt(bq, sizeof(bq), fg.charge_uas / 3600, 1000000, 3),
-           fg_state_str(fg.state), btc, bhc, bpc);
+    snprintf(line, sizeof(line), "e,%lu,%s,%s,%s",
+             (unsigned long)(now_us / 1000), bt, bh, bpr);
     stream_emit(line);
 }
 
@@ -472,7 +497,14 @@ static void sampler_task(void *arg)
 {
     app_ctx_t *ctx = arg;
 
-    int64_t next_print_us = esp_timer_get_time();
+    int64_t next_fast_us = esp_timer_get_time();
+    int64_t next_calc_us = next_fast_us;
+    int64_t next_env_us  = next_fast_us;
+    /* Last sample actually emitted, so a group never sends the same measurement twice.
+     * Without this, asking for 10 Hz from a 7.3 Hz sensor produces duplicate records
+     * that a client would count as real samples. */
+    int64_t last_fast_t  = 0;
+    int64_t last_calc_t  = 0;
     bool    warned_unresolved = false;
 
     for (;;) {
@@ -525,10 +557,14 @@ static void sampler_task(void *arg)
 
         const int64_t now = esp_timer_get_time();
 
-        /* §4.4: 60 s at the idle tiers. One forced read costs ~12 ms, which is
-         * cheerfully affordable once a minute and would not be at 7 Hz. */
+        /*
+         * Read the sensor on the same cadence it is reported at -- there is no point
+         * sampling a thermal mass faster than anything consumes it. One forced read
+         * costs ~12 ms, affordable every ten seconds and not at 10 Hz.
+         */
         if (ctx->bme && now >= ctx->env_next_us) {
-            ctx->env_next_us = now + 60 * 1000000LL;
+            const uint32_t ems = ctx->rate_env_ms ? ctx->rate_env_ms : 10000;
+            ctx->env_next_us   = now + (int64_t)ems * 1000;
             bme280_sample_t e;
             if (bme280_read(ctx->bme, &e) == ESP_OK) {
                 ctx->env       = e;
@@ -540,16 +576,40 @@ static void sampler_task(void *arg)
             }
         }
 
-        if (ctx->stream_enabled && ctx->last_valid && now >= next_print_us) {
-            next_print_us = now + (int64_t)ctx->stream_period_ms * 1000;
+        if (ctx->stream_enabled && ctx->last_valid) {
             if (ctx->stream_csv) {
-                print_sample_csv(ctx, &ctx->last);
-            } else {
+                emit_headers(ctx);
+
+                /* Each group keeps its own deadline. A slow group cannot delay a fast
+                 * one, and a group disabled with 0 simply never becomes due. */
+                if (ctx->rate_fast_ms && now >= next_fast_us &&
+                    ctx->last.t_us != last_fast_t) {
+                    next_fast_us = now + (int64_t)ctx->rate_fast_ms * 1000;
+                    last_fast_t  = ctx->last.t_us;
+                    emit_fast(&ctx->last);
+                }
+                if (ctx->rate_calc_ms && now >= next_calc_us &&
+                    ctx->last.t_us != last_calc_t) {
+                    next_calc_us = now + (int64_t)ctx->rate_calc_ms * 1000;
+                    last_calc_t  = ctx->last.t_us;
+                    emit_calc(&ctx->last);
+                }
+                if (ctx->rate_env_ms && now >= next_env_us) {
+                    next_env_us = now + (int64_t)ctx->rate_env_ms * 1000;
+                    emit_env(ctx, now);
+                }
+            } else if (ctx->rate_calc_ms && now >= next_calc_us) {
+                /* Text mode stays one line per tick, at the calculated group's rate:
+                 * it is for a person reading, and 10 Hz of scrolling is unreadable. */
+                next_calc_us = now + (int64_t)ctx->rate_calc_ms * 1000;
                 print_sample_line(&ctx->last, &ctx->window);
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(100));
+        /* 20 ms, not 100: a 10 Hz group needs the loop to come round considerably
+         * faster than the deadline it is servicing, or emission jitters by a whole
+         * tick. The INA219 read itself is what paces this loop in practice. */
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
 
@@ -701,7 +761,9 @@ void app_main(void)
     }
 
     ctx->stream_enabled   = BATMON_STREAM_ON_BOOT;
-    ctx->stream_period_ms = CONFIG_BATMON_STREAM_PERIOD_MS;
+    ctx->rate_fast_ms     = CONFIG_BATMON_STREAM_FAST_MS;
+    ctx->rate_calc_ms     = CONFIG_BATMON_STREAM_CALC_MS;
+    ctx->rate_env_ms      = CONFIG_BATMON_STREAM_ENV_MS;
     stats_reset(&ctx->window);
 
     if (ctx->sensors) {

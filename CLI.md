@@ -9,12 +9,16 @@ This document is written to be sufficient for building a client — an Android a
 script, a logger — without reading the firmware. Anything configurable from the local
 console is configurable over BLE, with one documented exception (`mon`).
 
-Protocol version **2**. Check it with `ver` before anything else.
+Protocol version **3**. Check it with `ver` before anything else.
 
-> **Changed in 2:** the CSV stream gained `temp_c`, `humid_pct` and `press_hpa`
-> columns, and `env` was added. Appending columns changes the shape of an existing
-> command's output, which is exactly what the version number exists to signal — a
-> client counting fields would otherwise silently misread every row.
+> **Changed in 3:** telemetry is split into three groups with independent rates, each
+> emitted as its own prefixed record — `f` fast, `c` calculated, `e` environmental. The
+> single wide CSV row of protocol 2 is gone. Up to **three BLE centrals** may connect at
+> once; a command's reply is unicast to the client that sent it, while the stream is
+> broadcast to every subscriber.
+>
+> **Changed in 2:** the CSV stream gained temperature, humidity and pressure, and `env`
+> was added.
 
 ---
 
@@ -29,15 +33,28 @@ Protocol version **2**. Check it with `ver` before anything else.
 | Service | `6E400001-B5A3-F393-E0A9-E50E24DCCA9E` (Nordic UART) |
 | RX — write commands here | `6E400002-B5A3-F393-E0A9-E50E24DCCA9E` — Write, Write-No-Response |
 | TX — subscribe for output | `6E400003-B5A3-F393-E0A9-E50E24DCCA9E` — Notify |
-| Connections | one at a time |
+| Connections | **up to 3 at once** |
 | Preferred ATT MTU | 512 |
 
 The 128-bit service UUID is in the **scan response**, not the advertisement — a
 16-byte UUID plus the name does not fit in 31 bytes. Scan actively, or filter on name.
 
 **Subscribe to TX before sending anything.** Output to an unsubscribed client is
-discarded, not buffered; the command still executes. `ble` on the device reports
-`connected` and `subscribed` separately for exactly this reason.
+discarded, not buffered; the command still executes. `ble` reports connection and
+subscriber counts separately for exactly this reason.
+
+**Multiple centrals share one console.** A phone can watch telemetry while a laptop
+configures. Two rules make that safe, and a client should rely on both:
+
+- **Replies are unicast.** A command's echo, output and `exit` line go only to the
+  connection that sent it. You will never receive another client's `help` output.
+- **The stream is broadcast.** Every subscriber receives every telemetry record. If two
+  clients set different rates, the last setting wins for everyone — the rates are device
+  state, not per-connection state.
+
+Each connection has its own line-assembly buffer, so simultaneous writes cannot splice
+into one corrupt command. MTU is negotiated per connection and chunking follows each
+one's own value.
 
 On subscribing you receive an unsolicited greeting:
 
@@ -160,8 +177,8 @@ Send `ver` first. Output is stable, fixed order, one `key value` pair per line �
 only command designed for machine parsing rather than human reading:
 
 ```
-protocol 2
-firmware 0.3.0-m2
+protocol 3
+firmware 0.4.0-m2
 idf v5.3.5-1161-g6d0016c3c1f
 chip esp32c6 rev2 cores1
 mac CC:8D:A2:F2:DC:FA
@@ -199,58 +216,106 @@ Sign convention: **current > 0 is charge into the battery**, < 0 is discharge.
 
 ---
 
-## 5. Telemetry — use `stream csv`
+## 5. Telemetry — three groups, three rates
 
-This is the intended path for live data. `stream csv` switches the periodic dump to CSV
-and enables it; the header is re-emitted on every switch.
+Quantities change at genuinely different speeds, so they are sent at different rates as
+three record types. Sending temperature at the current-sampling rate wastes airtime;
+sending current at the temperature rate loses the event you were watching for.
+
+| group | prefix | default | contents |
+|---|---|---|---|
+| fast | `f` | **100 ms (10 Hz)** | voltage, current — the measurement itself |
+| calculated | `c` | **500 ms (2 Hz)** | power, SoC, charge, state, OCV, Peukert |
+| environmental | `e` | **10 000 ms** | temperature, humidity, pressure |
 
 ```
-ms,volts,amps,watts,shunt_mv,pga,sat,soc_pct,charge_ah,state,temp_c,humid_pct,press_hpa
-5533,13.113,-0.0006,-0.007,0.030,/1 (+/-40mV),0,90.2,39.696,RESTING,27.02,48.6,1001.53
+stream csv                enable, CSV grouped records, re-emit headers
+stream text               human one-liner instead, at the calc rate
+stream fast <ms|off>      20..60000
+stream calc <ms|off>      20..60000
+stream env  <ms|off>      20..600000, and it also sets how often the sensor is read
+stream on | off           all groups
+stream                    show the current state
 ```
 
-| column | meaning |
+A group set to `off` (0 ms) stops without disturbing the others — a client that only
+wants temperature need not receive 10 Hz of current to get it.
+
+### Records
+
+Header lines are emitted once when the stream is enabled and **start with `#`**, so a
+parser can either use them or skip them on that one character.
+
+```
+#f,ms,volts,amps
+#c,ms,watts,soc_pct,charge_ah,state,ocv_v,peukert
+#e,ms,temp_c,humid_pct,press_hpa
+f,7073,13.113,-0.0006
+c,7213,-0.007,90.2,39.696,RESTING,13.117,1.000
+e,7033,26.97,48.9,1001.64
+```
+
+Records are **never duplicated**: a group emits only when the underlying sample is new.
+Ask for 10 Hz from a 7.3 Hz sensor and you get 7.3 Hz of distinct records rather than
+10 Hz with repeats — so a client may derive the true rate from the `ms` field and trust
+it.
+
+### The sample-rate ceiling
+
+The fast group cannot outrun the ADC. Both channels convert sequentially, so the pair
+rate is what matters:
+
+| profile | averaging | pair | ceiling |
+|---|---|---|---|
+| `continuous` (default) | 128× | 136.2 ms | **7.3 Hz** |
+| `fast` | 64× | 68.1 ms | **14.6 Hz** |
+| `triggered` | on demand | — | low-power tier (§9.4) |
+
+**For a genuine 10 Hz, send `profile fast`.** It costs about 40 % more noise per sample,
+which is a real trade against the 3 mA integration deadband, so it is opt-in rather than
+the default. Measured on hardware: `stream fast 100` with `profile fast` delivers
+**~9.2 Hz**; with the default profile the same request yields ~7.3 Hz of non-duplicated
+records.
+
+`profile` prints the ceiling for the current setting.
+
+### Fields
+
+| field | meaning |
 |---|---|
 | `ms` | milliseconds since boot. **Not a wall clock** — the device has no idea what time it is. Stamp arrival time on the client. |
 | `volts` | pack voltage, calibrated and harness-corrected |
 | `amps` | current, > 0 charging |
 | `watts` | volts × amps |
-| `shunt_mv` | raw shunt drop, before scaling — the diagnostic field |
-| `pga` | active range, e.g. `/8 (+/-320mV)`. **Contains a comma-free but parenthesised string; it has no comma, so column count is stable.** |
-| `sat` | `1` if the shunt channel is at its range limit — the reading is a limit, not a measurement |
 | `soc_pct` | state of charge, one decimal |
 | `charge_ah` | accumulated charge, 3 decimals |
 | `state` | `UNKNOWN` \| `COUNTING` \| `RESTING` \| `FULL` \| `EMPTY` |
+| `ocv_v` | I·R-compensated open-circuit estimate — what the SoC map actually uses |
+| `peukert` | the discharge multiplier in force right now; `1.000` while charging |
 | `temp_c` | board temperature, °C to 2 dp. **Empty when no sensor is fitted** |
 | `humid_pct` | relative humidity, 1 dp. **Empty on a BMP280**, which has no humidity channel |
 | `press_hpa` | pressure, hPa to 2 dp. Empty when no sensor is fitted |
 
-The three environmental fields are **empty rather than zero** when unavailable: 0.00 °C
-is a plausible temperature and would be indistinguishable from a real reading. The
-column count never changes, so a positional parser stays valid — it just sees `,,`.
-They refresh on their own 60 s cadence (§4.4), not per row, so consecutive rows repeat
-the same value; that is the sensor's cadence, not a stuck reading.
+The environmental fields are **empty rather than zero** when unavailable: 0.00 °C is a
+plausible temperature and would be indistinguishable from a real reading. The field
+count never changes, so a positional parser stays valid — it just sees `,,`.
 
-Cadence is `stream <ms>`, default 1000 ms, range 100–60000. The sampler itself runs at
-~7 Hz; the stream decimates it.
-
-```
-stream on          enable, current format
-stream off         disable
-stream csv         CSV format, enable, re-emit header
-stream text        human format, enable
-stream 500         set period to 500 ms and enable
-```
+Raw diagnostics — `shunt_mv`, `pga`, `sat` — are no longer in the stream. They belong to
+a single measurement rather than to telemetry, and `read` reports them on demand. A
+client that needs to know whether the shunt channel is saturated should call `read`.
 
 **The stream reaches both transports**, emitted by the sampler task directly to USB
 and to the BLE TX characteristic, so a phone gets it without polling. Lines end
 `CR LF` on both.
 
-**It is asynchronous and sits outside the framing.** Stream lines arrive between command
-responses, with no echo, no `exit` and no EOT of their own. A client must attribute each
-incoming line to one or the other; the simplest workable rule is: while a command is in
-flight, everything up to the next `0x04` belongs to that command, and anything arriving
-when no command is pending is stream data.
+**It is asynchronous and sits outside the framing.** Stream records arrive between
+command responses, with no echo, no `exit` and no EOT of their own. A client must
+attribute each incoming line to one or the other; the simplest workable rule is: while a
+command is in flight, everything up to the next `0x04` belongs to that command, and
+anything arriving with no command pending is stream data.
+
+Because records are prefixed, the fallback is also easy: a line starting `f,`, `c,`, `e,`
+or `#` is telemetry.
 
 Because `stream_enabled` is one global flag, enabling the stream from BLE also enables it
 on USB, and vice versa. There is one stream, not one per transport.
@@ -281,7 +346,7 @@ Grouped by what they touch. "Persists" means it survives a power cycle.
 | `stats` | Mean / σ / min / max over the window, plus error counters. |
 | `stats reset` | Clear the window. |
 | `scan` | I²C bus scan; identifies expected devices, flags unexpected ones. |
-| `profile <continuous\|triggered>` | Sampling profile (§4.1 of DESIGN.md). |
+| `profile <continuous\|fast\|triggered>` | Sampling profile and therefore the rate ceiling; prints it |
 | `mon [refresh_ms]` | Interactive dashboard. **Not for clients.** |
 
 ### Shunt and sensor topology
@@ -372,12 +437,12 @@ voltage since power-up. Present these as uncertainty, not as a precise number.
 
 | Command | Notes |
 |---|---|
-| `ble` | Name, link state, encryption, authentication, bond count, MTU, traffic |
+| `ble` | Connection and subscriber counts, security of the **weakest** link, bonds, MTU, traffic |
 | `ble pair <open\|bonded>` | **Persists.** Switching to `bonded` drops the current link |
 | `ble passkey <random\|NNNNNN>` | Random per pairing is the default |
 | `ble bonds` | List bonded peers |
 | `ble unpair` | Forget all bonds; drops the link |
-| `ble disconnect` | Drop the link; advertising resumes |
+| `ble disconnect` | Drop **every** link; advertising resumes |
 
 **Pairing model.** The device is `DISPLAY_ONLY` with MITM protection and LE Secure
 Connections. In `bonded` mode it initiates security on connect; the phone prompts for a

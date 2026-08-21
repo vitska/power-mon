@@ -220,10 +220,29 @@ menu "bat-monitor"
             bool "Start streaming samples at boot"
             default y
 
-        config BATMON_STREAM_PERIOD_MS
-            int "Stream print period (ms)"
-            default 1000
-            range 100 60000
+        config BATMON_STREAM_FAST_MS
+            int "Fast group period (ms) -- voltage and current"
+            default 100
+            range 0 60000
+            help
+                100 ms is 10 Hz, the rate the request asks for. The INA219 in the
+                default continuous profile converts every 136 ms (128x hardware
+                averaging), so the achieved rate is ~7.3 Hz until you run
+                'profile fast', which drops to 64x averaging for ~14.7 Hz at the
+                cost of about 40% more noise per sample.
+
+        config BATMON_STREAM_CALC_MS
+            int "Calculated group period (ms) -- power, SoC, charge"
+            default 500
+            range 0 60000
+
+        config BATMON_STREAM_ENV_MS
+            int "Environmental group period (ms) -- temperature, humidity, pressure"
+            default 10000
+            range 0 600000
+            help
+                Also sets how often the BME/BMP280 is actually read: there is no point
+                sampling a thermal mass faster than it is reported.
 
         config BATMON_INIT_ANTENNA_PINS
             bool "Drive the XIAO C6 antenna-select pins at boot"

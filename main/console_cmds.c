@@ -218,34 +218,103 @@ static int cmd_detect(int argc, char **argv)
     return 0;
 }
 
+/*
+ * Telemetry groups. One flag enables the stream; three periods decide what appears in
+ * it and how often. A group set to 0 is off without disturbing the others, which is the
+ * point of splitting them -- a client that only wants temperature should not have to
+ * receive 10 Hz of current to get it.
+ */
+static bool stream_set_rate(const char *what, const char *val)
+{
+    volatile uint32_t *target = NULL;
+    uint32_t           maxms  = 60000;
+
+    if (strcmp(what, "fast") == 0) {
+        target = &s_ctx->rate_fast_ms;
+    } else if (strcmp(what, "calc") == 0) {
+        target = &s_ctx->rate_calc_ms;
+    } else if (strcmp(what, "env") == 0) {
+        target = &s_ctx->rate_env_ms;
+        maxms  = 600000; /* a thermal mass may legitimately be reported once a minute */
+    } else {
+        return false;
+    }
+
+    if (strcmp(val, "off") == 0) {
+        *target = 0;
+        printf("%s group off\n", what);
+        return true;
+    }
+
+    const long ms = strtol(val, NULL, 10);
+    if (ms < 20 || ms > (long)maxms) {
+        printf("%s period must be 20..%lu ms, or 'off'\n", what,
+               (unsigned long)maxms);
+        return true; /* handled, just rejected */
+    }
+    *target = (uint32_t)ms;
+
+    /* The fast group can be asked for more than the sensor can deliver. Say so rather
+     * than let someone conclude the firmware is dropping samples. */
+    if (target == &s_ctx->rate_fast_ms && ms < 137 &&
+        ina219_get_continuous_adc(sensors_current_dev(s_ctx->sensors)) ==
+            INA219_ADC_128AVG) {
+        printf("fast group %ld ms (%s Hz requested)\n", ms,
+               ms ? (ms <= 100 ? "10" : "<10") : "0");
+        printf("NOTE: the continuous profile converts every ~136 ms (128x hardware\n");
+        printf("averaging), so the achieved rate is ~7.3 Hz. 'profile fast' drops to\n");
+        printf("64x averaging for ~14.7 Hz, at roughly 40%% more noise per sample.\n");
+    } else {
+        printf("%s group %ld ms\n", what, ms);
+    }
+    return true;
+}
+
+static void stream_show(void)
+{
+    printf("stream  %s, format %s\n", s_ctx->stream_enabled ? "on" : "off",
+           s_ctx->stream_csv ? "CSV (grouped records)" : "text");
+    printf("  fast  %-6lu ms   voltage, current\n",
+           (unsigned long)s_ctx->rate_fast_ms);
+    printf("  calc  %-6lu ms   power, SoC, charge, state, OCV, Peukert\n",
+           (unsigned long)s_ctx->rate_calc_ms);
+    printf("  env   %-6lu ms   temperature, humidity, pressure\n",
+           (unsigned long)s_ctx->rate_env_ms);
+    printf("0 means that group is off. Records are prefixed f, c and e; header lines\n");
+    printf("start with '#'.\n");
+}
+
 static int cmd_stream(int argc, char **argv)
 {
-    if (argc >= 2) {
-        if (strcmp(argv[1], "on") == 0) {
-            s_ctx->stream_enabled = true;
-        } else if (strcmp(argv[1], "off") == 0) {
-            s_ctx->stream_enabled = false;
-        } else if (strcmp(argv[1], "csv") == 0) {
-            s_ctx->stream_csv             = true;
-            s_ctx->stream_csv_header_done = false; /* re-emit the header */
-            s_ctx->stream_enabled         = true;
-        } else if (strcmp(argv[1], "text") == 0) {
-            s_ctx->stream_csv     = false;
-            s_ctx->stream_enabled = true;
-        } else {
-            const long ms = strtol(argv[1], NULL, 10);
-            if (ms < 100 || ms > 60000) {
-                printf("period must be 100..60000 ms\n");
-                return 1;
-            }
-            s_ctx->stream_period_ms = (uint32_t)ms;
-            s_ctx->stream_enabled   = true;
-        }
+    if (argc < 2) {
+        stream_show();
+        printf("\n");
+        printf("  stream on | off\n");
+        printf("  stream csv | text\n");
+        printf("  stream fast|calc|env <ms|off>\n");
+        return 0;
     }
-    printf("format %s   ('stream csv' or 'stream text' to switch)\n",
-           s_ctx->stream_csv ? "CSV" : "text");
-    printf("stream %s, period %lu ms\n", s_ctx->stream_enabled ? "on" : "off",
-           (unsigned long)s_ctx->stream_period_ms);
+
+    if (strcmp(argv[1], "on") == 0) {
+        s_ctx->stream_enabled = true;
+    } else if (strcmp(argv[1], "off") == 0) {
+        s_ctx->stream_enabled = false;
+    } else if (strcmp(argv[1], "csv") == 0) {
+        s_ctx->stream_csv             = true;
+        s_ctx->stream_csv_header_done = false; /* re-emit the headers */
+        s_ctx->stream_enabled         = true;
+    } else if (strcmp(argv[1], "text") == 0) {
+        s_ctx->stream_csv     = false;
+        s_ctx->stream_enabled = true;
+    } else if (argc >= 3 && stream_set_rate(argv[1], argv[2])) {
+        s_ctx->stream_csv_header_done = false; /* the header set may have changed */
+        return 0;
+    } else {
+        printf("usage: stream <on|off|csv|text|fast <ms>|calc <ms>|env <ms>>\n");
+        return 1;
+    }
+
+    stream_show();
     return 0;
 }
 
@@ -514,45 +583,62 @@ static int cmd_pga(int argc, char **argv)
     return 0;
 }
 
+/*
+ * Three profiles, which really are three sample rates with different costs:
+ *
+ *   continuous  128x averaging, 7.3 Hz pair rate -- the quietest, and the default
+ *   fast         64x averaging, 14.7 Hz          -- what a 10 Hz telemetry group needs
+ *   triggered    one conversion on demand        -- the low-power tier of §9.4
+ *
+ * `fast` exists because asking the fast telemetry group for 10 Hz against a 7.3 Hz
+ * sensor cannot work: records would either duplicate or arrive late. Buying the rate
+ * costs noise, so it is opt-in rather than the default.
+ */
 static int cmd_profile(int argc, char **argv)
 {
-    if (no_sensors()) {
+    ina219_handle_t dev = current_dev_or_complain();
+    if (!dev) {
         return 1;
     }
-    if (argc < 2) {
-        printf("usage: profile <continuous|triggered>\n");
-        return 1;
-    }
-    ina219_profile_t p;
-    if (strcmp(argv[1], "continuous") == 0) {
-        p = INA219_PROFILE_CONTINUOUS;
-    } else if (strcmp(argv[1], "triggered") == 0) {
-        p = INA219_PROFILE_TRIGGERED;
-    } else {
-        printf("usage: profile <continuous|triggered>\n");
-        return 1;
-    }
-
-    /* Applied to both devices: the profile is a power/averaging decision for the
-     * board, not for one channel. */
-    ina219_handle_t cd = sensors_current_dev(s_ctx->sensors);
     ina219_handle_t vd = sensors_voltage_dev(s_ctx->sensors);
-    if (cd) ESP_ERROR_CHECK(ina219_set_profile(cd, p));
-    if (vd && vd != cd) ESP_ERROR_CHECK(ina219_set_profile(vd, p));
 
-    printf("profile %s%s\n", argv[1], cd ? "" : " (no resolved device yet)");
-    if (cd) {
-        printf("conversion time %lu us\n",
-               (unsigned long)ina219_conversion_time_us(cd));
+    if (argc >= 2) {
+        if (strcmp(argv[1], "continuous") == 0) {
+            ESP_ERROR_CHECK(ina219_set_continuous_adc(dev, INA219_ADC_128AVG));
+            if (vd && vd != dev) ina219_set_continuous_adc(vd, INA219_ADC_128AVG);
+            ESP_ERROR_CHECK(ina219_set_profile(dev, INA219_PROFILE_CONTINUOUS));
+        } else if (strcmp(argv[1], "fast") == 0) {
+            ESP_ERROR_CHECK(ina219_set_continuous_adc(dev, INA219_ADC_64AVG));
+            if (vd && vd != dev) ina219_set_continuous_adc(vd, INA219_ADC_64AVG);
+            ESP_ERROR_CHECK(ina219_set_profile(dev, INA219_PROFILE_CONTINUOUS));
+            printf("64x averaging: ~14.7 Hz, and about 40%% more noise per sample.\n");
+            printf("Re-check 'stats' sigma against the 3 mA deadband (DESIGN.md 5.2).\n");
+        } else if (strcmp(argv[1], "triggered") == 0) {
+            ESP_ERROR_CHECK(ina219_set_profile(dev, INA219_PROFILE_TRIGGERED));
+        } else {
+            printf("usage: profile <continuous|fast|triggered>\n");
+            return 1;
+        }
+        stats_reset(&s_ctx->window);
     }
+
+    /* ina219_conversion_time_us() already covers BOTH channels -- the shunt and bus
+     * conversions are sequential and it sums them. Multiplying by two here was double
+     * counting, and reported 7.3 Hz for a profile genuinely running at 14.7. */
+    const uint32_t pair = ina219_conversion_time_us(dev);
+    char           b1[24];
+    printf("profile     %s\n",
+           ina219_get_profile(dev) == INA219_PROFILE_TRIGGERED ? "triggered"
+           : (ina219_get_continuous_adc(dev) == INA219_ADC_128AVG ? "continuous (128x)"
+                                                                 : "fast (64x)"));
+    printf("conversion  %lu us for a shunt+bus pair\n", (unsigned long)pair);
+    printf("=> up to %s samples/s at the ADC\n",
+           fixed_fmt(b1, sizeof(b1), pair ? 10000000 / (int64_t)pair : 0, 10, 1));
+    printf("The stream's fast group is separately capped by 'stream fast <ms>'; the\n");
+    printf("rate you observe is the lower of the two, and records are never repeated.\n");
     return 0;
 }
 
-/*
- * Low-side sensing knobs (DESIGN.md 2.9). These exist as runtime commands because
- * both of them are decided by which wire went where, and finding that out is a
- * bring-up activity -- not something worth a reflash cycle per attempt.
- */
 static int cmd_sense(int argc, char **argv)
 {
     ina219_handle_t dev = current_dev_or_complain();
@@ -1239,8 +1325,8 @@ static int cmd_mon(int argc, char **argv)
         {
             ble_serial_stats_t bs;
             ble_serial_get_stats(&bs);
-            printf("  link  BLE %-12s pairing %-9s disp %s\033[K\n",
-                   bs.connected ? "connected" : (bs.advertising ? "advertising" : "down"),
+            printf("  link  BLE %d/%d conn %d sub  pair %-8s disp %s\033[K\n",
+                   bs.connections, BLE_SERIAL_MAX_CONNS, bs.subscribers,
                    bs.mode == BLE_SEC_BONDED ? "required" : "OPEN",
                    display_debug_present()
                        ? (display_debug_enabled() ? "on" : "off") : "none");
@@ -1922,17 +2008,17 @@ static void ble_show(void)
     ble_serial_get_stats(&st);
 
     printf("name        %s\n", ble_serial_name());
-    printf("state       %s%s%s\n",
-           st.connected ? "connected" : (st.advertising ? "advertising" : "down"),
-           (st.connected && st.subscribed) ? ", subscribed" : "",
-           (st.connected && !st.subscribed) ? ", NOT subscribed" : "");
-    if (st.connected) {
-        printf("MTU         %u  (%u bytes per notification)\n", st.mtu,
+    printf("state       %d of %d connected, %d subscribed%s\n", st.connections,
+           BLE_SERIAL_MAX_CONNS, st.subscribers,
+           st.advertising ? ", advertising" : "");
+    if (st.connections > 0) {
+        printf("MTU         %u  (%u bytes per notification, smallest link)\n", st.mtu,
                st.mtu > 3 ? st.mtu - 3 : 0);
-        printf("link        %s, %s%s\n",
-               st.encrypted ? "encrypted" : "NOT encrypted",
-               st.authenticated ? "authenticated" : "unauthenticated",
-               st.bonded_peer ? ", bonded" : "");
+        /* The security flags describe the WEAKEST link, so one unencrypted client
+         * cannot hide behind two encrypted ones. */
+        printf("security    %s, %s  (weakest link)\n",
+               st.encrypted ? "all encrypted" : "NOT all encrypted",
+               st.authenticated ? "all authenticated" : "not all authenticated");
     }
 
     printf("pairing     %s\n",
@@ -1958,9 +2044,10 @@ static void ble_show(void)
         printf("rejected    %lu writes for insufficient security\n",
                (unsigned long)st.rejected);
     }
-    if (st.connected && !st.subscribed) {
-        printf("Connected but not subscribed: enable notifications on the TX\n");
-        printf("characteristic (6E400003-...), or the output goes nowhere.\n");
+    if (st.connections > st.subscribers) {
+        printf("%d connected but NOT subscribed: their command output goes nowhere\n",
+               st.connections - st.subscribers);
+        printf("until they enable notifications on TX (6E400003-...).\n");
     }
     printf("service     Nordic UART, 6E400001-B5A3-F393-E0A9-E50E24DCCA9E\n");
 }
@@ -1974,7 +2061,7 @@ static int cmd_ble(int argc, char **argv)
         printf("  ble passkey <random|NNNNNN> six digits, or a fresh one each time\n");
         printf("  ble bonds                  list bonded peers\n");
         printf("  ble unpair [all]           forget bonds\n");
-        printf("  ble disconnect             drop the current link\n");
+        printf("  ble disconnect             drop every current link\n");
         return 0;
     }
 
@@ -2085,7 +2172,7 @@ static int cmd_ble(int argc, char **argv)
             printf("failed: %s\n", esp_err_to_name(err));
             return 1;
         }
-        printf("disconnected; advertising resumes\n");
+        printf("all links dropped; advertising resumes\n");
         return 0;
     }
 
@@ -2109,8 +2196,10 @@ static int cmd_options(int argc, char **argv)
     char b1[24], b2[24];
 
     printf("== monitoring ============================ (stream, stats, profile)\n");
-    printf("stream        %s, %lu ms\n", s_ctx->stream_enabled ? "on" : "off",
-           (unsigned long)s_ctx->stream_period_ms);
+    printf("stream        %s, %s   fast %lu / calc %lu / env %lu ms\n",
+           s_ctx->stream_enabled ? "on" : "off", s_ctx->stream_csv ? "CSV" : "text",
+           (unsigned long)s_ctx->rate_fast_ms, (unsigned long)s_ctx->rate_calc_ms,
+           (unsigned long)s_ctx->rate_env_ms);
     printf("samples       %lu taken, window n=%lu\n",
            (unsigned long)s_ctx->n_samples, (unsigned long)s_ctx->window.n);
     printf("errors        bus %lu, not-ready %lu, range %lu, unresolved %lu\n",
@@ -2209,8 +2298,9 @@ static int cmd_options(int argc, char **argv)
     ble_serial_stats_t bst;
     ble_serial_get_stats(&bst);
     printf("name          %s\n", ble_serial_name());
-    printf("state         %s\n", bst.connected ? "connected"
-                                : bst.advertising ? "advertising" : "down");
+    printf("state         %d/%d connected, %d subscribed%s\n", bst.connections,
+           BLE_SERIAL_MAX_CONNS, bst.subscribers,
+           bst.advertising ? ", advertising" : "");
     printf("pairing       %s, %d bond%s\n",
            bst.mode == BLE_SEC_BONDED ? "required" : "OPEN -- anyone can connect",
            bst.bonds, bst.bonds == 1 ? "" : "s");

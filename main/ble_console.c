@@ -31,18 +31,22 @@ static const char *TAG = "ble_con";
 /* Output buffering, LF->CRLF translation, framing and the exit status all live in
  * console_io.c now, shared with the local console. What is left here is the sink. */
 
+/*
+ * Unicast: the reply belongs to the client that asked. With several centrals attached, a
+ * broadcast reply would drop one client's `help` output into another's data feed. The
+ * connection handle rides through console_exec_line()'s opaque user pointer.
+ */
 static void ble_sink(void *user, const char *data, size_t len)
 {
-    (void)user;
-    ble_serial_write(data, len);
+    ble_serial_write_conn((uint16_t)(uintptr_t)user, data, len);
 }
 
-static void on_line(const char *line, void *user)
+static void on_line(const char *line, uint16_t conn, void *user)
 {
     (void)user;
     /* remote = true: `mon` refuses rather than repainting into a link that cannot
      * carry the keypress that would stop it. */
-    console_exec_line(line, ble_sink, NULL, true);
+    console_exec_line(line, ble_sink, (void *)(uintptr_t)conn, true);
 }
 
 /*

@@ -39,10 +39,10 @@ Three documents, three jobs:
 - **OLED**: SoC in large digits with volts and amps beside it, plus diagnostic screens.
 - **Environmental sensor**: BME280 or BMP280 probed by chip ID, read once a minute,
   surfaced on the console, in the stream and on the panel.
-- **BLE console**: the entire command set over Nordic UART Service, with LE Secure
-  Connections passkey pairing.
-- **Live monitoring**: a repainting dashboard (`mon`) and a CSV stream to both
-  transports.
+- **BLE console**: the entire command set over Nordic UART Service, **up to three
+  centrals at once**, with LE Secure Connections passkey pairing.
+- **Live monitoring**: a repainting dashboard (`mon`), and grouped telemetry at three
+  independent rates to both transports.
 
 ## Design changes since the original document
 
@@ -210,7 +210,8 @@ see [CLI.md](CLI.md) for the framing a programmatic client needs.
 | `mon [ms]` | Live repainting dashboard of the whole device state |
 | `read` | One sample, with raw registers and the active range |
 | `env` | Temperature, pressure and humidity from the BME/BMP280 |
-| `stream <on\|off\|csv\|text\|ms>` | Periodic dump; `csv` for logging or plotting |
+| `stream [on\|off\|csv\|text\|fast <ms>\|calc <ms>\|env <ms>]` | Grouped telemetry, one rate per group |
+| `profile <continuous\|fast\|triggered>` | Sampling profile, and therefore the rate ceiling |
 | `stats [reset]` | Mean / σ / min / max over the window, plus error counters |
 | `scan` | I²C bus scan, with hints for unexpected devices |
 | `options` | Everything currently set, in one place |
@@ -264,6 +265,36 @@ so a person asking gets the current value rather than one up to a minute old.
 Absence is a configuration, not a fault: the gauge runs without it and the §5.6
 corrections stay disabled rather than being guessed from the die sensor.
 
+### Telemetry groups
+
+Quantities change at different speeds, so they are streamed at different rates as three
+prefixed record types:
+
+| group | prefix | default | contents |
+|---|---|---|---|
+| fast | `f` | 100 ms (10 Hz) | voltage, current |
+| calculated | `c` | 500 ms (2 Hz) | power, SoC, charge, state, OCV, Peukert |
+| environmental | `e` | 10 s | temperature, humidity, pressure |
+
+```
+stream csv                 grouped records, headers re-emitted
+stream fast 100            10 Hz voltage and current
+stream calc 500            2 Hz derived values
+stream env 10000           10 s environmental; also sets the sensor read cadence
+stream env off             disable one group without touching the others
+```
+
+Records are never duplicated — a group emits only when its underlying sample is new — so
+the true rate can be derived from the timestamps and trusted.
+
+**A genuine 10 Hz needs `profile fast`.** Both ADC channels convert sequentially, so the
+default 128× averaging caps the pair rate at 7.3 Hz; 64× averaging doubles it to 14.6 Hz
+at roughly 40 % more noise per sample, which is a real trade against the 3 mA
+integration deadband rather than a free speed-up. Measured: `stream fast 100` with
+`profile fast` delivers ~9.2 Hz.
+
+Full record schemas and the client protocol are in [CLI.md](CLI.md).
+
 ### Fuel gauge
 
 `soc` shows and sets everything:
@@ -308,8 +339,15 @@ still reachable. Connect with nRF Connect, Serial Bluetooth Terminal, or any NUS
 | TX (subscribe for output) | `6E400003-...` |
 
 **Enable notifications on TX** — without that, commands run and the output goes nowhere.
-`ble` reports `connected` and `subscribed` separately, precisely because those are
+`ble` reports connection and subscriber counts separately, precisely because those are
 different states that look identical.
+
+**Up to three centrals at once** — a phone watching telemetry while a laptop configures.
+A command's reply is unicast to the client that sent it, so you never receive someone
+else's `help` output; the telemetry stream is broadcast to every subscriber. Each
+connection has its own line buffer, so simultaneous writes cannot splice into one
+corrupt command. Stream rates are device state, not per-connection: if two clients set
+different rates, the last one wins for both.
 
 Responses are framed for machine use: an echo line, the output, `exit <n>`, then a
 `0x04` terminator. The CSV stream reaches BLE as well as USB. Commands run on a worker

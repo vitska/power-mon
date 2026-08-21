@@ -61,12 +61,26 @@ typedef struct {
     SemaphoreHandle_t sensor_lock;
 
     volatile bool     stream_enabled;
-    volatile uint32_t stream_period_ms;
+
     /* CSV instead of the human-readable line: same data, straight into a spreadsheet
      * or a plot. A monitoring tool that cannot hand its numbers to something else is
      * only half a tool. */
     volatile bool     stream_csv;
     volatile bool     stream_csv_header_done;
+
+    /*
+     * Telemetry groups (§CLI.md). Rates differ by an order of magnitude either side of
+     * the middle group because the underlying quantities do:
+     *
+     *   fast  voltage and current   -- the measurement itself; a load step is an event
+     *   calc  power, SoC, charge    -- derived, and meaningless faster than the gauge
+     *   env   temperature and co.   -- thermal mass makes anything quick pointless
+     *
+     * 0 disables a group without disturbing the others.
+     */
+    volatile uint32_t rate_fast_ms;
+    volatile uint32_t rate_calc_ms;
+    volatile uint32_t rate_env_ms;
 
     /*
      * Environmental sensor, read on its own slow cadence (§4.4) and cached. Nothing
@@ -106,12 +120,16 @@ typedef struct {
  * stays comfortable for a human.
  */
 /*
- * 2: the CSV stream gained temp_c, humid_pct and press_hpa columns. Appending columns
- * changes the shape of an existing command's output, which is exactly what this number
- * exists to signal -- a client counting fields would otherwise silently misread.
+ * 3: telemetry is split into three groups with independent rates, each emitted as its
+ *    own prefixed record -- `f` fast, `c` calculated, `e` environmental. The single
+ *    wide CSV row of protocol 2 is gone. Different quantities change at genuinely
+ *    different speeds, and sending temperature at the current-sampling rate wastes
+ *    airtime while sending current at the temperature rate loses the event you were
+ *    watching for.
+ * 2: the CSV stream gained temp_c, humid_pct and press_hpa columns.
  */
-#define BATMON_CLI_PROTOCOL 2
-#define BATMON_FW_VERSION   "0.3.0-m2"
+#define BATMON_CLI_PROTOCOL 3
+#define BATMON_FW_VERSION   "0.4.0-m2"
 #define BATMON_EOT          '\x04'
 
 app_ctx_t *app_ctx(void);
