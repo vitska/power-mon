@@ -1,44 +1,86 @@
 # bat-monitor
 
-BLE battery monitor for the Seeed XIAO ESP32-C6 with an INA219 shunt sensor.
-Coulomb-counting fuel gauge, JBD/Xiaoxiang-compatible BLE, OLED + button UI,
-temperature-corrected. Full design: [DESIGN.md](DESIGN.md).
+Battery monitor for the Seeed XIAO ESP32-C6 with dual INA219 shunt sensors.
+Coulomb-counting fuel gauge with voltage re-anchoring, OLED readout, and the whole
+console reachable over BLE. Full design: [DESIGN.md](DESIGN.md).
 
-**Current state: M1 (bring-up) — I²C, INA219 driver, bring-up console.**
-Nothing is integrated, persisted or transmitted yet.
+**Current state: M1–M2 complete and running on hardware, with the fuel gauge, the
+display and a BLE console brought forward from later milestones.** Calibration and
+gauge state persist in NVS. Verified against a 12 V / 44 A·h lead-acid battery.
+
+Three documents, three jobs:
+
+| | |
+|---|---|
+| [DESIGN.md](DESIGN.md) | why everything is the way it is |
+| [CALIBRATION.md](CALIBRATION.md) | bench procedure: meter readings → firmware constants |
+| [CLI.md](CLI.md) | command and protocol reference, sufficient to write a client |
 
 ## Milestones
 
 | | Milestone | State |
 |---|---|---|
-| M1 | I²C + INA219 driver + console dump | **done, builds clean; not yet run on hardware** |
-| M2 | PGA auto-range, offset/gain calibration, deadband | driver support present, procedure not automated |
-| M3 | Integrator, SoC, anchor state machine, NVS | not started |
-| M4 | BLE / JBD emulation | not started |
-| M5 | Battery Service + vendor service | not started |
-| M5b | OLED + button + BME280 + temperature corrections | not started |
-| M6 | Low power (tiers down to the light-sleep floor, measurement) | not started |
-| M7 | OTA, docs | not started |
+| M1 | I²C + INA219 driver + console | **done**, verified on hardware |
+| M2 | PGA auto-range, offset/gain calibration, deadband | **done** — guided two-point flow, persisted |
+| M3 | Integrator, SoC, anchor state machine, NVS | **partly done** — gauge and calibration persist; event log and A/B slots outstanding |
+| M4 | BLE / JBD emulation | not started — a NUS console exists instead |
+| M5 | Battery Service + vendor service | not started; pairing (§8.5) **done** |
+| M5b | OLED + button + BME280 + temperature corrections | **OLED done**; button, BME280 and §5.6 corrections outstanding |
+| M6 | Low power (tiers down to the light-sleep floor) | not started |
+| M7 | OTA, docs | docs in progress |
+
+## What works today
+
+- **Dual INA219**, one per pole, with roles derived from the install mode (§2.10).
+- **Calibration**: guided two-point flow (`cal zero` / `cal top`), harness-drop
+  correction, all of it written to flash and restored at boot.
+- **Fuel gauge**: coulomb counting with I·R-compensated OCV re-anchoring, Peukert
+  compensation, capacity learning, full/empty/rest anchors.
+- **OLED**: SoC in large digits with volts and amps beside it, plus diagnostic screens.
+- **BLE console**: the entire command set over Nordic UART Service, with LE Secure
+  Connections passkey pairing.
+- **Live monitoring**: a repainting dashboard (`mon`) and a CSV stream to both
+  transports.
+
+## Design changes since the original document
+
+Three decisions changed once real hardware arrived. DESIGN.md records all three at
+length; the short version:
+
+1. **One I²C bus, not two.** The board wires the INA219s, the OLED and the temperature
+   sensor together on D4/D5. `LP_I2C` is hard-wired to GPIO6/7 and cannot reach them,
+   so **there is no deep-sleep tier** — T2 light sleep is the floor at ~220–400 µA
+   instead of 40–90 µA (§2.5, §9.3). Accepted deliberately; two wires would reverse it.
+2. **The SoC map needs its own voltage pair.** Appendix B's 1.80 / 2.40 V per cell are
+   the discharge cutoff and absorption setpoint — the *operating* window. Used as a
+   linear SoC map they read a rested 12.7 V battery as 53 %. So `v_0pct` / `v_100pct`
+   hold the **resting-OCV** window and `v_full` drives full detection, separately.
+3. **A current-dependent voltage error is not gain.** Two breakout shunts in series put
+   ~0.4 V between the VBUS reference and the battery terminals under load. Absorbing
+   that into a gain trim is right at one current and wrong everywhere else, so there is
+   now an explicit harness-resistance term (`cal vpath`), distinct from the battery's
+   internal resistance.
 
 ## Build
 
-Requires **ESP-IDF v5.3 or newer** (the ESP32-C6 needs ≥5.1; the `i2c_master`
-driver used here needs ≥5.2).
+Requires **ESP-IDF v5.3 or newer** (the ESP32-C6 needs ≥5.1; the `i2c_master` driver
+needs ≥5.2). BLE pulls in NimBLE, so the binary is ~766 KB — 57 % of the app partition
+still free.
 
 ### Option A — Docker (no local IDF install)
 
 Wrappers in `tools/` run the official `espressif/idf` image with the project
-bind-mounted at `/project`, so `build/`, `sdkconfig` and all artefacts land on
-the host and persist between runs. The first run pulls ~2.5 GB.
+bind-mounted at `/project`, so `build/`, `sdkconfig` and all artefacts land on the host.
+The first run pulls ~2.5 GB.
 
 **Windows (PowerShell):**
 
 ```powershell
 .\tools\idf.ps1 set-target esp32c6     # once
 .\tools\idf.ps1 build
-.\tools\idf.ps1 menuconfig             # pins, shunt value, address
-.\tools\flash.ps1 -Port COM5 -Monitor
-.\tools\monitor.ps1 -Port COM5
+.\tools\idf.ps1 menuconfig             # pins, shunt value, display, BLE
+.\tools\flash.ps1 -Port COM14 -Monitor
+.\tools\monitor.ps1 -Port COM14
 ```
 
 **Linux / macOS / Git Bash:**
@@ -46,285 +88,237 @@ the host and persist between runs. The first run pulls ~2.5 GB.
 ```sh
 ./tools/idf.sh set-target esp32c6
 ./tools/idf.sh build
-./tools/idf.sh menuconfig
 BATMON_PORT=/dev/ttyACM0 ./tools/idf.sh flash monitor   # not on Windows, see below
 ```
 
 > **Flashing is not done from the container on Windows.** Docker Desktop has no
-> COM-port passthrough, so `idf.py flash` inside the container cannot see the
-> board. Build in Docker, flash from the host with `tools\flash.ps1`, which needs
-> only pip packages:
+> COM-port passthrough. Build in Docker, flash from the host with `tools\flash.ps1`,
+> which needs only pip packages:
 >
 > ```powershell
 > python -m pip install esptool esp-idf-monitor
 > ```
 >
-> It reads `build/flash_project_args` — written by the build, listing every image
-> and its offset — so the partition layout can change without touching the script.
-> Works with esptool 4.x and 5.x (5.0 hyphenated the subcommands; the script
-> detects the version).
->
-> On Linux and macOS a serial device *can* be passed in: set `BATMON_PORT` and
-> `tools/idf.sh` adds `--device`, so `flash` and `monitor` work in the container.
-
-Raw equivalent, if you would rather not use the wrappers:
-
-```powershell
-docker run --rm -it -v "C:/Temp/personal/esp32/bat-monitor:/project" -w /project `
-    espressif/idf:release-v5.3 idf.py build
-```
-
-Note the **forward slashes** in the mount path. Docker's `-v` parser rejects
-Windows backslashes with the thoroughly misleading error
-`docker: invalid reference format`, which reads as though the image name were
-the problem.
+> It reads `build/flash_project_args` — written by the build, listing every image and
+> its offset — so the partition layout can change without touching the script. Works
+> with esptool 4.x and 5.x (5.0 hyphenated the subcommands; the script detects which).
 
 Pin a different IDF version with `$env:BATMON_IDF_IMAGE` / `BATMON_IDF_IMAGE`.
-
-### Docker troubleshooting
-
-Both of these were hit while bringing the wrappers up, and neither error names its
-real cause.
-
-**`docker: invalid reference format`** — the `-v` mount path contains Windows
-backslashes. The message points at the *image reference*, so it reads as though
-the tag were wrong. Use forward slashes: `C:/Temp/...:/project`. The wrappers do
-this conversion for you.
-
-**CMake fails during configure with `configure_file: No such file or directory`,
-usually on `build/CMakeFiles/<ver>/CMakeCCompiler.cmake`** — a transient write
-failure on Docker Desktop's Windows bind mount. The giveaway is that the *sibling*
-files (`CMakeCXXCompiler.cmake`, `CMakeASMCompiler.cmake`) were written correctly
-into the same directory, which rules out permissions, a missing template or a bad
-path. Delete the build directory and build again:
-
-```powershell
-Remove-Item build -Recurse -Force
-.\tools\idf.ps1 build
-```
-
-If it recurs often, move the build directory off the bind mount into a Docker
-named volume and copy out only what flashing needs (`bootloader/bootloader.bin`,
-`partition_table/partition-table.bin`, `ota_data_initial.bin`, `bat-monitor.bin`,
-`flash_project_args`, plus `bat-monitor.elf` for the monitor). Windows bind mounts
-are also markedly slower than a volume for CMake and ninja, which touch thousands
-of small files.
-
-**Build is verified.** A clean containerised build of the M1 tree completes at
-1023/1023 targets with no warnings from any file in `main/` or
-`components/ina219/`; `bat-monitor.bin` comes out at ~242 KB, 87 % of the app
-partition free.
 
 ### Option B — local ESP-IDF
 
 ```sh
 . $IDF_PATH/export.sh          # Windows: %IDF_PATH%\export.bat
 idf.py set-target esp32c6
-idf.py menuconfig
 idf.py build flash monitor
 ```
 
 Exit the monitor with `Ctrl-]`.
 
-## Wiring (M1)
+## Toolchain troubleshooting
+
+Every one of these was hit for real, and none of the errors names its true cause.
+
+**Two builds at once corrupt the tree.** Symptoms are `file too short`,
+`ELF section name out of range`, or `objdump: file format not recognized` — all of
+which read like a broken toolchain. They mean two ninja processes wrote the same
+archive. `tools/idf.ps1` now refuses to start if a container is already building this
+project, using a per-project label rather than a lock file so a Ctrl-C leaves nothing
+stale to clean up.
+
+**`Could not open COM14, the port is busy or doesn't exist`** conflates two very
+different faults. `tools/flash.ps1` now checks enumeration before invoking esptool and
+says which it is, listing the ports that do exist. If the board is plugged in and
+absent from that list, the USB-Serial-JTAG peripheral is wedged: hold BOOT, tap RESET,
+release BOOT to reach the ROM bootloader, which always enumerates.
+
+**`docker: invalid reference format`** — the `-v` mount path contains Windows
+backslashes. The message points at the *image reference*. Use forward slashes; the
+wrappers convert for you.
+
+**CMake `configure_file: No such file or directory`** on
+`build/CMakeFiles/<ver>/CMakeCCompiler.cmake` — a transient write failure on Docker
+Desktop's Windows bind mount. The giveaway is that the *sibling* files were written
+correctly, which rules out permissions or a bad path. Delete `build/` and rebuild.
+
+**`%lld` prints the literal letters, or crashes the board.** `CONFIG_NEWLIB_NANO_FORMAT`
+drops `%ll` support entirely, and it does not merely print wrong — it consumes the
+wrong number of vararg bytes, so a following `%s` dereferences garbage. That boot-looped
+this firmware once with a load-access fault. Narrow 64-bit values to 32 bits before
+printing; `main/fixed_fmt.h` explains the convention.
+
+## Wiring
 
 | INA219 | XIAO ESP32-C6 | Note |
 |---|---|---|
 | VCC | 3V3 | |
-| GND | GND | |
+| GND | GND | **tie all grounds** — see below |
 | SDA | **GPIO22 (D4)** | `CONFIG_BATMON_I2CA_SDA_GPIO` |
 | SCL | **GPIO23 (D5)** | `CONFIG_BATMON_I2CA_SCL_GPIO` |
 | VIN+/VIN− | across the shunt | Kelvin connection |
 | Vbus | pack + (≤26 V) | via a divider above 26 V |
 
-> **One shared bus.** D4/D5 carry the INA219s *and* the OLED and temperature
-> sensor — the schematic wires them together, so the firmware does too
-> (DESIGN.md §2.5). Addresses keep them apart: 0x40, 0x41, 0x3C, 0x76.
->
-> The cost is the deep-sleep tier. `LP_I2C` is hard-wired to GPIO6/7 and cannot
-> reach GPIO22/23, so nothing can keep counting with the main core off; the power
-> floor is light sleep at ~220–400 µA instead of 40–90 µA (DESIGN.md §9.3). That
-> is an accepted trade, not a bug. Moving just the two INA219 lines to GPIO6/7
-> would buy it back.
+> **One shared bus.** D4/D5 carry both INA219s *and* the OLED and temperature sensor.
+> Addresses keep them apart: 0x40, 0x41, 0x3C, 0x76. The cost is the deep-sleep tier
+> (§9.3) — see *Design changes* above.
+
+**Tie the grounds.** An ungrounded VBUS floats to near the 3.3 V rail and reads as a
+steady, plausible, completely wrong voltage — 3.448 V on this bench. The tell is the two
+sensors disagreeing: `read` showing `pack voltage 3.448 V` beside `load voltage
+0.000 V`. Identically wired sensors that differ mean a wiring fault, not a calibration
+problem, and `cal zero v` refuses to absorb it.
+
+**Check which shunt the chip is measuring.** Most INA219 breakouts carry their own
+100 mΩ shunt across the VIN terminals. If that is the one in circuit, `shunt 100000` is
+correct and 2 A produces 195 mV — which overruns the default `/4` ceiling and needs
+`sense pgamax 8`. A saturated reading is reported as such rather than silently clipped.
 
 ### ⚠ Low-side wiring — read before connecting anything
 
-The shunt goes in the pack **negative** lead (DESIGN.md §2.9). Two consequences that
-will otherwise cost you a day:
+The shunt goes in the pack **negative** lead (§2.9). Two consequences that will
+otherwise cost you a day:
 
 1. **Size the shunt for a ≤100 mV drop, not 320 mV.** The INA219's inputs cannot go
    more than 0.3 V below their own ground, and a bidirectional low-side shunt always
-   drives one input negative in one current direction. That caps the usable current
-   range at about a third of the high-side figure — a 10 mΩ shunt covers ±10 A here,
-   not ±32 A. `sense` and `shunt` both print the real limit and warn if you exceed it.
+   drives one input negative in one direction. That caps usable current at about a third
+   of the high-side figure. `sense` and `shunt` both print the real limit and warn when
+   you exceed it — the `/8` ceiling is available and the warning is not idle.
 
 2. **The shunt must be the *only* connection between battery negative and system
    ground.** Any second path — chassis bond, a second charger, a shared negative —
-   carries current *around* the shunt, and that current is simply never counted. There
-   is no error for this; the readings look perfectly plausible and are wrong.
+   carries current *around* the shunt, and that current is never counted. There is no
+   error for this; the readings look plausible and are wrong.
 
-   **This includes the USB cable you are about to plug in for the console.** If the
-   laptop's ground reaches the pack negative through anything else (a bench supply, a
-   mains charger), the console cable becomes a parallel path across your shunt. During
-   M1/M2, either use a USB isolator, or power the board from the pack and check the
-   readings against a clamp meter.
+   **This includes the USB cable for the console.** If the laptop's ground reaches pack
+   negative any other way, that cable becomes a parallel path across your shunt. Use a
+   USB isolator, or power the board from the pack and cross-check with a clamp meter.
 
-Select the topology in `menuconfig` → bat-monitor → INA219 → *Shunt position*. The
-default is low-side/L1, which keeps the monitor's own draw inside the measured loop and
-applies the exact bus-voltage correction of §2.9.5.
-
-Internal pull-ups are enabled by default so a bare sensor works out of the box.
-They are weak (~45 kΩ) and marginal at 400 kHz; fit 4.7 kΩ externals and disable
+Internal pull-ups are on by default so a bare sensor works out of the box. They are weak
+(~45 kΩ) and marginal at 400 kHz; fit 4.7 kΩ externals and disable
 `CONFIG_BATMON_I2CA_INTERNAL_PULLUPS` before trusting any measurement.
-
-Set `CONFIG_BATMON_SHUNT_UOHM` to match your hardware. Most INA219 breakout
-boards ship with **100 mΩ = 100000**; the design recommends a 10 mΩ external
-shunt = `10000` (DESIGN.md §2.3). Getting this wrong scales every current reading
-by the ratio and is the most likely cause of a confusing first run.
 
 ## Console
 
-Connect at 115200 (or over native USB, which is the default) and press Enter.
+Connect at 115200 over native USB and press Enter. The same commands work over BLE —
+see [CLI.md](CLI.md) for the framing a programmatic client needs.
 
 | Command | Purpose |
 |---|---|
-| `scan` | I²C bus scan, with hints for misplaced devices |
+| `ver` | Protocol and firmware version — machine-parseable |
+| `mon [ms]` | Live repainting dashboard of the whole device state |
 | `read` | One sample, with raw registers and the active range |
-| `stream <on\|off\|ms>` | Periodic one-line dump |
-| `stats [reset]` | Mean / stddev / min / max over the window, plus error counters |
-| `zero [n]` | Zero-current calibration (§5.5) — **load disconnected** |
-| `shunt [uohm]` | Show or set shunt resistance; prints resulting range and resolution |
-| `gain [ppm]` | Gain trim, restricted to ±10 % |
-| `offset [uA]` | Show or set the current offset directly |
-| `pga <auto\|1\|2\|4\|8>` | Lock or release the range |
-| `sense` | Low-side settings: current sign, bus-voltage compensation, PGA ceiling |
-| `profile <continuous\|triggered>` | Switch sampling profile (§4.1) |
-| `shunt loc <p\|n\|single\|auto>` | Which lead the shunt is in (§2.10.3) |
-| `curve` | Show both conversion curves; see below |
-| `disp [on\|off\|screen n\|contrast v]` | OLED debug screens (§9.11) |
-| `ble` | BLE console status, MTU, traffic counters |
+| `stream <on\|off\|csv\|text\|ms>` | Periodic dump; `csv` for logging or plotting |
+| `stats [reset]` | Mean / σ / min / max over the window, plus error counters |
+| `scan` | I²C bus scan, with hints for unexpected devices |
+| `options` | Everything currently set, in one place |
+| `soc [...]` | State of charge, endpoints, Peukert, capacity learning |
+| `cal <zero\|top> <i\|v>` | Guided two-point calibration, saved to flash |
+| `cal vpath <uV>` | Harness resistance, from a loaded terminal reading |
+| `curve` | Every conversion term numerically |
+| `shunt [uohm \| loc <p\|n\|single\|auto>]` | Resistance, or which lead it is in |
+| `sense` | Sign, bus-voltage compensation, PGA ceiling |
+| `detect [n]` | Resolve the topology by observation — needs a load |
+| `profile <continuous\|triggered>` | Sampling profile (§4.1) |
+| `disp [on\|off\|screen n\|contrast v]` | OLED screens (§9.11) |
+| `ble [pair\|passkey\|bonds\|unpair\|disconnect]` | Link, pairing and bonds |
 
-Nothing set from the console persists across a reboot. Persistence arrives with
-the NVS layout in M3; until then, write your calibration values down.
+**Calibration, gauge state and BLE pairing mode persist in flash** and are restored
+before the first sample is taken. Everything else — stream period, screen selection,
+sampling profile — is RAM-only until the full config layer lands in M3. `options` says
+which is which.
 
-### Shunt location
+### Calibration in one paragraph
 
-Two things about a shunt are adjustable and they now live under one command:
+Every numeric argument is an integer in **micro-units**: 2.0134 A is `2013400`. Each
+channel needs two points — `cal zero` fixes the offset with nothing applied, `cal top`
+fixes the gain against a meter reading. Both write themselves to flash. The full
+procedure, including the two-point algebra if you want to check it, is in
+[CALIBRATION.md](CALIBRATION.md).
 
-```
-shunt              # resistance, full scale, resolution, and the location
-shunt 100000       # set resistance to 100 mOhm
-shunt loc n        # shunt is in the negative lead (low-side)
-shunt loc p        # ... the positive lead (high-side)
-shunt loc auto     # resolve by observation -- needs a load, then run `detect`
-```
+### Fuel gauge
 
-`sensors mode <...>` still works and does exactly the same thing; both drive one
-piece of state.
-
-### Conversion curve
-
-Both channels convert as `raw -> scale -> offset -> gain`. `curve` shows and sets
-every term:
+`soc` shows and sets everything:
 
 ```
-curve                        # show both channels
-curve i offset -1400         # current zero, in uA (or use `zero`, which measures it)
-curve i gain 1002500         # +0.25%, in ppm
-curve i ref 2000000          # solve gain so the present reading equals 2.000000 A
-curve v divider 196608       # 3.0:1 external divider, Q16.16
-curve v offset 12000         # bus-voltage zero trim, in uV
-curve v ref 12600000         # solve gain against a 12.600000 V bench reference
-curve reset [i|v]            # back to unity gain and zero offset
+soc                     # SoC, state, charge, SoH, learning, Peukert, endpoints
+soc cap 44000000        # 44 Ah
+soc v0 11800000         # resting OCV at 0 %
+soc v100 12700000       # resting OCV at 100 %
+soc vfull 14400000      # absorption voltage for full detection
+soc rint 6000           # internal resistance, for I*R -> OCV
+soc peukert 294         # k = 1.15 in Q8; 256 disables
+soc rest 600            # idle seconds before OCV is trusted
 ```
 
-`ref` takes one reference point and solves gain, averaging 64 samples (override with
-a trailing count). It deliberately refuses three cases rather than fitting nonsense:
-a reference near zero, where offset error dominates the ratio; a sign mismatch
-between reading and reference; and a solved gain outside ±10 %, which means the shunt
-resistance or the divider ratio is wrong, not the gain.
+Defaults are seeded for a 12 V / 44 A·h flooded lead-acid. Three anchors restore
+absolute reference: full charge (absorption voltage at taper current, held), empty
+(compensated OCV at the 0 % endpoint under load), and resting OCV re-sync — which
+*blends* at 25 % rather than snapping, so the display does not jump when a load goes
+away.
 
-The intended order is **`zero` first, then `curve i ref`**: `zero` fixes the offset at
-the origin where it can be measured properly, and `ref` then fixes the slope at a
-real working point. That is a two-point calibration with each point taken where it is
-trustworthy.
+The gauge is explicit about what it does not know. A SoC derived from voltage alone is
+flagged `(from VOLTAGE only)` on the console and with a `?` on the panel, and a count
+restored across a power cut reads `last anchor never since boot` until a rest period
+re-syncs it.
+
+> **Lead-acid surface charge is the trap here.** Straight off a charger a 12 V battery
+> reads 13 V+ and takes hours to settle. With `soc rest` at ten minutes the gauge will
+> anchor on that transient and drift toward 100 %. Raise it to hours for a real
+> installation.
 
 ## BLE console
 
-The same console is exposed over Bluetooth as a Nordic UART Service, so a shunt
-bolted into an awkward corner of a pack is still reachable. Connect with nRF Connect,
-Serial Bluetooth Terminal, or anything that speaks NUS.
+The whole console over Nordic UART Service, so a shunt bolted into an awkward corner is
+still reachable. Connect with nRF Connect, Serial Bluetooth Terminal, or any NUS client.
 
 | | |
 |---|---|
 | Advertised name | `batmon-XXXX` (last two MAC bytes) |
 | Service | `6E400001-B5A3-F393-E0A9-E50E24DCCA9E` |
-| RX (write commands here) | `6E400002-...` |
+| RX (write commands) | `6E400002-...` |
 | TX (subscribe for output) | `6E400003-...` |
 
-**Enable notifications on TX** — without that, commands run and the output goes
-nowhere. `ble` on the USB console reports whether a central is connected *and*
-subscribed, precisely because those are different states that look the same.
+**Enable notifications on TX** — without that, commands run and the output goes nowhere.
+`ble` reports `connected` and `subscribed` separately, precisely because those are
+different states that look identical.
 
-> **There is no pairing.** Anything in radio range can run every command, including
-> `zero` and `curve`. That is fine for a bench milestone and is not fine in the
-> field; bonding is DESIGN.md §8.5 at M5. Turn it off in menuconfig for anything
-> resembling a real installation.
+Responses are framed for machine use: an echo line, the output, `exit <n>`, then a
+`0x04` terminator. The CSV stream reaches BLE as well as USB. Commands run on a worker
+task, not the BLE host task, so a 35-second `cal zero i 512` cannot drop the link.
 
-Commands run on a worker task, not on the BLE host task, so a slow command such as
-`zero 512` cannot drop the connection while it runs. Output is chunked to the
-negotiated MTU and truncated at 2.5 KB per command, with a marker when that happens.
-
-## M1 acceptance procedure
-
-Exit criterion (DESIGN.md §11): **V and I match a bench meter within 1 % over
-±2 A.**
-
-1. `scan` — confirm **both** sensors answer: 0x40 (positive pole) and 0x41
-   (negative pole). One address only means a mis-strapped A0/A1 or a dead part;
-   the firmware can run single-sensor but says so (DESIGN.md §2.10.7). The OLED
-   at 0x3C and the temperature sensor at 0x76/0x77 may also appear — they share
-   this bus and are not yet driven.
-2. `shunt` — confirm the printed full scale and resolution match your hardware.
-3. With the load disconnected: `zero 512`. Expect a rejection if anything is
-   still drawing current; that rejection is the check working.
-4. `stats reset`, wait a minute, `stats`. With no load, the mean should be within
-   a few counts of zero and the stddev should be about one count. A larger stddev
-   means noise pickup — check the Kelvin connection and the shunt wiring before
-   going further.
-5. Apply a known load. Compare `read` against a series-connected bench meter at
-   roughly ±0.1 A, ±0.5 A and ±2 A, in both directions.
-   - A constant error at all currents is **offset** → re-run `zero`.
-   - An error proportional to current is **gain**, i.e. the shunt value is wrong.
-     Compute the true resistance from the ratio and set `shunt`; only use `gain`
-     for the residual trim after that.
-6. Compare the bus voltage against the meter at two points.
-7. `stats` — the range-discard count should be small relative to the sample
-   count, and bus errors should be zero.
-
-Record the resulting shunt, offset and gain. M3 will read them from NVS instead.
+**Pairing** is LE Secure Connections with a six-digit passkey shown on the OLED
+(`ble pair bonded`); bonds persist. The default is `open`, which means **no pairing at
+all** — anything in range can run every command including calibration. That is a bench
+setting, and `ble pair bonded` is one command away.
 
 ## Layout
 
 ```
 CMakeLists.txt          top-level project
-partitions.csv          DESIGN.md §6.2 layout, fixed now so it never moves
-sdkconfig.defaults      target, partition table, console device
+partitions.csv          §6.2 layout, fixed now so it never moves
+sdkconfig.defaults      target, partitions, console, NimBLE
 main/
-  main.c                init, sampler task, statistics, zero calibration
-  console_cmds.c        bring-up console
-  app_ctx.h             shared M1 state
+  main.c                init, sampler task, statistics, zero calibrations
+  console_cmds.c        the console: measurement, calibration, gauge, dashboard
+  cal_store.c/.h        NVS-backed calibration (§6.1's cfg namespace, early)
+  display_debug.c/.h    screens, including the large SoC readout
+  ble_console.c/.h      bridges the console onto the BLE transport
+  app_ctx.h             shared state, sensor lock, protocol constants
   fixed_fmt.h           integer fixed-point formatting (no floats, §4.3)
-  Kconfig.projbuild     pins, shunt, bring-up options
+  Kconfig.projbuild     pins, shunt, display, BLE
 components/
-  ina219/               register-level driver, PGA auto-ranging, raw→SI
+  ina219/               register-level driver, PGA auto-ranging, raw→SI, trims
+  sensors/              dual-sensor roles, harness-drop correction
+  fuelgauge/            counting, anchors, Peukert, capacity learning
+  ssd1306/              128×32 OLED, 6×8 and pixel-doubled text
+  ble_serial/           NUS transport, pairing, bond store
 tools/
   idf.ps1  idf.sh       run idf.py in the espressif/idf container
   flash.ps1             host-side esptool flash (Windows has no COM passthrough)
   monitor.ps1           host-side serial console
 ```
 
-Components still to come — `fuelgauge`, `nvstore`, `ble_svc`, `lp_gauge`,
-`bme280`, `ui`, `config` — are specified in DESIGN.md §3.2 and are deliberately
-absent rather than stubbed. An empty module is a claim that its interface is
-settled, and none of them are.
+Still to come — `nvstore` (A/B slots, event log), `ble_svc` (JBD emulation), `bme280`,
+`ui` (button gestures), `config` — are specified in DESIGN.md §3.2 and are deliberately
+absent rather than stubbed. An empty module is a claim that its interface is settled.
+`lp_gauge` will never exist: §9.3 records why.
