@@ -291,7 +291,9 @@ rate is what matters:
 
 **For a genuine 10 Hz, send `profile fast`.** It costs about 40 % more noise per sample,
 which is a real trade against the 3 mA integration deadband, so it is opt-in rather than
-the default. Measured on hardware: `stream fast 100` with `profile fast` delivers
+the default. **It persists** -- a board set up for 10 Hz telemetry comes back at 10 Hz
+after a power cycle, rather than silently reverting to 7.3 Hz and looking like dropped
+samples. Measured on hardware: `stream fast 100` with `profile fast` delivers
 **~9.2 Hz**; with the default profile the same request yields ~7.3 Hz of non-duplicated
 records.
 

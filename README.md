@@ -226,9 +226,9 @@ see [CLI.md](CLI.md) for the framing a programmatic client needs.
 | `disp [on\|off\|screen n\|contrast v]` | OLED screens (§9.11) |
 | `ble [pair\|passkey\|bonds\|unpair\|disconnect]` | Link, pairing and bonds |
 
-**Calibration, gauge state and BLE pairing mode persist in flash** and are restored
-before the first sample is taken. Everything else — stream period, screen selection,
-sampling profile — is RAM-only until the full config layer lands in M3. `options` says
+**Calibration, gauge state, the sampling profile and BLE pairing mode persist in flash**
+and are restored before the first sample is taken. Everything else — stream rates,
+screen selection — is RAM-only until the full config layer lands in M3. `options` says
 which is which.
 
 ### Calibration in one paragraph

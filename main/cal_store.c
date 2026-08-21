@@ -32,6 +32,8 @@ static const char *TAG = "cal_store";
 #define K_PGAMAX "pgamax"
 #define K_VBCOMP "vbcomp"
 #define K_VPATH  "vpath"
+#define K_PROF   "prof"
+#define K_CADC   "cadc"
 
 bool cal_store_exists(void)
 {
@@ -81,6 +83,15 @@ esp_err_t cal_store_save(app_ctx_t *ctx)
     if (err == ESP_OK) err = nvs_set_u8 (h, K_VBCOMP, (uint8_t)ina219_get_vbus_comp(vd));
     if (err == ESP_OK) err = nvs_set_u32(h, K_VPATH,
                                         sensors_get_r_vpath_uohm(ctx->sensors));
+    /*
+     * The sampling profile and its averaging belong here for the same reason the range
+     * ceiling does: they decide what a reading IS, not merely how fast it arrives. A
+     * board configured for 10 Hz telemetry that silently reverts to 7.3 Hz on the next
+     * power cycle looks like the firmware dropping samples.
+     */
+    if (err == ESP_OK) err = nvs_set_u8 (h, K_PROF, (uint8_t)ina219_get_profile(cd));
+    if (err == ESP_OK) err = nvs_set_u8 (h, K_CADC,
+                                        (uint8_t)ina219_get_continuous_adc(cd));
     if (err == ESP_OK) err = nvs_set_u8 (h, K_VER,    CAL_VER);
     if (err == ESP_OK) err = nvs_commit(h);
 
@@ -148,16 +159,34 @@ esp_err_t cal_store_load(app_ctx_t *ctx)
     if (nvs_get_u8 (h, K_VBCOMP, &u8)  == ESP_OK) ina219_set_vbus_comp(vd, (ina219_vbus_comp_t)u8);
     if (nvs_get_u32(h, K_VPATH,  &u32) == ESP_OK) sensors_set_r_vpath_uohm(ctx->sensors, u32);
 
+    /* Averaging before profile: set_profile() re-applies the config register, so doing
+     * it second means the restored averaging actually reaches the part. */
+    if (nvs_get_u8(h, K_CADC, &u8) == ESP_OK) {
+        ina219_set_continuous_adc(cd, (ina219_adc_t)u8);
+        if (vd != cd) {
+            ina219_set_continuous_adc(vd, (ina219_adc_t)u8);
+        }
+    }
+    if (nvs_get_u8(h, K_PROF, &u8) == ESP_OK) {
+        ina219_set_profile(cd, (ina219_profile_t)u8);
+        if (vd != cd) {
+            ina219_set_profile(vd, (ina219_profile_t)u8);
+        }
+    }
+
     nvs_close(h);
 
     ESP_LOGI(TAG, "restored: shunt %lu uOhm, i offset %ld uA gain %lu ppm, "
-                  "v offset %ld uV gain %lu ppm, ceiling %s",
+                  "v offset %ld uV gain %lu ppm, ceiling %s, %s",
              (unsigned long)ina219_get_shunt_uohm(cd),
              (long)ina219_get_offset_ua(cd),
              (unsigned long)ina219_get_gain_ppm(cd),
              (long)ina219_get_vbus_offset_uv(vd),
              (unsigned long)ina219_get_vbus_gain_ppm(vd),
-             ina219_pga_str(ina219_get_pga_max(cd)));
+             ina219_pga_str(ina219_get_pga_max(cd)),
+             ina219_get_profile(cd) == INA219_PROFILE_TRIGGERED ? "triggered"
+             : (ina219_get_continuous_adc(cd) == INA219_ADC_128AVG ? "continuous 128x"
+                                                                  : "fast 64x"));
     return ESP_OK;
 }
 

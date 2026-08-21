@@ -612,19 +612,28 @@ static int cmd_profile(int argc, char **argv)
             ESP_ERROR_CHECK(ina219_set_continuous_adc(dev, INA219_ADC_128AVG));
             if (vd && vd != dev) ina219_set_continuous_adc(vd, INA219_ADC_128AVG);
             ESP_ERROR_CHECK(ina219_set_profile(dev, INA219_PROFILE_CONTINUOUS));
+            if (vd && vd != dev) ina219_set_profile(vd, INA219_PROFILE_CONTINUOUS);
         } else if (strcmp(argv[1], "fast") == 0) {
             ESP_ERROR_CHECK(ina219_set_continuous_adc(dev, INA219_ADC_64AVG));
             if (vd && vd != dev) ina219_set_continuous_adc(vd, INA219_ADC_64AVG);
             ESP_ERROR_CHECK(ina219_set_profile(dev, INA219_PROFILE_CONTINUOUS));
-            printf("64x averaging: ~14.7 Hz, and about 40%% more noise per sample.\n");
+            if (vd && vd != dev) ina219_set_profile(vd, INA219_PROFILE_CONTINUOUS);
+            printf("64x averaging: ~14.6 Hz, and about 40%% more noise per sample.\n");
             printf("Re-check 'stats' sigma against the 3 mA deadband (DESIGN.md 5.2).\n");
         } else if (strcmp(argv[1], "triggered") == 0) {
             ESP_ERROR_CHECK(ina219_set_profile(dev, INA219_PROFILE_TRIGGERED));
+            if (vd && vd != dev) ina219_set_profile(vd, INA219_PROFILE_TRIGGERED);
         } else {
             printf("usage: profile <continuous|fast|triggered>\n");
             return 1;
         }
         stats_reset(&s_ctx->window);
+
+        /* Persist, on the same terms as `sense`: only if a store already exists, so a
+         * never-calibrated board is not given one by a profile change. */
+        if (cal_store_exists()) {
+            cal_autosave();
+        }
     }
 
     /* ina219_conversion_time_us() already covers BOTH channels -- the shunt and bus
