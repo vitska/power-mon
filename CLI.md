@@ -57,6 +57,17 @@ One consequence to expect: your typed characters are echoed locally by the line 
 **and** the protocol emits its own `> command` echo. That duplication is the price of
 identical framing, and it is deliberate.
 
+If the far end cannot handle escape sequences — a raw pipe, a script driving the port —
+the console says so once and disables editing:
+
+```
+Terminal does not support escape sequences; line editing disabled.
+```
+
+The framing is unaffected. A script may drive USB exactly as a BLE client would; the
+prompt string `batmon> ` is the only extra output, and it carries no CR/LF, so it
+appears immediately before the next echo line.
+
 ---
 
 ## 2. Framing
@@ -106,14 +117,28 @@ next command only after the `0x04` of the previous one. Pipelining is not reject
 is queued — but a second command that needs the sensor will wait, and some commands wait
 a long time:
 
-| command | typical duration |
-|---|---|
-| most | < 50 ms |
-| `read` | ~300 ms (one blocking conversion pair) |
-| `cal top …`, `cal vpath …` | ~18 s (64 averaged samples) |
-| `cal zero i 512` | ~35 s |
-| `detect` | seconds, scales with the sample count |
-| `mon` | local terminal only — **refuses when invoked remotely**, with `exit 1` |
+Durations below are **measured**, not estimated. Anything that averages is dominated by
+the INA219's conversion time, so compute a timeout from the sample count rather than
+hard-coding one:
+
+| | cost per sample | why |
+|---|---|---|
+| one sensor | **~137 ms** | one triggered conversion at 128× hardware averaging |
+| both sensors | **~270 ms** | current and voltage devices read in turn |
+
+| command | samples (default) | measured |
+|---|---|---|
+| `ver`, `help`, and every setter | — | **< 100 ms** |
+| `read` | 1 both | **0.4 s** |
+| `cal top i\|v`, `cal vpath` | 64 both | **~17 s** |
+| `cal zero i` | 256 one | **~35 s** (8.8 s at 64) |
+| `cal zero v` | 256 both | **~68 s** (8.5 s at 32) |
+| `detect` | 32 both | ~9 s, scales with the count |
+| `mon` | — | local terminal only — **refuses remotely** with `exit 1` |
+
+Allow generous headroom: a client timeout of `samples × per-sample × 2 + 2 s` will not
+misfire. **Do not** infer a hang from silence — averaging commands emit a `.` every four
+samples and nothing else until they finish.
 
 `mon` is the one command that cannot be transport-agnostic: it repaints until a keypress
 arrives on the console it was started from, and a remote caller's keystrokes are not on
@@ -263,9 +288,9 @@ Guided two-point flow. Everything here persists automatically.
 | Command | Args | Notes |
 |---|---|---|
 | `cal` | — | Which points are set, and whether stored |
-| `cal zero i [n]` | 16–4096 | Current offset. **Load disconnected.** ~35 s at 512 |
-| `cal zero v [n]` | 16–4096 | Voltage offset. **VBUS at ground**, not merely disconnected |
-| `cal top i <uA> [n]` | n 8–1024 | Current gain from a meter reading. ~18 s |
+| `cal zero i [n]` | 16–4096, default 256 | Current offset. **Load disconnected.** ~35 s |
+| `cal zero v [n]` | 16–4096, default 256 | Voltage offset. **VBUS at ground**, not merely disconnected. ~68 s |
+| `cal top i <uA> [n]` | n 8–1024, default 64 | Current gain from a meter reading. ~17 s |
 | `cal top v <uV> [n]` | | Voltage gain. Use a reading taken **at rest** |
 | `cal vpath <uV>` | | Harness resistance, from a **loaded** terminal reading. Needs ≥ 0.5 A |
 | `cal save` | | Persist values set via `curve` |
