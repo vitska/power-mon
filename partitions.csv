@@ -1,0 +1,8 @@
+# DESIGN.md §6.2 — NVS enlarged to 64 KB for the fuel-gauge state blobs.
+# Not yet used at M1, but fixed now so the layout never has to change under live data.
+# Name,     Type, SubType, Offset,   Size
+nvs,        data, nvs,     0x9000,   0x10000
+otadata,    data, ota,     0x19000,  0x2000
+phy_init,   data, phy,     0x1b000,  0x1000
+factory,    app,  factory, 0x20000,  0x1C0000
+storage,    data, nvs,     0x1E0000, 0x10000

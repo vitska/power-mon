@@ -1,0 +1,223 @@
+menu "bat-monitor"
+
+    menu "I2C bus A (gauge)"
+        comment "As built, the schematic puts the INA219s, the OLED and the temperature"
+        comment "sensor together on D4 (GPIO22, SDA) / D5 (GPIO23, SCL), so these are the"
+        comment "defaults and DESIGN.md 2.5's two-bus split is not what the board does."
+        comment "Consequence: LP_I2C is fixed to GPIO6/7 and cannot reach a sensor on"
+        comment "GPIO22/23, so tier T3 (DESIGN.md 9.3) is unavailable until the gauge"
+        comment "sensors move to GPIO6/7. Set 6/7 here if the board is rewired."
+
+        config BATMON_I2CA_SDA_GPIO
+            int "Bus A SDA GPIO"
+            default 22
+            range 0 30
+
+        config BATMON_I2CA_SCL_GPIO
+            int "Bus A SCL GPIO"
+            default 23
+            range 0 30
+
+        config BATMON_I2CA_FREQ_HZ
+            int "Bus A clock (Hz)"
+            default 400000
+            range 50000 400000
+
+        config BATMON_I2CA_INTERNAL_PULLUPS
+            bool "Enable internal pull-ups on bus A"
+            default y
+            help
+                Internal pull-ups are weak (~45k) and marginal at 400 kHz. Enable
+                them to get going with a bare sensor, then fit 4.7k externals and
+                turn this off. If the bus is unreliable, suspect this first.
+    endmenu
+
+    menu "INA219 sensors"
+        comment "DESIGN.md 2.10: one INA219 per pole. The address is a physical fact"
+        comment "about where the part is soldered, never a role -- roles are derived"
+        comment "from the install mode, so a mis-strapped board is caught at probe."
+
+        config BATMON_ADDR_POS_POLE
+            hex "Address of the positive-pole sensor"
+            default 0x40
+            range 0x40 0x4F
+
+        config BATMON_ADDR_NEG_POLE
+            hex "Address of the negative-pole sensor"
+            default 0x41
+            range 0x40 0x4F
+
+        choice BATMON_INSTALL_MODE
+            prompt "Shunt position (install mode)"
+            default BATMON_INSTALL_MODE_N
+            help
+                Which lead the shunt is actually installed in. AUTO resolves it by
+                observation, but only while current is flowing -- at zero current the
+                two are indistinguishable, so AUTO refuses to integrate until a load
+                appears. Set it explicitly if you know.
+
+            config BATMON_INSTALL_MODE_AUTO
+                bool "Auto-detect (needs a load before it will integrate)"
+
+            config BATMON_INSTALL_MODE_P
+                bool "Mode P: shunt in the POSITIVE lead (high-side)"
+                help
+                    The classic topology. No common-mode problem, full PGA range, and
+                    the positive-pole sensor measures both current and voltage on its
+                    own; the negative-pole sensor is then purely diagnostic.
+
+            config BATMON_INSTALL_MODE_N
+                bool "Mode N: shunt in the NEGATIVE lead (low-side)"
+                help
+                    Caps the safe shunt drop at about 100 mV (DESIGN.md 2.9.2). The
+                    positive-pole sensor supplies the pack voltage with a correct
+                    reference, so no software bus correction is needed.
+        endchoice
+
+        config BATMON_SHUNT_UOHM
+            int "Shunt resistance (micro-ohms)"
+            default 10000
+            range 1000 1000000
+            help
+                10000 = 10 mOhm. High-side that is +/-32 A full scale; LOW-SIDE it is
+                +/-10 A, because the drop must stay under ~100 mV (DESIGN.md 2.9.2).
+                100000 = 100 mOhm, as fitted to most INA219 breakout boards.
+
+        config BATMON_VBUS_DIVIDER_Q16
+            int "External Vbus divider ratio (Q16.16)"
+            default 65536
+            help
+                65536 = 1.0 (no divider). Required above 26 V; see DESIGN.md 2.3.
+
+        config BATMON_INVERT_SIGN
+            bool "Invert the current sign"
+            default n
+            help
+                Use when the sense leads are the other way round, rather than
+                rewiring. Charging must read positive.
+
+        config BATMON_VOLTAGE_DIVISOR
+            int "Read pack voltage every Nth sample"
+            default 8
+            range 1 64
+            help
+                Voltage is never integrated, so paying the full sample rate for it
+                only costs power (DESIGN.md 4.5).
+
+        config BATMON_DIAG_DIVISOR
+            int "Read load voltage and idle offset every Nth sample"
+            default 64
+            range 1 1024
+    endmenu
+
+    menu "Display (debug screens)"
+        comment "DESIGN.md 9.11: the panel is held ON and shows raw debug values."
+        comment "This is a bench mode -- ~6 mA for the OLED plus a core that never"
+        comment "light-sleeps, against a T2 floor of ~300 uA (9.8). It shares the"
+        comment "gauge's I2C bus, so a redraw is chunked per page and the sampler wins."
+
+        config BATMON_DISPLAY_ENABLE
+            bool "Show debug screens on the OLED"
+            default y
+            help
+                Absence of the panel is not an error: if nothing answers at the
+                configured address the firmware logs it once and carries on.
+
+        config BATMON_DISPLAY_ADDR
+            hex "SSD1306 address"
+            depends on BATMON_DISPLAY_ENABLE
+            default 0x3C
+            range 0x3C 0x3D
+            help
+                0x3C unless SA0 is strapped high, which makes it 0x3D.
+
+        config BATMON_DISPLAY_CONTRAST
+            hex "Contrast"
+            depends on BATMON_DISPLAY_ENABLE
+            default 0x40
+            range 0x01 0xFF
+            help
+                DESIGN.md 9.10: 0x40, not 0xFF. Full contrast draws 2-3x more and
+                is HARDER to read indoors. Raise it only in direct sunlight.
+
+        config BATMON_DISPLAY_REFRESH_MS
+            int "Redraw period (ms)"
+            depends on BATMON_DISPLAY_ENABLE
+            default 500
+            range 100 5000
+            help
+                Only changed rows go over the bus, so a static screen costs almost
+                nothing regardless of this value.
+
+        config BATMON_DISPLAY_SCREEN_MS
+            int "Seconds per screen before advancing (ms, 0 = hold screen 1)"
+            depends on BATMON_DISPLAY_ENABLE
+            default 5000
+            range 0 60000
+            help
+                Screens auto-cycle because there is no button gesture yet (that
+                arrives with the UI task in M5b). 'disp screen <n>' pins one.
+
+        config BATMON_DISPLAY_FLIP
+            bool "Rotate 180 degrees"
+            depends on BATMON_DISPLAY_ENABLE
+            default n
+            help
+                For enclosure fit; DESIGN.md 8.3 tag 0x0074.
+    endmenu
+
+    menu "BLE console (NUS)"
+        comment "The bring-up console over Bluetooth, as a Nordic UART Service."
+        comment "DESIGN.md 7.3 puts NUS alongside the JBD service in the final GATT"
+        comment "layout; this is that half, early. The JBD emulation arrives at M4."
+        comment "Open with nRF Connect, Serial Bluetooth Terminal, or any NUS app."
+
+        config BATMON_BLE_ENABLE
+            bool "Expose the console over BLE"
+            default y
+            help
+                Costs ~60 KB of flash and keeps the radio up. There is no pairing:
+                anything in range can run console commands, including 'zero' and
+                'curve'. That is acceptable for a bench milestone and is NOT
+                acceptable in the field -- DESIGN.md 8.5 adds bonding at M5.
+
+        config BATMON_BLE_NAME
+            string "Advertised name"
+            depends on BATMON_BLE_ENABLE
+            default "batmon"
+
+        config BATMON_BLE_APPEND_MAC
+            bool "Append the last two MAC bytes to the name"
+            depends on BATMON_BLE_ENABLE
+            default y
+            help
+                Gives "batmon-3F2A". Two boards on one bench are otherwise
+                indistinguishable in the scan list.
+    endmenu
+
+    menu "Bring-up (M1)"
+        config BATMON_STREAM_ON_BOOT
+            bool "Start streaming samples at boot"
+            default y
+
+        config BATMON_STREAM_PERIOD_MS
+            int "Stream print period (ms)"
+            default 1000
+            range 100 60000
+
+        config BATMON_INIT_ANTENNA_PINS
+            bool "Drive the XIAO C6 antenna-select pins at boot"
+            default y
+            help
+                XIAO ESP32-C6: GPIO3 must be driven low to power the RF switch and
+                GPIO14 selects the antenna (low = onboard). Irrelevant at M1 since
+                no radio runs, but wrong-at-boot pins are a classic source of later
+                confusion. Verify against your board revision (DESIGN.md 2.1).
+
+        config BATMON_ANTENNA_EXTERNAL
+            bool "Select the external u.FL antenna"
+            depends on BATMON_INIT_ANTENNA_PINS
+            default n
+    endmenu
+
+endmenu

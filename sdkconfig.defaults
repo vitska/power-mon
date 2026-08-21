@@ -1,0 +1,59 @@
+# bat-monitor — M1 (bring-up) defaults.
+# Power-management options from DESIGN.md §9.6 are deliberately NOT enabled yet:
+# light sleep would interfere with bring-up measurements, and there is nothing to
+# save power for until the gauge exists. They land in M6.
+
+CONFIG_IDF_TARGET="esp32c6"
+
+# --- Partition table (DESIGN.md §6.2) ---
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- Console over the native USB (XIAO ESP32-C6 USB-C is USB-Serial-JTAG) ---
+# If you bring up over an external UART bridge instead, switch this to
+# CONFIG_ESP_CONSOLE_UART_DEFAULT=y; main/console_cmds.c handles both.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# --- Console REPL needs a reasonable stack and full printf ---
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+# We format fixed-point by hand (DESIGN.md §4.3: no floats), so nano-format is fine
+# and saves flash. Left explicit so nobody "fixes" a missing %f later.
+CONFIG_NEWLIB_NANO_FORMAT=y
+
+# --- Bring-up logging ---
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+
+# --- Brownout: DESIGN.md §6.4 wants this one notch above reset. Placeholder for M6. ---
+CONFIG_ESP_BROWNOUT_DET=y
+
+# --- Watchdogs ---
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+
+# Leave newlines alone on stdout. IDF's default expands LF to CRLF, which would
+# arrive doubled over BLE:
+# main/ble_console.c captures command output and does its own LF -> CRLF translation
+# for the terminal apps that need it. One translation, in one place.
+CONFIG_NEWLIB_STDOUT_LINE_ENDING_LF=y
+
+CONFIG_COMPILER_WARN_WRITE_STRINGS=y
+
+# --- BLE: NimBLE peripheral for the NUS console (DESIGN.md §7.3) ---
+# Peripheral only. Central/observer/broadcaster roles are compiled out: this device
+# never scans and never connects outward, and each role carries code size.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+# One connection: this is a monitor, not a hub (DESIGN.md §7.1).
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+# 512-byte ATT MTU so a 'help' dump is a handful of notifications, not dozens.
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=512
+CONFIG_BT_NIMBLE_SVC_GAP_DEVICE_NAME="batmon"
+# Pairing (DESIGN.md §8.5): LE Secure Connections, bonds persisted in NVS.
+CONFIG_BT_NIMBLE_NVS_PERSIST=y
+CONFIG_BT_NIMBLE_SM_SC=y
+CONFIG_BT_NIMBLE_SM_LEGACY=y
