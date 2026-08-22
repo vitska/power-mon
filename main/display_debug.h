@@ -31,6 +31,7 @@ int  display_debug_get_screen(void); /**< <0 when auto-cycling */
 int  display_debug_n_screens(void);
 
 esp_err_t display_debug_set_contrast(uint8_t contrast);
+uint8_t   display_debug_get_contrast(void); /**< last value written */
 
 /** Shows a BLE pairing passkey, overriding the normal screens; 0 clears it.
  *  Safe to call from the NimBLE host task: it only stores the value. */

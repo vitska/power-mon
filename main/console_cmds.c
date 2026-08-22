@@ -2203,6 +2203,137 @@ static int cmd_ble(int argc, char **argv)
  * is M3's job (DESIGN.md 6.1, 8.3), and until then the closing line says so rather
  * than letting anyone assume these survive a reboot.
  */
+/*
+ * `config` -- every setting as key=value, machine first.
+ *
+ * `options` says the same things in prose for a person to read. This says them for a
+ * program: one setting per line, no prose, no alignment to match on. Values are in the
+ * SAME units the corresponding setter takes, so what this prints is what you would type
+ * to reproduce it -- `soc.cap_uah=44000000` came from `soc cap 44000000`, and enums are
+ * the exact keyword the setter accepts. That round-trip property is the whole point: a
+ * client can show current values and write new ones without a table mapping one
+ * spelling to the other.
+ *
+ * Keys are namespaced by the command that owns them. A client should skip keys it does
+ * not recognise, exactly as it skips unknown telemetry records -- new settings will
+ * appear here without a protocol bump, and only a change to an existing key's meaning
+ * is a breaking change (CLI.md 8.1).
+ */
+static int cmd_config(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+
+    printf("protocol=%d\n", BATMON_CLI_PROTOCOL);
+    printf("firmware=%s\n", BATMON_FW_VERSION);
+
+    printf("stream.on=%d\n", s_ctx->stream_enabled ? 1 : 0);
+    printf("stream.csv=%d\n", s_ctx->stream_csv ? 1 : 0);
+    printf("stream.fast_ms=%lu\n", (unsigned long)s_ctx->rate_fast_ms);
+    printf("stream.calc_ms=%lu\n", (unsigned long)s_ctx->rate_calc_ms);
+    printf("stream.diag_ms=%lu\n", (unsigned long)s_ctx->rate_diag_ms);
+    printf("stream.env_ms=%lu\n", (unsigned long)s_ctx->rate_env_ms);
+
+    ina219_handle_t cd = s_ctx->sensors ? sensors_current_dev(s_ctx->sensors) : NULL;
+    ina219_handle_t vd = s_ctx->sensors ? sensors_voltage_dev(s_ctx->sensors) : NULL;
+
+    if (s_ctx->sensors) {
+        printf("shunt.loc=%s\n", sensors_mode_str(sensors_get_mode(s_ctx->sensors)));
+        printf("shunt.roles=%s\n",
+               sensors_get_role_state(s_ctx->sensors) == SENSORS_ROLE_RESOLVED
+                   ? "resolved" : "unresolved");
+        printf("shunt.vpath_uohm=%lu\n",
+               (unsigned long)sensors_get_r_vpath_uohm(s_ctx->sensors));
+        printf("sensors.pos=%d\n", sensors_have_pos(s_ctx->sensors) ? 1 : 0);
+        printf("sensors.neg=%d\n", sensors_have_neg(s_ctx->sensors) ? 1 : 0);
+    }
+
+    if (cd && vd) {
+        printf("profile=%s\n",
+               ina219_get_profile(cd) == INA219_PROFILE_TRIGGERED ? "triggered"
+               : (ina219_get_continuous_adc(cd) == INA219_ADC_128AVG ? "continuous"
+                                                                     : "fast"));
+        printf("profile.pair_us=%lu\n", (unsigned long)ina219_conversion_time_us(cd));
+        printf("shunt.uohm=%lu\n", (unsigned long)ina219_get_shunt_uohm(cd));
+        printf("cal.i_offset_ua=%ld\n", (long)ina219_get_offset_ua(cd));
+        printf("cal.i_gain_ppm=%lu\n", (unsigned long)ina219_get_gain_ppm(cd));
+        printf("cal.v_offset_uv=%ld\n", (long)ina219_get_vbus_offset_uv(vd));
+        printf("cal.v_gain_ppm=%lu\n", (unsigned long)ina219_get_vbus_gain_ppm(vd));
+        printf("cal.v_divider_q16=%lu\n",
+               (unsigned long)ina219_get_vbus_divider_q16(vd));
+        printf("cal.stored=%d\n", cal_store_exists() ? 1 : 0);
+        printf("sense.sign=%s\n", ina219_get_invert_sign(cd) ? "invert" : "normal");
+        printf("sense.vbuscomp=%s\n",
+               ina219_get_vbus_comp(vd) == INA219_VBUS_COMP_NONE ? "none" :
+               ina219_get_vbus_comp(vd) == INA219_VBUS_COMP_ADD_SHUNT ? "add" : "sub");
+        /* The enum is an index, the setter takes the divisor: print the divisor. */
+        printf("sense.pgamax=%d\n", 1 << (int)ina219_get_pga_max(cd));
+        printf("sense.pga=%d\n", 1 << (int)ina219_get_pga(cd));
+        printf("sense.autorange=%d\n", ina219_get_autorange(cd) ? 1 : 0);
+    }
+
+    {
+        fg_config_t c = fg_get_config();
+        fg_status_t st;
+        fg_get(&st);
+        printf("soc.cap_uah=%lu\n", (unsigned long)c.design_capacity_uah);
+        printf("soc.learned_uah=%lu\n", (unsigned long)st.full_capacity_uah);
+        printf("soc.v0_uv=%lu\n", (unsigned long)c.v_0pct_uv);
+        printf("soc.v100_uv=%lu\n", (unsigned long)c.v_100pct_uv);
+        printf("soc.vfull_uv=%lu\n", (unsigned long)c.v_full_uv);
+        printf("soc.rint_uohm=%lu\n", (unsigned long)c.r_int_uohm);
+        printf("soc.taper_ua=%lu\n", (unsigned long)c.i_taper_ua);
+        printf("soc.rest_s=%lu\n", (unsigned long)c.t_rest_s);
+        printf("soc.peukert_q8=%u\n", (unsigned)c.peukert_q8);
+        printf("soc.irated_ua=%lu\n", (unsigned long)c.i_rated_ua);
+        printf("soc.depth_permille=%u\n", (unsigned)c.learn_min_depth_permille);
+        printf("soc.deadband_ua=%lu\n", (unsigned long)c.i_deadband_ua);
+        printf("soc.permille=%lu\n", (unsigned long)st.soc_permille);
+        printf("soc.voltage_only=%d\n", st.voltage_only ? 1 : 0);
+    }
+
+#if CONFIG_BATMON_DISPLAY_ENABLE
+    printf("disp.present=%d\n", display_debug_present() ? 1 : 0);
+    if (display_debug_present()) {
+        const int pinned = display_debug_get_screen();
+        printf("disp.on=%d\n", display_debug_enabled() ? 1 : 0);
+        if (pinned < 0) {
+            printf("disp.screen=auto\n");
+        } else {
+            printf("disp.screen=%d\n", pinned);
+        }
+        printf("disp.screens=%d\n", display_debug_n_screens());
+        printf("disp.contrast=%u\n", (unsigned)display_debug_get_contrast());
+    }
+#else
+    printf("disp.present=0\n");
+#endif
+
+#if CONFIG_BATMON_BLE_ENABLE
+    {
+        ble_serial_stats_t bst;
+        ble_serial_get_stats(&bst);
+        const uint32_t pk = ble_serial_get_passkey();
+        printf("ble.name=%s\n", ble_serial_name());
+        printf("ble.pair=%s\n", bst.mode == BLE_SEC_BONDED ? "bonded" : "open");
+        if (pk == 0xFFFFFFFFu) {
+            printf("ble.passkey=random\n");
+        } else {
+            printf("ble.passkey=%06lu\n", (unsigned long)pk);
+        }
+        printf("ble.conns=%d\n", bst.connections);
+        printf("ble.subs=%d\n", bst.subscribers);
+        printf("ble.bonds=%d\n", bst.bonds);
+    }
+#endif
+
+    if (s_ctx->bme) {
+        printf("env.sensor=%s\n", bme280_chip_str(bme280_chip(s_ctx->bme)));
+    } else {
+        printf("env.sensor=none\n");
+    }
+    return 0;
+}
+
 static int cmd_options(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -2384,6 +2515,7 @@ void console_start(app_ctx_t *ctx)
 #endif
     register_cmd("soc",     "State of charge, endpoints and accumulators",   "[set|full|reset|cap|v0|v100|vfull|rint|taper|rest] [v]", cmd_soc);
     register_cmd("options", "Everything that is set, in one place",         NULL,             cmd_options);
+    register_cmd("config",  "Every setting as key=value, for programs",   NULL,             cmd_config);
 
     printf("\n");
     printf("bat-monitor console, protocol %d. 'help' lists commands, 'ver' for a\n",

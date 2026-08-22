@@ -56,7 +56,10 @@ struct {
  * that rotates to error counters every five seconds is not that. 'disp screen auto'
  * turns cycling back on.
  */
-} static s_disp = {.pinned_screen = 0, .n_screens = 3};
+    /* Last contrast written, so `config` can report it. The panel has no
+     * readable contrast register -- this is the only place the value exists. */
+    uint8_t contrast;
+} static s_disp = {.pinned_screen = 0, .n_screens = 3, .contrast = 0x40};
 
 /* --- screens ------------------------------------------------------------------ */
 
@@ -385,5 +388,14 @@ esp_err_t display_debug_set_contrast(uint8_t contrast)
     if (!s_disp.oled) {
         return ESP_ERR_INVALID_STATE;
     }
-    return ssd1306_set_contrast(s_disp.oled, contrast);
+    const esp_err_t err = ssd1306_set_contrast(s_disp.oled, contrast);
+    if (err == ESP_OK) {
+        s_disp.contrast = contrast;
+    }
+    return err;
+}
+
+uint8_t display_debug_get_contrast(void)
+{
+    return s_disp.contrast;
 }
