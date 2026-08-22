@@ -26,7 +26,7 @@
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
 #include "esp_mac.h"
-#include "display_debug.h"
+#include "lcd.h"
 #include "esp_console.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -1342,8 +1342,8 @@ static int cmd_mon(int argc, char **argv)
             printf("  link  BLE %d/%d conn %d sub  pair %-8s disp %s\033[K\n",
                    bs.connections, BLE_MAX_CONNS, bs.subscribers,
                    bs.mode == BLE_SEC_BONDED ? "required" : "OPEN",
-                   display_debug_present()
-                       ? (display_debug_enabled() ? "on" : "off") : "none");
+                   lcd_present()
+                       ? (lcd_enabled() ? "on" : "off") : "none");
         }
 #else
         printf("\033[K\n");
@@ -1938,19 +1938,19 @@ static int cmd_cal(int argc, char **argv)
 
 static int cmd_disp(int argc, char **argv)
 {
-    if (!display_debug_present()) {
+    if (!lcd_present()) {
         printf("no display fitted (nothing answered at 0x%02X). 'scan' will confirm.\n",
                CONFIG_BATMON_DISPLAY_ADDR);
         return 0;
     }
 
     if (argc < 2) {
-        const int pinned = display_debug_get_screen();
-        printf("display: %s, ", display_debug_enabled() ? "on" : "off");
+        const int pinned = lcd_get_screen();
+        printf("display: %s, ", lcd_enabled() ? "on" : "off");
         if (pinned < 0) {
-            printf("auto-cycling %d screens\n", display_debug_n_screens());
+            printf("auto-cycling %d screens\n", lcd_n_screens());
         } else {
-            printf("pinned to screen %d of %d\n", pinned, display_debug_n_screens());
+            printf("pinned to screen %d of %d\n", pinned, lcd_n_screens());
         }
         printf("  disp <on|off>              blank or restore the panel\n");
         printf("  disp screen <n|auto>       pin a screen, or resume cycling\n");
@@ -1960,7 +1960,7 @@ static int cmd_disp(int argc, char **argv)
 
     if (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "off") == 0) {
         const bool on = (argv[1][1] == 'n');
-        display_debug_enable(on);
+        lcd_enable(on);
         printf("display %s\n", on ? "on" : "off");
         return 0;
     }
@@ -1971,17 +1971,17 @@ static int cmd_disp(int argc, char **argv)
             return 1;
         }
         if (strcmp(argv[2], "auto") == 0) {
-            display_debug_set_screen(-1);
+            lcd_set_screen(-1);
             printf("auto-cycling\n");
             return 0;
         }
         const int n = atoi(argv[2]);
-        if (n < 0 || n >= display_debug_n_screens()) {
+        if (n < 0 || n >= lcd_n_screens()) {
             printf("screen must be 0..%d, or 'auto'\n",
-                   display_debug_n_screens() - 1);
+                   lcd_n_screens() - 1);
             return 1;
         }
-        display_debug_set_screen(n);
+        lcd_set_screen(n);
         printf("pinned to screen %d\n", n);
         return 0;
     }
@@ -1996,7 +1996,7 @@ static int cmd_disp(int argc, char **argv)
             printf("contrast must be 1..255\n");
             return 1;
         }
-        const esp_err_t err = display_debug_set_contrast((uint8_t)c);
+        const esp_err_t err = lcd_set_contrast((uint8_t)c);
         if (err != ESP_OK) {
             printf("failed: %s\n", esp_err_to_name(err));
             return 1;
@@ -2299,17 +2299,17 @@ static int cmd_config(int argc, char **argv)
     }
 
 #if CONFIG_BATMON_DISPLAY_ENABLE
-    printf("disp.present=%d\n", display_debug_present() ? 1 : 0);
-    if (display_debug_present()) {
-        const int pinned = display_debug_get_screen();
-        printf("disp.on=%d\n", display_debug_enabled() ? 1 : 0);
+    printf("disp.present=%d\n", lcd_present() ? 1 : 0);
+    if (lcd_present()) {
+        const int pinned = lcd_get_screen();
+        printf("disp.on=%d\n", lcd_enabled() ? 1 : 0);
         if (pinned < 0) {
             printf("disp.screen=auto\n");
         } else {
             printf("disp.screen=%d\n", pinned);
         }
-        printf("disp.screens=%d\n", display_debug_n_screens());
-        printf("disp.contrast=%u\n", (unsigned)display_debug_get_contrast());
+        printf("disp.screens=%d\n", lcd_n_screens());
+        printf("disp.contrast=%u\n", (unsigned)lcd_get_contrast());
     }
 #else
     printf("disp.present=0\n");
@@ -2401,12 +2401,12 @@ static int cmd_options(int argc, char **argv)
 
 #if CONFIG_BATMON_DISPLAY_ENABLE
     printf("== display =============================== (disp)\n");
-    if (display_debug_present()) {
-        const int pinned = display_debug_get_screen();
+    if (lcd_present()) {
+        const int pinned = lcd_get_screen();
         printf("panel         0x%02X, %s\n", CONFIG_BATMON_DISPLAY_ADDR,
-               display_debug_enabled() ? "on" : "blanked");
+               lcd_enabled() ? "on" : "blanked");
         if (pinned < 0) {
-            printf("screens       auto-cycling %d\n", display_debug_n_screens());
+            printf("screens       auto-cycling %d\n", lcd_n_screens());
         } else {
             printf("screens       pinned to %d\n", pinned);
         }

@@ -22,7 +22,7 @@
 #include "app_ctx.h"
 #include "ble.h"
 #include "console_io.h"
-#include "display_debug.h"
+#include "lcd.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
 
@@ -58,8 +58,8 @@ static void on_line(const char *line, uint16_t conn, void *user)
 static void on_passkey(uint32_t passkey, void *user)
 {
     (void)user;
-    if (display_debug_present()) {
-        display_debug_show_passkey(passkey);
+    if (lcd_present()) {
+        lcd_show_passkey(passkey);
     }
 }
 

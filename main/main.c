@@ -20,7 +20,7 @@
 #include "ble.h"
 #include "bme280.h"
 #include "cal_store.h"
-#include "display_debug.h"
+#include "lcd.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "esp_check.h"
@@ -814,7 +814,7 @@ void app_main(void)
 #if CONFIG_BATMON_DISPLAY_ENABLE
     /* After the sampler, so the first frame has something to show, and never fatal:
      * an absent panel is a configuration, not a fault (DESIGN.md 10). */
-    display_debug_start(ctx);
+    lcd_start(ctx);
 #endif
 
 #if CONFIG_BATMON_BLE_ENABLE
