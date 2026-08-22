@@ -16,7 +16,7 @@
 #include <string.h>
 
 #include "app_ctx.h"
-#include "ble_console.h"
+#include "cli.h"
 #include "ble.h"
 #include "bme280.h"
 #include "cal_store.h"
@@ -379,7 +379,7 @@ esp_err_t run_zero_voltage_calibration(app_ctx_t *ctx, uint32_t n_samples,
 /*
  * The stream goes to BOTH transports.
  *
- * This is not symmetry for its own sake. main/ble_console.c captures stdout only for
+ * This is not symmetry for its own sake. the BLE bridge in cli.c captures stdout only for
  * the worker task, and only while a command is running -- so anything the sampler task
  * prints reaches USB and nothing else. That left a BLE client with no way to obtain
  * live telemetry at all, which is the one thing a phone app most needs. Emitting here
@@ -818,13 +818,13 @@ void app_main(void)
 #endif
 
 #if CONFIG_BATMON_BLE_ENABLE
-    /* Before console_start(): the BLE worker calls esp_console_run(), so the command
-     * table must exist first -- but console_start() ends in the blocking REPL, so
+    /* Before cli_start(): the BLE worker calls esp_console_run(), so the command
+     * table must exist first -- but cli_start() ends in the blocking REPL, so
      * "first" means before that call, and registration happens inside it. Starting
      * BLE here is safe because nothing can arrive over the air until the radio syncs,
      * which takes far longer than registering a dozen commands. */
-    ble_console_start();
+    cli_ble_start();
 #endif
 
-    console_start(ctx);
+    cli_start(ctx);
 }

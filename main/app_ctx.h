@@ -147,8 +147,6 @@ app_ctx_t *app_ctx(void);
 bool sensor_lock_take(app_ctx_t *ctx, uint32_t timeout_ms);
 void sensor_lock_give(app_ctx_t *ctx);
 
-/** Registers the M1 bring-up console commands. */
-void console_start(app_ctx_t *ctx);
 
 /** Blocking zero-current calibration of the CURRENT sensor (DESIGN.md §5.5).
  *  Returns ESP_OK and writes the new offset on success; ESP_ERR_INVALID_STATE if the

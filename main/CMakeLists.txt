@@ -1,9 +1,7 @@
 idf_component_register(
     SRCS        "main.c"
-                "console_cmds.c"
-                "console_io.c"
+                "cli.c"
                 "lcd.c"
-                "ble_console.c"
                 "ble.c"
                 "cal_store.c"
     INCLUDE_DIRS "."
