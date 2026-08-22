@@ -15,6 +15,8 @@
 
 #include "cli.h"
 
+#include "config.h"
+
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,7 +26,6 @@
 #include "app_ctx.h"
 #include "ble.h"
 #include "bme280.h"
-#include "cal_store.h"
 #include "driver/usb_serial_jtag.h"
 #include "driver/usb_serial_jtag_vfs.h"
 #include "esp_app_desc.h"
@@ -484,8 +485,8 @@ static int cmd_detect(int argc, char **argv)
     printf("indistinguishable, and guessing would invert the sign of every\n");
     printf("subsequent measurement -- so this refuses rather than guesses.\n");
 
-    const bool was_streaming = s_ctx->stream_enabled;
-    s_ctx->stream_enabled    = false;
+    const bool was_streaming = config()->stream_enabled;
+    config()->stream_enabled    = false;
 
     int32_t pos_uv = 0, neg_uv = 0;
     esp_err_t err = ESP_ERR_TIMEOUT;
@@ -496,7 +497,7 @@ static int cmd_detect(int argc, char **argv)
         printf("sensor busy -- try again\n");
     }
 
-    s_ctx->stream_enabled = was_streaming;
+    config()->stream_enabled = was_streaming;
 
     char bp[24], bn[24];
     printf("  positive-pole sensor sees %s mV\n", FMT_MV(bp, pos_uv));
@@ -526,13 +527,13 @@ static bool stream_set_rate(const char *what, const char *val)
     uint32_t           maxms  = 60000;
 
     if (strcmp(what, "fast") == 0) {
-        target = &s_ctx->rate_fast_ms;
+        target = &config()->rate_fast_ms;
     } else if (strcmp(what, "calc") == 0) {
-        target = &s_ctx->rate_calc_ms;
+        target = &config()->rate_calc_ms;
     } else if (strcmp(what, "diag") == 0) {
-        target = &s_ctx->rate_diag_ms;
+        target = &config()->rate_diag_ms;
     } else if (strcmp(what, "env") == 0) {
-        target = &s_ctx->rate_env_ms;
+        target = &config()->rate_env_ms;
         maxms  = 600000; /* a thermal mass may legitimately be reported once a minute */
     } else {
         return false;
@@ -554,7 +555,7 @@ static bool stream_set_rate(const char *what, const char *val)
 
     /* The fast group can be asked for more than the sensor can deliver. Say so rather
      * than let someone conclude the firmware is dropping samples. */
-    if (target == &s_ctx->rate_fast_ms && ms < 137 &&
+    if (target == &config()->rate_fast_ms && ms < 137 &&
         ina219_get_continuous_adc(sensors_current_dev(s_ctx->sensors)) ==
             INA219_ADC_128AVG) {
         printf("fast group %ld ms (%s Hz requested)\n", ms,
@@ -570,16 +571,16 @@ static bool stream_set_rate(const char *what, const char *val)
 
 static void stream_show(void)
 {
-    printf("stream  %s, format %s\n", s_ctx->stream_enabled ? "on" : "off",
-           s_ctx->stream_csv ? "CSV (grouped records)" : "text");
+    printf("stream  %s, format %s\n", config()->stream_enabled ? "on" : "off",
+           config()->stream_csv ? "CSV (grouped records)" : "text");
     printf("  fast  %-6lu ms   voltage, current\n",
-           (unsigned long)s_ctx->rate_fast_ms);
+           (unsigned long)config()->rate_fast_ms);
     printf("  calc  %-6lu ms   power, SoC, charge, state, OCV, Peukert\n",
-           (unsigned long)s_ctx->rate_calc_ms);
+           (unsigned long)config()->rate_calc_ms);
     printf("  diag  %-6lu ms   shunt drop, range, saturation (plus on change)\n",
-           (unsigned long)s_ctx->rate_diag_ms);
+           (unsigned long)config()->rate_diag_ms);
     printf("  env   %-6lu ms   temperature, humidity, pressure\n",
-           (unsigned long)s_ctx->rate_env_ms);
+           (unsigned long)config()->rate_env_ms);
     printf("0 means that group is off. Records are prefixed f, c, d and e; header\n");
     printf("lines start with '#'. Ignore prefixes you do not know -- new record types\n");
     printf("may appear without a protocol bump.\n");
@@ -597,16 +598,16 @@ static int cmd_stream(int argc, char **argv)
     }
 
     if (strcmp(argv[1], "on") == 0) {
-        s_ctx->stream_enabled = true;
+        config()->stream_enabled = true;
     } else if (strcmp(argv[1], "off") == 0) {
-        s_ctx->stream_enabled = false;
+        config()->stream_enabled = false;
     } else if (strcmp(argv[1], "csv") == 0) {
-        s_ctx->stream_csv             = true;
+        config()->stream_csv             = true;
         s_ctx->stream_csv_header_done = false; /* re-emit the headers */
-        s_ctx->stream_enabled         = true;
+        config()->stream_enabled         = true;
     } else if (strcmp(argv[1], "text") == 0) {
-        s_ctx->stream_csv     = false;
-        s_ctx->stream_enabled = true;
+        config()->stream_csv     = false;
+        config()->stream_enabled = true;
     } else if (argc >= 3 && stream_set_rate(argv[1], argv[2])) {
         s_ctx->stream_csv_header_done = false; /* the header set may have changed */
         return 0;
@@ -675,13 +676,13 @@ static int cmd_zero(int argc, char **argv)
     printf("if current is flowing it will be baked into the offset permanently.\n");
     printf("Collecting %lu samples at PGA/1", (unsigned long)n);
 
-    const bool was_streaming = s_ctx->stream_enabled;
-    s_ctx->stream_enabled    = false;
+    const bool was_streaming = config()->stream_enabled;
+    config()->stream_enabled    = false;
 
     int32_t   offset = 0, stddev = 0;
     esp_err_t err    = run_zero_calibration(s_ctx, n, &offset, &stddev);
 
-    s_ctx->stream_enabled = was_streaming;
+    config()->stream_enabled = was_streaming;
 
     char b1[24], b2[24];
     printf("  measured offset : %s A\n", FMT_A(b1, offset));
@@ -927,7 +928,7 @@ static int cmd_profile(int argc, char **argv)
 
         /* Persist, on the same terms as `sense`: only if a store already exists, so a
          * never-calibrated board is not given one by a profile change. */
-        if (cal_store_exists()) {
+        if (config_exists()) {
             cal_autosave();
         }
     }
@@ -986,7 +987,7 @@ static int cmd_sense(int argc, char **argv)
     /* Any of the three settings above changes the conversion, so persist them the
      * same way a cal point is persisted -- but only if a store already exists, so a
      * board that has never been calibrated is not given one by a `sense` poke. */
-    if (argc >= 3 && cal_store_exists()) {
+    if (argc >= 3 && config_exists()) {
         cal_autosave();
     }
 
@@ -1345,15 +1346,15 @@ static int cmd_curve(int argc, char **argv)
             n = (uint32_t)ns;
         }
 
-        const bool was_streaming = s_ctx->stream_enabled;
-        s_ctx->stream_enabled    = false;
+        const bool was_streaming = config()->stream_enabled;
+        config()->stream_enabled    = false;
 
         int64_t  si = 0, sv = 0;
         uint32_t got = 0;
         bool     sat = false;
         const esp_err_t err = curve_average(n, &si, &sv, &got, &sat);
 
-        s_ctx->stream_enabled = was_streaming;
+        config()->stream_enabled = was_streaming;
 
         if (err != ESP_OK || got == 0) {
             printf("read failed: %s\n", esp_err_to_name(err));
@@ -1528,8 +1529,8 @@ static int cmd_mon(int argc, char **argv)
     }
 
     /* The scrolling stream would fight the repaint for the same screen. */
-    const bool was_streaming = s_ctx->stream_enabled;
-    s_ctx->stream_enabled    = false;
+    const bool was_streaming = config()->stream_enabled;
+    config()->stream_enabled    = false;
 
     /* Non-blocking stdin so a keypress can end the loop without stalling a frame on
      * a read. Restored on the way out -- leaving the console non-blocking would break
@@ -1662,7 +1663,7 @@ static int cmd_mon(int argc, char **argv)
 
     printf("\033[?25h\n"); /* cursor back, and leave the frame on screen */
     fcntl(fd, F_SETFL, flags);
-    s_ctx->stream_enabled = was_streaming;
+    config()->stream_enabled = was_streaming;
     return 0;
 }
 
@@ -1847,7 +1848,7 @@ static int cmd_soc(int argc, char **argv)
  */
 static void cal_autosave(void)
 {
-    const esp_err_t err = cal_store_save(s_ctx);
+    const esp_err_t err = config_capture_and_commit();
     if (err == ESP_OK) {
         printf("Saved to flash -- restored automatically at every boot.\n");
     } else {
@@ -1866,7 +1867,7 @@ static void cal_status(ina219_handle_t cd, ina219_handle_t vd)
     const int32_t  voff = ina219_get_vbus_offset_uv(vd);
     const uint32_t vgain = ina219_get_vbus_gain_ppm(vd);
 
-    printf("stored     %s\n", cal_store_exists()
+    printf("stored     %s\n", config_exists()
                ? "yes -- restored at every boot"
                : "NO -- these values are RAM only until 'cal save'");
     printf("           zero point (offset)        top point (gain)\n");
@@ -1928,15 +1929,15 @@ static int cmd_cal(int argc, char **argv)
         }
         const long ref_uv = strtol(argv[2], NULL, 10);
 
-        const bool was_streaming = s_ctx->stream_enabled;
-        s_ctx->stream_enabled    = false;
+        const bool was_streaming = config()->stream_enabled;
+        config()->stream_enabled    = false;
 
         int64_t  si = 0, sv = 0;
         uint32_t got = 0;
         bool     sat = false;
         printf("Averaging 64 samples");
         const esp_err_t err = curve_average(64, &si, &sv, &got, &sat);
-        s_ctx->stream_enabled = was_streaming;
+        config()->stream_enabled = was_streaming;
 
         if (err != ESP_OK || got == 0) {
             printf("read failed: %s\n", esp_err_to_name(err));
@@ -1995,7 +1996,7 @@ static int cmd_cal(int argc, char **argv)
 
     /* --- cal save / forget ---------------------------------------------------- */
     if (strcmp(argv[1], "save") == 0) {
-        const esp_err_t err = cal_store_save(s_ctx);
+        const esp_err_t err = config_capture_and_commit();
         if (err == ESP_ERR_INVALID_STATE) {
             printf("roles unresolved -- nothing coherent to store yet.\n");
             return 1;
@@ -2010,7 +2011,7 @@ static int cmd_cal(int argc, char **argv)
     }
 
     if (strcmp(argv[1], "forget") == 0) {
-        const esp_err_t err = cal_store_forget();
+        const esp_err_t err = config_forget();
         if (err != ESP_OK) {
             printf("failed: %s\n", esp_err_to_name(err));
             return 1;
@@ -2041,8 +2042,8 @@ static int cmd_cal(int argc, char **argv)
         /* Persist the cleared state rather than leaving the old values on flash to
          * come back at the next boot -- a reset that undoes itself overnight is
          * worse than no reset at all. */
-        if (cal_store_exists()) {
-            cal_store_save(s_ctx);
+        if (config_exists()) {
+            cal_autosave();
         }
         printf("cleared, on flash too. The shunt resistance and divider ratio\n");
         printf("describe the hardware and are left alone.\n");
@@ -2076,8 +2077,8 @@ static int cmd_cal(int argc, char **argv)
             n = (uint32_t)v;
         }
 
-        const bool was_streaming = s_ctx->stream_enabled;
-        s_ctx->stream_enabled    = false;
+        const bool was_streaming = config()->stream_enabled;
+        config()->stream_enabled    = false;
         char b1[24], b2[24];
 
         if (chan_i) {
@@ -2088,7 +2089,7 @@ static int cmd_cal(int argc, char **argv)
 
             int32_t off = 0, sd = 0;
             const esp_err_t err = run_zero_calibration(s_ctx, n, &off, &sd);
-            s_ctx->stream_enabled = was_streaming;
+            config()->stream_enabled = was_streaming;
 
             printf("  offset  %s A\n", FMT_A(b1, off));
             printf("  stddev  %s A\n", FMT_A(b2, sd));
@@ -2116,7 +2117,7 @@ static int cmd_cal(int argc, char **argv)
             uint32_t spread = 0;
             const esp_err_t err =
                 run_zero_voltage_calibration(s_ctx, n, &off, &spread);
-            s_ctx->stream_enabled = was_streaming;
+            config()->stream_enabled = was_streaming;
 
             printf("  offset  %s V\n", FMT_V(b1, off));
             printf("  spread  %s V\n", FMT_V(b2, (int32_t)spread));
@@ -2169,8 +2170,8 @@ static int cmd_cal(int argc, char **argv)
         n = (uint32_t)ns;
     }
 
-    const bool was_streaming = s_ctx->stream_enabled;
-    s_ctx->stream_enabled    = false;
+    const bool was_streaming = config()->stream_enabled;
+    config()->stream_enabled    = false;
 
     printf("TOP POINT, %s channel. Averaging %lu samples",
            chan_i ? "current" : "voltage", (unsigned long)n);
@@ -2180,7 +2181,7 @@ static int cmd_cal(int argc, char **argv)
     bool     sat = false;
     const esp_err_t err = curve_average(n, &si, &sv, &got, &sat);
 
-    s_ctx->stream_enabled = was_streaming;
+    config()->stream_enabled = was_streaming;
 
     if (err != ESP_OK || got == 0) {
         printf("read failed: %s\n", esp_err_to_name(err));
@@ -2522,12 +2523,12 @@ static int cmd_config(int argc, char **argv)
     printf("protocol=%d\n", BATMON_CLI_PROTOCOL);
     printf("firmware=%s\n", BATMON_FW_VERSION);
 
-    printf("stream.on=%d\n", s_ctx->stream_enabled ? 1 : 0);
-    printf("stream.csv=%d\n", s_ctx->stream_csv ? 1 : 0);
-    printf("stream.fast_ms=%lu\n", (unsigned long)s_ctx->rate_fast_ms);
-    printf("stream.calc_ms=%lu\n", (unsigned long)s_ctx->rate_calc_ms);
-    printf("stream.diag_ms=%lu\n", (unsigned long)s_ctx->rate_diag_ms);
-    printf("stream.env_ms=%lu\n", (unsigned long)s_ctx->rate_env_ms);
+    printf("stream.on=%d\n", config()->stream_enabled ? 1 : 0);
+    printf("stream.csv=%d\n", config()->stream_csv ? 1 : 0);
+    printf("stream.fast_ms=%lu\n", (unsigned long)config()->rate_fast_ms);
+    printf("stream.calc_ms=%lu\n", (unsigned long)config()->rate_calc_ms);
+    printf("stream.diag_ms=%lu\n", (unsigned long)config()->rate_diag_ms);
+    printf("stream.env_ms=%lu\n", (unsigned long)config()->rate_env_ms);
 
     ina219_handle_t cd = s_ctx->sensors ? sensors_current_dev(s_ctx->sensors) : NULL;
     ina219_handle_t vd = s_ctx->sensors ? sensors_voltage_dev(s_ctx->sensors) : NULL;
@@ -2563,7 +2564,7 @@ static int cmd_config(int argc, char **argv)
         printf("cal.v_gain_ppm=%lu\n", (unsigned long)ina219_get_vbus_gain_ppm(vd));
         printf("cal.v_divider_q16=%lu\n",
                (unsigned long)ina219_get_vbus_divider_q16(vd));
-        printf("cal.stored=%d\n", cal_store_exists() ? 1 : 0);
+        printf("cal.stored=%d\n", config_exists() ? 1 : 0);
         printf("sense.sign=%s\n", ina219_get_invert_sign(cd) ? "invert" : "normal");
         printf("sense.vbuscomp=%s\n",
                ina219_get_vbus_comp(vd) == INA219_VBUS_COMP_NONE ? "none" :
@@ -2645,9 +2646,9 @@ static int cmd_options(int argc, char **argv)
 
     printf("== monitoring ============================ (stream, stats, profile)\n");
     printf("stream        %s, %s   fast %lu / calc %lu / diag %lu / env %lu ms\n",
-           s_ctx->stream_enabled ? "on" : "off", s_ctx->stream_csv ? "CSV" : "text",
-           (unsigned long)s_ctx->rate_fast_ms, (unsigned long)s_ctx->rate_calc_ms,
-           (unsigned long)s_ctx->rate_diag_ms, (unsigned long)s_ctx->rate_env_ms);
+           config()->stream_enabled ? "on" : "off", config()->stream_csv ? "CSV" : "text",
+           (unsigned long)config()->rate_fast_ms, (unsigned long)config()->rate_calc_ms,
+           (unsigned long)config()->rate_diag_ms, (unsigned long)config()->rate_env_ms);
     printf("samples       %lu taken, window n=%lu\n",
            (unsigned long)values()->n_samples, (unsigned long)history_window()->n);
     printf("errors        bus %lu, not-ready %lu, range %lu, unresolved %lu\n",
@@ -2755,7 +2756,7 @@ static int cmd_options(int argc, char **argv)
 #endif
 
     printf("==========================================================\n");
-    printf("calibration   %s\n", cal_store_exists() ? "stored in flash"
+    printf("calibration   %s\n", config_exists() ? "stored in flash"
                                                     : "NOT stored -- 'cal save'");
     printf("Calibration and BLE pairing mode persist. Everything else here is RAM\n");
     printf("only until the full config layer lands in M3 (DESIGN.md 6.1, 8.3).\n");

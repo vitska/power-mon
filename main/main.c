@@ -15,11 +15,11 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "config.h"
 #include "app_ctx.h"
 #include "cli.h"
 #include "ble.h"
 #include "bme280.h"
-#include "cal_store.h"
 #include "history_values.h"
 #include "lcd.h"
 #include "driver/gpio.h"
@@ -48,12 +48,6 @@ static const char *TAG = "main";
 #define BATMON_INTERNAL_PULLUPS true
 #else
 #define BATMON_INTERNAL_PULLUPS false
-#endif
-
-#ifdef CONFIG_BATMON_STREAM_ON_BOOT
-#define BATMON_STREAM_ON_BOOT true
-#else
-#define BATMON_STREAM_ON_BOOT false
 #endif
 
 #ifdef CONFIG_BATMON_ANTENNA_EXTERNAL
@@ -348,10 +342,10 @@ static void emit_headers(app_ctx_t *ctx)
         return;
     }
     ctx->stream_csv_header_done = true;
-    if (ctx->rate_fast_ms) stream_emit("#f,ms,volts,amps");
-    if (ctx->rate_calc_ms) stream_emit("#c,ms,watts,soc_pct,charge_ah,state,ocv_v,peukert");
-    if (ctx->rate_diag_ms) stream_emit("#d,ms,shunt_mv,pga,sat");
-    if (ctx->rate_env_ms)  stream_emit("#e,ms,temp_c,humid_pct,press_hpa");
+    if (config()->rate_fast_ms) stream_emit("#f,ms,volts,amps");
+    if (config()->rate_calc_ms) stream_emit("#c,ms,watts,soc_pct,charge_ah,state,ocv_v,peukert");
+    if (config()->rate_diag_ms) stream_emit("#d,ms,shunt_mv,pga,sat");
+    if (config()->rate_env_ms)  stream_emit("#e,ms,temp_c,humid_pct,press_hpa");
 }
 
 static void emit_fast(const power_sample_t *s)
@@ -507,7 +501,7 @@ static void sampler_task(void *arg)
          * costs ~12 ms, affordable every ten seconds and not at 10 Hz.
          */
         if (ctx->bme && now >= values()->env_next_us) {
-            const uint32_t ems = ctx->rate_env_ms ? ctx->rate_env_ms : 10000;
+            const uint32_t ems = config()->rate_env_ms ? config()->rate_env_ms : 10000;
             values()->env_next_us   = now + (int64_t)ems * 1000;
             bme280_sample_t e;
             if (bme280_read(ctx->bme, &e) == ESP_OK) {
@@ -520,25 +514,25 @@ static void sampler_task(void *arg)
             }
         }
 
-        if (ctx->stream_enabled && values()->last_valid) {
-            if (ctx->stream_csv) {
+        if (config()->stream_enabled && values()->last_valid) {
+            if (config()->stream_csv) {
                 emit_headers(ctx);
 
                 /* Each group keeps its own deadline. A slow group cannot delay a fast
                  * one, and a group disabled with 0 simply never becomes due. */
-                if (ctx->rate_fast_ms && now >= next_fast_us &&
+                if (config()->rate_fast_ms && now >= next_fast_us &&
                     values()->last.t_us != last_fast_t) {
-                    next_fast_us = now + (int64_t)ctx->rate_fast_ms * 1000;
+                    next_fast_us = now + (int64_t)config()->rate_fast_ms * 1000;
                     last_fast_t  = values()->last.t_us;
                     emit_fast(&values()->last);
                 }
-                if (ctx->rate_calc_ms && now >= next_calc_us &&
+                if (config()->rate_calc_ms && now >= next_calc_us &&
                     values()->last.t_us != last_calc_t) {
-                    next_calc_us = now + (int64_t)ctx->rate_calc_ms * 1000;
+                    next_calc_us = now + (int64_t)config()->rate_calc_ms * 1000;
                     last_calc_t  = values()->last.t_us;
                     emit_calc(&values()->last);
                 }
-                if (ctx->rate_diag_ms) {
+                if (config()->rate_diag_ms) {
                     /* Change-or-deadline, whichever comes first. The change test is
                      * what makes a 1 s period acceptable for something a client needs
                      * to know about immediately. */
@@ -546,7 +540,7 @@ static void sampler_task(void *arg)
                                          (values()->last.pga != last_pga ||
                                           values()->last.saturated != last_sat);
                     if (changed || now >= next_diag_us) {
-                        next_diag_us = now + (int64_t)ctx->rate_diag_ms * 1000;
+                        next_diag_us = now + (int64_t)config()->rate_diag_ms * 1000;
                         last_pga     = values()->last.pga;
                         last_sat     = values()->last.saturated;
                         diag_primed  = true;
@@ -557,14 +551,14 @@ static void sampler_task(void *arg)
                         diag_primed = true;
                     }
                 }
-                if (ctx->rate_env_ms && now >= next_env_us) {
-                    next_env_us = now + (int64_t)ctx->rate_env_ms * 1000;
+                if (config()->rate_env_ms && now >= next_env_us) {
+                    next_env_us = now + (int64_t)config()->rate_env_ms * 1000;
                     emit_env(ctx, now);
                 }
-            } else if (ctx->rate_calc_ms && now >= next_calc_us) {
+            } else if (config()->rate_calc_ms && now >= next_calc_us) {
                 /* Text mode stays one line per tick, at the calculated group's rate:
                  * it is for a person reading, and 10 Hz of scrolling is unreadable. */
-                next_calc_us = now + (int64_t)ctx->rate_calc_ms * 1000;
+                next_calc_us = now + (int64_t)config()->rate_calc_ms * 1000;
                 print_sample_line(&values()->last, history_window());
             }
         }
@@ -660,6 +654,11 @@ void app_main(void)
     init_antenna_pins();
 #endif
 
+    /* Settings before hardware: config_load() below applies them to whatever came
+     * up, and a driver must never be configured from a struct that is still zeroed. */
+    config_defaults();
+    config_bind(ctx);
+
     ESP_ERROR_CHECK(init_bus_a(ctx));
 
     sensors_config_t scfg   = SENSORS_CONFIG_DEFAULT();
@@ -686,17 +685,25 @@ void app_main(void)
          * through a half-configured conversion. A first boot has nothing stored,
          * which is the normal path, not an error.
          */
-        const esp_err_t cerr = cal_store_load(ctx);
-        if (cerr == ESP_OK) {
-            ESP_LOGI(TAG, "calibration restored from NVS ('cal' to review)");
-        } else if (cerr == ESP_ERR_NVS_NOT_FOUND) {
-            ESP_LOGI(TAG, "no stored calibration -- defaults in use ('cal' to set it)");
-        }
-
-        /* After calibration is applied: the gauge integrates calibrated current, so
-         * seeding it from an uncalibrated reading would anchor it to the wrong
-         * number. */
+        /*
+         * The gauge comes up first because config_load() pushes settings INTO it, and
+         * it must exist to receive them. It restores its own accumulated charge here
+         * -- history, not configuration -- and does not integrate anything until the
+         * first sample, which is still several steps away.
+         */
         ESP_ERROR_CHECK(fg_init());
+
+        /*
+         * Then the settings, before the first sample, so nothing is ever reported
+         * through a half-configured conversion. A first boot has nothing stored, which
+         * is the normal path and not an error.
+         */
+        const esp_err_t cerr = config_load();
+        if (cerr == ESP_OK) {
+            ESP_LOGI(TAG, "settings restored from NVS ('config' to review)");
+        } else if (cerr == ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGI(TAG, "no stored settings -- defaults in use ('cal' to calibrate)");
+        }
 
 #if CONFIG_BATMON_BME_ENABLE
         /*
@@ -723,11 +730,9 @@ void app_main(void)
 #endif
     }
 
-    ctx->stream_enabled   = BATMON_STREAM_ON_BOOT;
-    ctx->rate_fast_ms     = CONFIG_BATMON_STREAM_FAST_MS;
-    ctx->rate_calc_ms     = CONFIG_BATMON_STREAM_CALC_MS;
-    ctx->rate_diag_ms     = CONFIG_BATMON_STREAM_DIAG_MS;
-    ctx->rate_env_ms      = CONFIG_BATMON_STREAM_ENV_MS;
+    /* No stream defaults here any more: config_defaults() set them from Kconfig and
+     * config_load() may have replaced them with something the user chose. Assigning
+     * them at this point would quietly undo every persisted telemetry rate. */
     stats_reset(history_window());
 
     if (ctx->sensors) {
@@ -753,6 +758,13 @@ void app_main(void)
      * which takes far longer than registering a dozen commands. */
     cli_ble_start();
 #endif
+
+    /*
+     * One more pass now that the panel and the radio exist: config_apply() skips them
+     * when they are not up yet, and they are started after the settings are loaded.
+     * Idempotent by construction -- it only ever writes what the struct already says.
+     */
+    config_apply();
 
     cli_start(ctx);
 }

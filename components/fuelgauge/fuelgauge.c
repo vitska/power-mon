@@ -201,7 +201,11 @@ static esp_err_t store(void)
 
     /* Config and state in one namespace but distinct keys, so a config edit does not
      * rewrite the accumulators and a state commit does not touch the config. */
-    if (err == ESP_OK) err = nvs_set_blob(h, "cfg", &s_fg.cfg, sizeof(s_fg.cfg));
+    /* The configuration is NOT written here. config.c owns every setting and
+     * persists it in namespace `cfg`; a second copy in this namespace would be a
+     * second answer to "what is this gauge set to", and the two would drift the
+     * first time one of them was written without the other. What this namespace
+     * keeps is the accumulated state below -- history, which nothing else owns. */
     if (err == ESP_OK) err = nvs_set_i64 (h, "q",   s_fg.charge_uas);
     if (err == ESP_OK) err = nvs_set_i64 (h, "in",  s_fg.cum_in_uas);
     if (err == ESP_OK) err = nvs_set_i64 (h, "out", s_fg.cum_out_uas);
@@ -247,11 +251,8 @@ esp_err_t fg_init(void)
         return ESP_OK;
     }
 
-    size_t sz = sizeof(s_fg.cfg);
-    fg_config_t tmp;
-    if (nvs_get_blob(h, "cfg", &tmp, &sz) == ESP_OK && sz == sizeof(tmp)) {
-        s_fg.cfg = tmp;
-    }
+    /* Configuration is read from config.c, not from here -- see the note in
+     * store(). An older store may still contain a "cfg" blob; it is ignored. */
 
     int64_t  i64;
     uint32_t u32;

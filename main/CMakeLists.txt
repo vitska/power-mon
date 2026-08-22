@@ -5,7 +5,7 @@ idf_component_register(
                 "ble.c"
                 "values.c"
                 "history_values.c"
-                "cal_store.c"
+                "config.c"
     INCLUDE_DIRS "."
     REQUIRES     driver esp_timer console bt esp_hw_support nvs_flash esp_app_format esp_driver_usb_serial_jtag vfs ina219 sensors fuelgauge bme280
 )

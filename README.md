@@ -367,28 +367,35 @@ CMakeLists.txt          top-level project
 partitions.csv          §6.2 layout, fixed now so it never moves
 sdkconfig.defaults      target, partitions, console, NimBLE
 main/
-  main.c                init, sampler task, statistics, zero calibrations
-  console_cmds.c        the console: measurement, calibration, gauge, dashboard
-  cal_store.c/.h        NVS-backed calibration (§6.1's cfg namespace, early)
-  display_debug.c/.h    screens, including the large SoC readout
-  ble_console.c/.h      bridges the console onto the BLE transport
-  app_ctx.h             shared state, sensor lock, protocol constants
+  main.c                init and the sampler task
+  values.c/.h           every live measured or calculated quantity
+  history_values.c/.h   accumulated and time-series quantities: the sample window
+  config.c/.h           every setting, as §6.1's cfg_t, persisted in namespace `cfg`
+  cli.c/.h              the textual interface: framing, commands, both transports
+  ble.c/.h              the BLE link: GAP, GATT, pairing, bonds, connections
+  lcd.c/.h              the internal OLED: panel driver and the screens on it
+  app_ctx.h             the devices and the sensor lock; protocol constants
   fixed_fmt.h           integer fixed-point formatting (no floats, §4.3)
+  font5x8.h             the 5×8 glyph table
   Kconfig.projbuild     pins, shunt, display, BLE
 components/
   ina219/               register-level driver, PGA auto-ranging, raw→SI, trims
   sensors/              dual-sensor roles, harness-drop correction
   fuelgauge/            counting, anchors, Peukert, capacity learning
   bme280/               BME280/BMP280, chip-ID probe, Bosch integer compensation
-  ssd1306/              128×32 OLED, 6×8 and pixel-doubled text
-  ble_serial/           NUS transport, pairing, bond store
 tools/
   idf.ps1  idf.sh       run idf.py in the espressif/idf container
   flash.ps1             host-side esptool flash (Windows has no COM passthrough)
   monitor.ps1           host-side serial console
 ```
 
-Still to come — `nvstore` (A/B slots, event log), `ble_svc` (JBD emulation),
-`ui` (button gestures), `config` — are specified in DESIGN.md §3.2 and are deliberately
-absent rather than stubbed. An empty module is a claim that its interface is settled.
+**The split in `main/` is by ownership of data, not by feature.** `values.h` answers
+"what is true right now", `history_values.h` answers questions about a span of samples,
+and `config.h` owns every setting — one struct, one place that persists it, pushed into
+the drivers rather than each driver persisting its own corner. The drivers stay
+components because they are testable in isolation and know nothing about the product.
+
+Still to come — `nvstore` (A/B slots, event log), `ble_svc` (JBD emulation) and
+`ui` (button gestures) — are specified in DESIGN.md §3.2 and are deliberately absent
+rather than stubbed. An empty module is a claim that its interface is settled.
 `lp_gauge` will never exist: §9.3 records why.

@@ -235,7 +235,7 @@ Calibration lives in NVS and is restored before the first sample is taken, so a
 reboot changes nothing:
 
 ```
-I (209) cal_store: restored: shunt 10000 uOhm, i offset -3100 uA gain 1017794 ppm,
+I (209) config: restored: shunt 10000 uOhm, i offset -3100 uA gain 1017794 ppm,
                    v offset 8000 uV gain 1005249 ppm
 I (209) main: calibration restored from NVS ('cal' to review)
 ```

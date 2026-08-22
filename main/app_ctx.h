@@ -29,7 +29,7 @@
  * Measured values live in values.h, accumulated ones in history_values.h and
  * settings in config.h -- this struct is now only the devices themselves.
  */
-typedef struct {
+typedef struct app_ctx_s {
     i2c_master_bus_handle_t bus_a;
     sensors_handle_t        sensors;
     bme280_handle_t         bme;
@@ -46,35 +46,10 @@ typedef struct {
      */
     SemaphoreHandle_t sensor_lock;
 
-    volatile bool     stream_enabled;
-
-    /* CSV instead of the human-readable line: same data, straight into a spreadsheet
-     * or a plot. A monitoring tool that cannot hand its numbers to something else is
-     * only half a tool. */
-    volatile bool     stream_csv;
+    /* Runtime, not configuration: whether the CSV header has been emitted on THIS
+     * stream since it was enabled. Settings live in config.h. */
     volatile bool     stream_csv_header_done;
 
-    /*
-     * Telemetry groups (§CLI.md). Rates differ by an order of magnitude either side of
-     * the middle group because the underlying quantities do:
-     *
-     *   fast  voltage and current   -- the measurement itself; a load step is an event
-     *   calc  power, SoC, charge    -- derived, and meaningless faster than the gauge
-     *   env   temperature and co.   -- thermal mass makes anything quick pointless
-     *
-     * 0 disables a group without disturbing the others.
-     */
-    volatile uint32_t rate_fast_ms;
-    volatile uint32_t rate_calc_ms;
-    volatile uint32_t rate_env_ms;
-    /*
-     * Diagnostics: raw shunt drop, active range, saturation. Mostly static, so a low
-     * periodic rate suffices -- but it is ALSO emitted the moment the range or the
-     * saturation flag changes, because those are exactly the events that invalidate
-     * the fast group's numbers, and learning about them a second late means a second
-     * of readings already believed.
-     */
-    volatile uint32_t rate_diag_ms;
 
 
 } app_ctx_t;
