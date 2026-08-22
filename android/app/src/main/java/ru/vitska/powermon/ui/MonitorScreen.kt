@@ -1,0 +1,168 @@
+package ru.vitska.powermon.ui
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import ru.vitska.powermon.model.MonitorViewModel
+import ru.vitska.powermon.model.Telemetry
+
+private fun f(v: Double?, dp: Int, unit: String = ""): String =
+    if (v == null) "—" else String.format("%.${dp}f%s", v, unit)
+
+@Composable
+fun MonitorScreen(vm: MonitorViewModel) {
+    val t by vm.telemetry.collectAsState()
+    val shake by vm.handshake.collectAsState()
+
+    Column(
+        Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (shake.mismatch) {
+            // CLI.md: refuse to drive a protocol you do not know rather than guess.
+            Warn(
+                "Protocol ${shake.protocol} — this app speaks 3. Fields may be missing " +
+                    "or misread; update one side."
+            )
+        }
+        if (t.saturated) {
+            // The whole reason the diagnostics group exists: sat=1 means the current
+            // reading is a range limit, not a measurement.
+            Warn("Shunt channel SATURATED (${t.pga}) — current readings are a range limit, not a measurement.")
+        }
+
+        // State of charge gets the space, as it does on the device's own panel.
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Text("STATE OF CHARGE", style = MaterialTheme.typography.labelSmall)
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        f(t.socPct, 1),
+                        fontSize = 56.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                    Text(" %", style = MaterialTheme.typography.titleMedium)
+                }
+                Spacer(Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { ((t.socPct ?: 0.0) / 100.0).toFloat().coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "${f(t.chargeAh, 2)} Ah   ·   ${t.state}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
+
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Metric("VOLTS", f(t.volts, 3), Modifier.weight(1f))
+            Metric("AMPS", f(t.amps, 4), Modifier.weight(1f))
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Metric("WATTS", f(t.watts, 2), Modifier.weight(1f))
+            Metric("RATE", t.fastHz?.let { String.format("%.1f Hz", it) } ?: "—",
+                Modifier.weight(1f))
+        }
+
+        Section("Gauge") {
+            KV("OCV estimate", f(t.ocvV, 3, " V"))
+            KV("Peukert factor", f(t.peukert, 3))
+            KV("Charge", f(t.chargeAh, 3, " Ah"))
+            KV("State", t.state)
+        }
+
+        Section("Diagnostics") {
+            KV("Shunt drop", f(t.shuntMv, 3, " mV"))
+            KV("Range", t.pga.ifBlank { "—" })
+            KV("Saturated", if (t.saturated) "YES" else "no")
+        }
+
+        Section("Environment") {
+            // Nulls are meaningful here: an empty CSV field means no sensor, and a BMP280
+            // has no humidity channel at all.
+            KV("Temperature", f(t.tempC, 2, " °C"))
+            KV("Humidity", t.humidPct?.let { f(it, 1, " %RH") } ?: "not available")
+            KV("Pressure", f(t.pressHpa, 2, " hPa"))
+        }
+
+        if (shake.firmware.isNotBlank()) {
+            Section("Device") {
+                KV("Firmware", shake.firmware)
+                KV("Protocol", shake.protocol?.toString() ?: "—")
+                KV("MAC", shake.mac)
+            }
+        }
+    }
+}
+
+@Composable
+private fun Metric(label: String, value: String, modifier: Modifier = Modifier) {
+    Card(modifier) {
+        Column(Modifier.padding(14.dp)) {
+            Text(label, style = MaterialTheme.typography.labelSmall)
+            Text(
+                value,
+                fontSize = 26.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+    }
+}
+
+@Composable
+fun Section(title: String, content: @Composable () -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(6.dp))
+            content()
+        }
+    }
+}
+
+@Composable
+fun KV(k: String, v: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(k, style = MaterialTheme.typography.bodyMedium)
+        Text(v, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+fun Warn(text: String) {
+    Card(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+    ) {
+        Text(
+            text,
+            Modifier.padding(14.dp),
+            color = MaterialTheme.colorScheme.onErrorContainer,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
