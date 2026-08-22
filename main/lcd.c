@@ -26,6 +26,7 @@
  * light-sleeps, against a T2 floor of ~300 uA (§9.8).
  */
 
+#include "history_values.h"
 #include "lcd.h"
 
 #include <inttypes.h>
@@ -46,6 +47,7 @@
 #include "freertos/task.h"
 #include "fuelgauge.h"
 #include "sdkconfig.h"
+#include "values.h"
 
 /* --- panel: private interface ------------------------------------------------- */
 
@@ -573,10 +575,10 @@ static void draw_live(const power_sample_t *s, bool valid, char spin)
                    FMT_W(b1, s->p_uw), ina219_pga_str(s->pga));
     /* Temperature shares this row with the shunt drop: both are diagnostics, and a
      * 21-column line has room for exactly these two. */
-    if (s_disp.ctx->env_valid) {
+    if (values()->env_valid) {
         ssd1306_printf(s_disp.oled, 2, "sh%7suV %sC",
                        FMT_MV(b1, s->v_shunt_uv),
-                       fixed_fmt(b2, sizeof(b2), s_disp.ctx->env.temp_centi_c, 100, 1));
+                       fixed_fmt(b2, sizeof(b2), values()->env.temp_centi_c, 100, 1));
     } else {
         ssd1306_printf(s_disp.oled, 2, "shunt %7suV%s",
                        FMT_MV(b1, s->v_shunt_uv), s->saturated ? " SAT" : "");
@@ -584,7 +586,7 @@ static void draw_live(const power_sample_t *s, bool valid, char spin)
 
     const uint32_t up_s = (uint32_t)(esp_timer_get_time() / 1000000);
     ssd1306_printf(s_disp.oled, 3, "n%-7lu up%lu:%02lu:%02lu",
-                   (unsigned long)s_disp.ctx->n_samples,
+                   (unsigned long)values()->n_samples,
                    (unsigned long)(up_s / 3600), (unsigned long)((up_s / 60) % 60),
                    (unsigned long)(up_s % 60));
 }
@@ -621,15 +623,15 @@ static void draw_health(char spin)
                    CONFIG_BATMON_ADDR_NEG_POLE, have_neg ? "ok" : "--",
                    resolved ? mode[0] : '?', spin);
     ssd1306_printf(s_disp.oled, 1, "bus%lu nf%lu rg%lu ur%lu",
-                   (unsigned long)ctx->err_bus,
-                   (unsigned long)ctx->err_not_finished,
-                   (unsigned long)ctx->err_range_discard,
-                   (unsigned long)ctx->err_unresolved);
+                   (unsigned long)values()->err_bus,
+                   (unsigned long)values()->err_not_finished,
+                   (unsigned long)values()->err_range_discard,
+                   (unsigned long)values()->err_unresolved);
     ssd1306_printf(s_disp.oled, 2, "mn%s sd%s",
-                   FMT_A(b1, stats_mean_ua(&ctx->window)),
-                   FMT_A(b2, stats_stddev_ua(&ctx->window)));
+                   FMT_A(b1, stats_mean_ua(history_window())),
+                   FMT_A(b2, stats_stddev_ua(history_window())));
     ssd1306_printf(s_disp.oled, 3, "off%7suA %lumR",
-                   FMT_MA(b1, ctx->last.idle_offset_ua),
+                   FMT_MA(b1, values()->last.idle_offset_ua),
                    (unsigned long)(CONFIG_BATMON_SHUNT_UOHM / 1000));
 }
 
@@ -706,8 +708,8 @@ static void display_task(void *arg)
 
         const char spin = spinner[tick & 3];
         switch (screen) {
-        case 0:  draw_big(&s_disp.ctx->last, s_disp.ctx->last_valid);      break;
-        case 1:  draw_live(&s_disp.ctx->last, s_disp.ctx->last_valid, spin); break;
+        case 0:  draw_big(&values()->last, values()->last_valid);      break;
+        case 1:  draw_live(&values()->last, values()->last_valid, spin); break;
         default: draw_health(spin);                                        break;
         }
 

@@ -20,6 +20,7 @@
 #include "ble.h"
 #include "bme280.h"
 #include "cal_store.h"
+#include "history_values.h"
 #include "lcd.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -34,6 +35,7 @@
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 #include "sensors.h"
+#include "values.h"
 
 static const char *TAG = "main";
 
@@ -106,83 +108,9 @@ void sensor_lock_give(app_ctx_t *ctx)
 
 /* --- statistics -------------------------------------------------------------- */
 
-void stats_reset(sample_stats_t *s)
-{
-    memset(s, 0, sizeof(*s));
-    s->min_ua = INT32_MAX;
-    s->max_ua = INT32_MIN;
-    s->min_uv = UINT32_MAX;
-    s->max_uv = 0;
-}
 
-void stats_add(sample_stats_t *s, const power_sample_t *smp)
-{
-    if (smp->i_valid) {
-        s->n++;
-        s->sum_ua    += smp->i_ua;
-        s->sum_sq_ua += (int64_t)smp->i_ua * (int64_t)smp->i_ua;
-        if (smp->i_ua < s->min_ua) s->min_ua = smp->i_ua;
-        if (smp->i_ua > s->max_ua) s->max_ua = smp->i_ua;
-    }
-    /* Voltage is only sampled every Nth pass (DESIGN.md §4.5), so accumulate it only
-     * on the passes where it is genuinely new. Otherwise the same reading would be
-     * counted eight times and the min/max would look far more stable than it is. */
-    if (smp->v_valid && smp->v_is_fresh) {
-        s->n_v++;
-        s->sum_uv += smp->v_pack_uv;
-        if (smp->v_pack_uv < s->min_uv) s->min_uv = smp->v_pack_uv;
-        if (smp->v_pack_uv > s->max_uv) s->max_uv = smp->v_pack_uv;
-    }
-}
 
-int32_t stats_mean_ua(const sample_stats_t *s)
-{
-    return s->n ? (int32_t)(s->sum_ua / (int64_t)s->n) : 0;
-}
 
-/* Divides by the voltage count, not the current count: voltage is sampled on its own
- * divisor (DESIGN.md 4.5), so the two differ by that factor. */
-int32_t stats_mean_uv(const sample_stats_t *s)
-{
-    return s->n_v ? (int32_t)(s->sum_uv / (int64_t)s->n_v) : 0;
-}
-
-/*
- * Integer square root, Newton's method. Avoiding sqrt() keeps the float ban whole
- * (DESIGN.md §4.3) and costs nothing at these call rates.
- *
- * The loop condition is `y < g`, not `y != g`: the naive form oscillates forever
- * between two adjacent values for inputs whose root is not exact, which on a
- * console command would simply hang the calling task.
- */
-static uint64_t isqrt64(uint64_t x)
-{
-    if (x == 0) {
-        return 0;
-    }
-    uint64_t g = x;
-    uint64_t y = (g + 1) / 2;
-    while (y < g) {
-        g = y;
-        y = (g + x / g) / 2;
-    }
-    return g;
-}
-
-int32_t stats_stddev_ua(const sample_stats_t *s)
-{
-    if (s->n < 2) {
-        return 0;
-    }
-    const int64_t mean = s->sum_ua / (int64_t)s->n;
-    /* var = E[x^2] - E[x]^2, population variance. Adequate here; the sample-vs-
-     * population distinction is noise next to the measurement it describes. */
-    int64_t var = (s->sum_sq_ua / (int64_t)s->n) - (mean * mean);
-    if (var < 0) {
-        var = 0; /* can only be rounding */
-    }
-    return (int32_t)isqrt64((uint64_t)var);
-}
 
 /* --- zero-current calibration (DESIGN.md §5.5) ------------------------------- */
 
@@ -466,11 +394,11 @@ static void emit_env(app_ctx_t *ctx, int64_t now_us)
     /* Empty fields, not zeros, when there is no sensor: 0.00 C is a plausible reading
      * and would be indistinguishable from a real one. */
     char line[112], bt[16] = "", bh[16] = "", bpr[16] = "";
-    if (ctx->env_valid) {
-        fixed_fmt(bt, sizeof(bt), ctx->env.temp_centi_c, 100, 2);
-        fixed_fmt(bpr, sizeof(bpr), (int64_t)ctx->env.press_pa, 100, 2);
-        if (ctx->env.have_humidity) {
-            fixed_fmt(bh, sizeof(bh), ctx->env.humid_centi, 100, 1);
+    if (values()->env_valid) {
+        fixed_fmt(bt, sizeof(bt), values()->env.temp_centi_c, 100, 2);
+        fixed_fmt(bpr, sizeof(bpr), (int64_t)values()->env.press_pa, 100, 2);
+        if (values()->env.have_humidity) {
+            fixed_fmt(bh, sizeof(bh), values()->env.humid_centi, 100, 1);
         }
     }
     snprintf(line, sizeof(line), "e,%lu,%s,%s,%s",
@@ -538,22 +466,22 @@ static void sampler_task(void *arg)
 
         switch (err) {
         case ESP_OK:
-            ctx->last       = s;
-            ctx->last_valid = true;
-            ctx->n_samples++;
-            stats_add(&ctx->window, &s);
+            values()->last       = s;
+            values()->last_valid = true;
+            values()->n_samples++;
+            stats_add(history_window(), &s);
             /* The gauge sees every accepted sample and nothing else -- a rejected
              * read must never reach the integrator (DESIGN.md §5.2). */
             fg_update(&s);
             break;
         case ESP_ERR_NOT_FINISHED:
-            ctx->err_not_finished++;
+            values()->err_not_finished++;
             break;
         case ESP_ERR_INVALID_STATE:
             /* Either a range discard or unresolved roles. The latter is a standing
              * condition, so warn once rather than every 100 ms. */
             if (sensors_get_role_state(ctx->sensors) != SENSORS_ROLE_RESOLVED) {
-                ctx->err_unresolved++;
+                values()->err_unresolved++;
                 if (!warned_unresolved) {
                     warned_unresolved = true;
                     ESP_LOGW(TAG, "roles unresolved -- NOT integrating. Apply a load "
@@ -561,11 +489,11 @@ static void sampler_task(void *arg)
                 }
                 vTaskDelay(pdMS_TO_TICKS(500));
             } else {
-                ctx->err_range_discard++;
+                values()->err_range_discard++;
             }
             break;
         default:
-            ctx->err_bus++;
+            values()->err_bus++;
             ESP_LOGE(TAG, "sensor read failed: %s", esp_err_to_name(err));
             vTaskDelay(pdMS_TO_TICKS(200));
             break;
@@ -578,13 +506,13 @@ static void sampler_task(void *arg)
          * sampling a thermal mass faster than anything consumes it. One forced read
          * costs ~12 ms, affordable every ten seconds and not at 10 Hz.
          */
-        if (ctx->bme && now >= ctx->env_next_us) {
+        if (ctx->bme && now >= values()->env_next_us) {
             const uint32_t ems = ctx->rate_env_ms ? ctx->rate_env_ms : 10000;
-            ctx->env_next_us   = now + (int64_t)ems * 1000;
+            values()->env_next_us   = now + (int64_t)ems * 1000;
             bme280_sample_t e;
             if (bme280_read(ctx->bme, &e) == ESP_OK) {
-                ctx->env       = e;
-                ctx->env_valid = true;
+                values()->env       = e;
+                values()->env_valid = true;
             } else {
                 /* §10: a temperature fault is not a gauge fault. Keep the last good
                  * value, keep counting, and retry on the next cadence. */
@@ -592,40 +520,40 @@ static void sampler_task(void *arg)
             }
         }
 
-        if (ctx->stream_enabled && ctx->last_valid) {
+        if (ctx->stream_enabled && values()->last_valid) {
             if (ctx->stream_csv) {
                 emit_headers(ctx);
 
                 /* Each group keeps its own deadline. A slow group cannot delay a fast
                  * one, and a group disabled with 0 simply never becomes due. */
                 if (ctx->rate_fast_ms && now >= next_fast_us &&
-                    ctx->last.t_us != last_fast_t) {
+                    values()->last.t_us != last_fast_t) {
                     next_fast_us = now + (int64_t)ctx->rate_fast_ms * 1000;
-                    last_fast_t  = ctx->last.t_us;
-                    emit_fast(&ctx->last);
+                    last_fast_t  = values()->last.t_us;
+                    emit_fast(&values()->last);
                 }
                 if (ctx->rate_calc_ms && now >= next_calc_us &&
-                    ctx->last.t_us != last_calc_t) {
+                    values()->last.t_us != last_calc_t) {
                     next_calc_us = now + (int64_t)ctx->rate_calc_ms * 1000;
-                    last_calc_t  = ctx->last.t_us;
-                    emit_calc(&ctx->last);
+                    last_calc_t  = values()->last.t_us;
+                    emit_calc(&values()->last);
                 }
                 if (ctx->rate_diag_ms) {
                     /* Change-or-deadline, whichever comes first. The change test is
                      * what makes a 1 s period acceptable for something a client needs
                      * to know about immediately. */
                     const bool changed = diag_primed &&
-                                         (ctx->last.pga != last_pga ||
-                                          ctx->last.saturated != last_sat);
+                                         (values()->last.pga != last_pga ||
+                                          values()->last.saturated != last_sat);
                     if (changed || now >= next_diag_us) {
                         next_diag_us = now + (int64_t)ctx->rate_diag_ms * 1000;
-                        last_pga     = ctx->last.pga;
-                        last_sat     = ctx->last.saturated;
+                        last_pga     = values()->last.pga;
+                        last_sat     = values()->last.saturated;
                         diag_primed  = true;
-                        emit_diag(&ctx->last);
+                        emit_diag(&values()->last);
                     } else if (!diag_primed) {
-                        last_pga    = ctx->last.pga;
-                        last_sat    = ctx->last.saturated;
+                        last_pga    = values()->last.pga;
+                        last_sat    = values()->last.saturated;
                         diag_primed = true;
                     }
                 }
@@ -637,7 +565,7 @@ static void sampler_task(void *arg)
                 /* Text mode stays one line per tick, at the calculated group's rate:
                  * it is for a person reading, and 10 Hz of scrolling is unreadable. */
                 next_calc_us = now + (int64_t)ctx->rate_calc_ms * 1000;
-                print_sample_line(&ctx->last, &ctx->window);
+                print_sample_line(&values()->last, history_window());
             }
         }
 
@@ -800,7 +728,7 @@ void app_main(void)
     ctx->rate_calc_ms     = CONFIG_BATMON_STREAM_CALC_MS;
     ctx->rate_diag_ms     = CONFIG_BATMON_STREAM_DIAG_MS;
     ctx->rate_env_ms      = CONFIG_BATMON_STREAM_ENV_MS;
-    stats_reset(&ctx->window);
+    stats_reset(history_window());
 
     if (ctx->sensors) {
         ctx->sensor_lock = xSemaphoreCreateMutex();

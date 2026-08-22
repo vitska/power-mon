@@ -22,31 +22,17 @@
 #include "bme280.h"
 #include "sensors.h"
 
-/** Running statistics over a window of samples — the basis of the zero-current
- *  calibration (DESIGN.md §5.5) and of judging noise during bring-up. */
-typedef struct {
-    uint32_t n;
-    int64_t  sum_ua;
-    int64_t  sum_sq_ua;   /* in (uA)^2; int64 holds ~9e18, so |i| up to ~3 A over
-                           * 1e6 samples stays in range with room to spare */
-    int32_t  min_ua;
-    int32_t  max_ua;
-    uint32_t n_v;         /* fresh voltage samples; voltage is read on its own
-                           * divisor (DESIGN.md 4.5) so it has its own count */
-    int64_t  sum_uv;
-    uint32_t min_uv;
-    uint32_t max_uv;
-} sample_stats_t;
 
-void    stats_reset(sample_stats_t *s);
-void    stats_add(sample_stats_t *s, const power_sample_t *smp);
-int32_t stats_mean_ua(const sample_stats_t *s);
-int32_t stats_stddev_ua(const sample_stats_t *s);
-int32_t stats_mean_uv(const sample_stats_t *s);
 
+/*
+ * The hardware this build is wired to, plus the lock that serialises access to it.
+ * Measured values live in values.h, accumulated ones in history_values.h and
+ * settings in config.h -- this struct is now only the devices themselves.
+ */
 typedef struct {
     i2c_master_bus_handle_t bus_a;
     sensors_handle_t        sensors;
+    bme280_handle_t         bme;
 
     /*
      * Guards ALL sensor acquisition. The INA219 in triggered mode is a
@@ -90,28 +76,7 @@ typedef struct {
      */
     volatile uint32_t rate_diag_ms;
 
-    /*
-     * Environmental sensor, read on its own slow cadence (§4.4) and cached. Nothing
-     * needs it at the sample rate -- thermal mass makes anything faster pointless --
-     * and a blocking forced-mode read on every pass would cost 12 ms in the sampler
-     * for a value that moves in minutes.
-     */
-    bme280_handle_t bme;
-    bme280_sample_t env;
-    bool            env_valid;
-    int64_t         env_next_us;
 
-    /* Guarded by nothing: M1 is single-writer (the sampler task) and the console
-     * only reads. Promoted to the seqlock of DESIGN.md §3.3 in M3. */
-    sample_stats_t window;
-    power_sample_t last;
-    bool           last_valid;
-
-    uint32_t err_not_finished;
-    uint32_t err_range_discard;
-    uint32_t err_unresolved;
-    uint32_t err_bus;
-    uint32_t n_samples;
 } app_ctx_t;
 
 /*

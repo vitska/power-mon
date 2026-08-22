@@ -38,11 +38,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "fuelgauge.h"
+#include "history_values.h"
 #include "ina219.h"
 #include "lcd.h"
 #include "linenoise/linenoise.h"
 #include "sdkconfig.h"
 #include "sensors.h"
+#include "values.h"
 
 /* --- framing, the local console, and the remote entry point ------------------ */
 
@@ -430,7 +432,7 @@ static int cmd_sensors(int argc, char **argv)
         else { printf("usage: sensors mode <p|n|single|auto>\n"); return 1; }
 
         const esp_err_t err = sensors_set_mode(s_ctx->sensors, m);
-        stats_reset(&s_ctx->window);
+        stats_reset(history_window());
         if (err != ESP_OK) {
             printf("mode set but roles could not be assigned: %s\n",
                    esp_err_to_name(err));
@@ -508,7 +510,7 @@ static int cmd_detect(int argc, char **argv)
     printf("Resolved: %s\n", sensors_mode_str(sensors_get_mode(s_ctx->sensors)));
     printf("Check the sign: charging must read positive. If it does not, use\n");
     printf("'sense sign invert' rather than rewiring.\n");
-    stats_reset(&s_ctx->window);
+    stats_reset(history_window());
     return 0;
 }
 
@@ -620,12 +622,12 @@ static int cmd_stream(int argc, char **argv)
 static int cmd_stats(int argc, char **argv)
 {
     if (argc >= 2 && strcmp(argv[1], "reset") == 0) {
-        stats_reset(&s_ctx->window);
+        stats_reset(history_window());
         printf("window reset\n");
         return 0;
     }
 
-    const sample_stats_t *w = &s_ctx->window;
+    const sample_stats_t *w = history_window();
     if (w->n == 0) {
         printf("no samples yet\n");
         return 0;
@@ -644,11 +646,11 @@ static int cmd_stats(int argc, char **argv)
                FMT_V(b3, w->max_uv));
     }
     printf("\n");
-    printf("total samples     : %lu\n", (unsigned long)s_ctx->n_samples);
-    printf("polls, not ready  : %lu\n", (unsigned long)s_ctx->err_not_finished);
-    printf("range discards    : %lu\n", (unsigned long)s_ctx->err_range_discard);
-    printf("unresolved skips  : %lu\n", (unsigned long)s_ctx->err_unresolved);
-    printf("bus errors        : %lu\n", (unsigned long)s_ctx->err_bus);
+    printf("total samples     : %lu\n", (unsigned long)values()->n_samples);
+    printf("polls, not ready  : %lu\n", (unsigned long)values()->err_not_finished);
+    printf("range discards    : %lu\n", (unsigned long)values()->err_range_discard);
+    printf("unresolved skips  : %lu\n", (unsigned long)values()->err_unresolved);
+    printf("bus errors        : %lu\n", (unsigned long)values()->err_bus);
     return 0;
 }
 
@@ -695,7 +697,7 @@ static int cmd_zero(int argc, char **argv)
     }
 
     printf("Applied. Note it down -- M1 does not persist anything (NVS lands in M3).\n");
-    stats_reset(&s_ctx->window);
+    stats_reset(history_window());
     return 0;
 }
 
@@ -731,7 +733,7 @@ static int cmd_shunt_loc(int argc, char **argv)
             return 1;
         }
         const esp_err_t err = sensors_set_mode(s_ctx->sensors, m);
-        stats_reset(&s_ctx->window);
+        stats_reset(history_window());
         if (err != ESP_OK) {
             printf("location set, but roles could not be assigned: %s\n",
                    esp_err_to_name(err));
@@ -781,7 +783,7 @@ static int cmd_shunt(int argc, char **argv)
             return 1;
         }
         ESP_ERROR_CHECK(ina219_set_shunt_uohm(dev, (uint32_t)v));
-        stats_reset(&s_ctx->window);
+        stats_reset(history_window());
     }
 
     const uint32_t r = ina219_get_shunt_uohm(dev);
@@ -827,7 +829,7 @@ static int cmd_gain(int argc, char **argv)
                    "than that means the shunt value is wrong, not the gain.\n");
             return 1;
         }
-        stats_reset(&s_ctx->window);
+        stats_reset(history_window());
     }
     printf("gain %lu ppm\n", (unsigned long)ina219_get_gain_ppm(dev));
     return 0;
@@ -843,7 +845,7 @@ static int cmd_offset(int argc, char **argv)
     if (argc >= 2) {
         ESP_ERROR_CHECK(ina219_set_offset_ua(dev,
                                              (int32_t)strtol(argv[1], NULL, 10)));
-        stats_reset(&s_ctx->window);
+        stats_reset(history_window());
     }
     char b[24];
     printf("offset %ld uA (%s A)\n", (long)ina219_get_offset_ua(dev),
@@ -921,7 +923,7 @@ static int cmd_profile(int argc, char **argv)
             printf("usage: profile <continuous|fast|triggered>\n");
             return 1;
         }
-        stats_reset(&s_ctx->window);
+        stats_reset(history_window());
 
         /* Persist, on the same terms as `sense`: only if a store already exists, so a
          * never-calibrated board is not given one by a profile change. */
@@ -957,7 +959,7 @@ static int cmd_sense(int argc, char **argv)
     if (argc >= 3 && strcmp(argv[1], "sign") == 0) {
         const bool inv = (strcmp(argv[2], "invert") == 0 || strcmp(argv[2], "1") == 0);
         ESP_ERROR_CHECK(ina219_set_invert_sign(dev, inv));
-        stats_reset(&s_ctx->window);
+        stats_reset(history_window());
     } else if (argc >= 3 && strcmp(argv[1], "vbuscomp") == 0) {
         ina219_vbus_comp_t c;
         if      (strcmp(argv[2], "none") == 0) c = INA219_VBUS_COMP_NONE;
@@ -1270,7 +1272,7 @@ static int cmd_curve(int argc, char **argv)
             ESP_ERROR_CHECK(ina219_set_vbus_offset_uv(vd, 0));
             ESP_ERROR_CHECK(ina219_set_vbus_gain_ppm(vd, 1000000));
         }
-        stats_reset(&s_ctx->window);
+        stats_reset(history_window());
         printf("reset%s%s. The divider ratio is hardware and is left alone.\n",
                doi ? " current" : "", dov ? " voltage" : "");
         curve_show(cd, vd);
@@ -1292,7 +1294,7 @@ static int cmd_curve(int argc, char **argv)
         const esp_err_t err = is_i ? ina219_set_offset_ua(cd, (int32_t)v)
                                    : ina219_set_vbus_offset_uv(vd, (int32_t)v);
         if (err != ESP_OK) { printf("failed: %s\n", esp_err_to_name(err)); return 1; }
-        stats_reset(&s_ctx->window);
+        stats_reset(history_window());
         curve_show(cd, vd);
         return 0;
     }
@@ -1307,7 +1309,7 @@ static int cmd_curve(int argc, char **argv)
                    esp_err_to_name(err));
             return 1;
         }
-        stats_reset(&s_ctx->window);
+        stats_reset(history_window());
         curve_show(cd, vd);
         return 0;
     }
@@ -1321,7 +1323,7 @@ static int cmd_curve(int argc, char **argv)
                    esp_err_to_name(err));
             return 1;
         }
-        stats_reset(&s_ctx->window);
+        stats_reset(history_window());
         curve_show(cd, vd);
         return 0;
     }
@@ -1381,7 +1383,7 @@ static int cmd_curve(int argc, char **argv)
             printf("nothing changed.\n");
             return 1;
         }
-        stats_reset(&s_ctx->window);
+        stats_reset(history_window());
         curve_show(cd, vd);
         return 0;
     }
@@ -1539,7 +1541,7 @@ static int cmd_mon(int argc, char **argv)
     printf("\033[2J\033[?25l"); /* clear once, hide the cursor */
 
     const int64_t started   = esp_timer_get_time();
-    uint32_t      last_n    = s_ctx->n_samples;
+    uint32_t      last_n    = values()->n_samples;
     int64_t       last_rate = started;
 
     char rate_s[16] = "--";
@@ -1550,19 +1552,19 @@ static int cmd_mon(int argc, char **argv)
         /* Sample rate over the last frame: the single best indicator that the
          * acquisition path is healthy, and it belongs on a monitoring screen. */
         if (now - last_rate >= 1000000) {
-            const uint32_t d = s_ctx->n_samples - last_n;
+            const uint32_t d = values()->n_samples - last_n;
             const int64_t  us = now - last_rate;
             char rb[16];
             snprintf(rate_s, sizeof(rate_s), "%s",
                      fixed_fmt(rb, sizeof(rb), (int64_t)d * 1000000 * 10 / us, 10, 1));
-            last_n    = s_ctx->n_samples;
+            last_n    = values()->n_samples;
             last_rate = now;
         }
 
         fg_status_t fg;
         fg_get(&fg);
-        const power_sample_t sm = s_ctx->last;
-        const bool valid        = s_ctx->last_valid;
+        const power_sample_t sm = values()->last;
+        const bool valid        = values()->last_valid;
 
         char b1[24], b2[24], b3[24], bar[16];
         mon_bar(bar, sizeof(bar), fg.soc_permille);
@@ -1591,13 +1593,13 @@ static int cmd_mon(int argc, char **argv)
             printf("  OCV   %9s V   I*R %7s mV   Peukert x%s\033[K\n",
                    FMT_V(b1, fg.ocv_uv), FMT_MV(b2, fg.ir_drop_uv),
                    fixed_fmt(b3, sizeof(b3), fg.peukert_factor_q16, 65536, 3));
-            if (s_ctx->env_valid) {
+            if (values()->env_valid) {
                 printf("  env   %8s C   %8s hPa%s%s\033[K\n",
-                       fixed_fmt(b1, sizeof(b1), s_ctx->env.temp_centi_c, 100, 2),
-                       fixed_fmt(b2, sizeof(b2), (int64_t)s_ctx->env.press_pa, 100, 2),
-                       s_ctx->env.have_humidity ? "   " : "",
-                       s_ctx->env.have_humidity
-                           ? fixed_fmt(b3, sizeof(b3), s_ctx->env.humid_centi, 100, 1)
+                       fixed_fmt(b1, sizeof(b1), values()->env.temp_centi_c, 100, 2),
+                       fixed_fmt(b2, sizeof(b2), (int64_t)values()->env.press_pa, 100, 2),
+                       values()->env.have_humidity ? "   " : "",
+                       values()->env.have_humidity
+                           ? fixed_fmt(b3, sizeof(b3), values()->env.humid_centi, 100, 1)
                            : "");
             } else {
                 printf("  env   no sensor\033[K\n");
@@ -1606,14 +1608,14 @@ static int cmd_mon(int argc, char **argv)
 
         printf("--------------------------------------------------------------\033[K\n");
         printf("  win n=%-6lu mean %10s A  sd %9s A\033[K\n",
-               (unsigned long)s_ctx->window.n,
-               FMT_A(b1, stats_mean_ua(&s_ctx->window)),
-               FMT_A(b2, stats_stddev_ua(&s_ctx->window)));
+               (unsigned long)history_window()->n,
+               FMT_A(b1, stats_mean_ua(history_window())),
+               FMT_A(b2, stats_stddev_ua(history_window())));
         printf("  err   bus %-4lu notready %-5lu range %-4lu unresolved %lu\033[K\n",
-               (unsigned long)s_ctx->err_bus,
-               (unsigned long)s_ctx->err_not_finished,
-               (unsigned long)s_ctx->err_range_discard,
-               (unsigned long)s_ctx->err_unresolved);
+               (unsigned long)values()->err_bus,
+               (unsigned long)values()->err_not_finished,
+               (unsigned long)values()->err_range_discard,
+               (unsigned long)values()->err_unresolved);
         printf("  gauge in %8s Ah  out %8s Ah  anchor %s\033[K\n",
                fixed_fmt(b1, sizeof(b1), fg.cum_in_uas / 3600, 1000000, 3),
                fixed_fmt(b2, sizeof(b2), fg.cum_out_uas / 3600, 1000000, 3),
@@ -2035,7 +2037,7 @@ static int cmd_cal(int argc, char **argv)
             ESP_ERROR_CHECK(ina219_set_vbus_offset_uv(vd, 0));
             ESP_ERROR_CHECK(ina219_set_vbus_gain_ppm(vd, 1000000));
         }
-        stats_reset(&s_ctx->window);
+        stats_reset(history_window());
         /* Persist the cleared state rather than leaving the old values on flash to
          * come back at the next boot -- a reset that undoes itself overnight is
          * worse than no reset at all. */
@@ -2142,7 +2144,7 @@ static int cmd_cal(int argc, char **argv)
             }
             cal_autosave();
         }
-        stats_reset(&s_ctx->window);
+        stats_reset(history_window());
         return 0;
     }
 
@@ -2220,7 +2222,7 @@ static int cmd_cal(int argc, char **argv)
         return 1;
     }
 
-    stats_reset(&s_ctx->window);
+    stats_reset(history_window());
     printf("Applied. Verify at a THIRD point -- a two-point fit always passes\n");
     printf("through its own two points: stats reset, change the load, stats.\n");
     cal_autosave();
@@ -2647,11 +2649,11 @@ static int cmd_options(int argc, char **argv)
            (unsigned long)s_ctx->rate_fast_ms, (unsigned long)s_ctx->rate_calc_ms,
            (unsigned long)s_ctx->rate_diag_ms, (unsigned long)s_ctx->rate_env_ms);
     printf("samples       %lu taken, window n=%lu\n",
-           (unsigned long)s_ctx->n_samples, (unsigned long)s_ctx->window.n);
+           (unsigned long)values()->n_samples, (unsigned long)history_window()->n);
     printf("errors        bus %lu, not-ready %lu, range %lu, unresolved %lu\n",
-           (unsigned long)s_ctx->err_bus, (unsigned long)s_ctx->err_not_finished,
-           (unsigned long)s_ctx->err_range_discard,
-           (unsigned long)s_ctx->err_unresolved);
+           (unsigned long)values()->err_bus, (unsigned long)values()->err_not_finished,
+           (unsigned long)values()->err_range_discard,
+           (unsigned long)values()->err_unresolved);
 
     printf("== shunt and sensors ===================== (shunt, sensors, detect)\n");
     if (s_ctx->sensors) {
@@ -2714,9 +2716,9 @@ static int cmd_options(int argc, char **argv)
         char be[24];
         printf("sensor        %s at 0x%02X\n",
                bme280_chip_str(bme280_chip(s_ctx->bme)), bme280_addr(s_ctx->bme));
-        if (s_ctx->env_valid) {
+        if (values()->env_valid) {
             printf("last reading  %s C (cached, refreshed every 60 s)\n",
-                   fixed_fmt(be, sizeof(be), s_ctx->env.temp_centi_c, 100, 2));
+                   fixed_fmt(be, sizeof(be), values()->env.temp_centi_c, 100, 2));
         } else {
             printf("last reading  none yet\n");
         }
