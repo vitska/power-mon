@@ -33,7 +33,7 @@ folder in Android Studio.
 | `ble/DeviceStore.kt` | The boards this phone has talked to, and which one it used last. |
 | `ui/MonitorScreen.kt` | Live SoC, volts, amps, watts, gauge, diagnostics, environment. |
 | `ui/DeviceSheet.kt` | Device picker: remembered boards merged with scan results. |
-| `ui/ConfigureScreen.kt` | Every setter, grouped as CLI.md groups them, with guarded calibration. |
+| `ui/ConfigureScreen.kt` | Calibration first, then every other setter, grouped as CLI.md groups them. |
 | `ui/ConsoleScreen.kt` | Raw command entry and transcript. |
 
 ## Several boards
@@ -59,6 +59,31 @@ and the next connection re-reads everything.
 Identity is the MAC address, not the name. `batmon-DCFA` is derived from the MAC so it is
 stable in practice, but the name is cached only so the picker can label a saved board
 before a scan has found it.
+
+## Calibrating from the phone
+
+Calibration sits at the top of the Configure tab, because it is the reason to open that
+tab while standing at the bench with a meter in hand; everything else there is set once
+and left alone. The panel is laid out in the order the work happens:
+
+1. **What the device reads now** — voltage, current, and raw shunt drop, live from the
+   stream, so the meter reading has something to be compared against without leaving the
+   screen. A saturated shunt channel says so here, since calibrating current against a
+   range limit solves for the limit.
+2. **Zero points** — `cal zero i` and `cal zero v`, the offsets. These come first: the
+   offset is subtracted before the gain is applied, so solving a gain against an
+   uncorrected offset bakes the offset into it.
+3. **Known values** — type what the meter reads and the device solves the gain: current
+   now, voltage *at rest*, and terminal voltage *under load* (`cal vpath`, which
+   separates a harness drop from a gain error). Each field offers the device's live
+   reading as a starting point to type over.
+4. **Save, refresh, erase** — and the device's own `cal` output underneath, re-read after
+   every action rather than inferred from what the command said.
+
+Every one of these is behind a dialog naming its physical precondition — load
+disconnected, VBUS at ground, reading taken at rest, at least 0.5 A flowing. The firmware
+cannot check any of them, and `cal zero i` run with current flowing poisons the offset
+permanently.
 
 ## Three decisions worth knowing about
 

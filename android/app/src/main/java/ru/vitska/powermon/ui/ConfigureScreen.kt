@@ -17,12 +17,14 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,11 +35,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import ru.vitska.powermon.ble.Link
 import ru.vitska.powermon.ble.Micro
 import ru.vitska.powermon.model.MonitorViewModel
 
 /**
- * Everything the console can set, grouped the way CLI.md groups it.
+ * Everything the console can set, grouped the way CLI.md groups it — calibration first,
+ * because it is the reason to reach for this screen while standing at the bench with a
+ * meter in hand. The rest is set once and left alone.
  *
  * Two rules from CLI.md section 7 are structural here, not cosmetic:
  *
@@ -50,7 +55,10 @@ import ru.vitska.powermon.model.MonitorViewModel
 @Composable
 fun ConfigureScreen(vm: MonitorViewModel) {
     val busy by vm.busy.collectAsState()
+    val link by vm.link.collectAsState()
+    val t by vm.telemetry.collectAsState()
     var last by remember { mutableStateOf<String?>(null) }
+    var calState by remember { mutableStateOf<String?>(null) }
     var confirm by remember { mutableStateOf<Confirmation?>(null) }
 
     val run: (String) -> Unit = { cmd ->
@@ -64,12 +72,25 @@ fun ConfigureScreen(vm: MonitorViewModel) {
         }
         Unit
     }
+    val readCal: () -> Unit = {
+        vm.launchCommandWith("cal") { r -> calState = r?.text }
+        Unit
+    }
     val guarded: (Confirmation) -> Unit = { confirm = it }
+
+    // Which points are already set is the first thing to know before touching any of
+    // this, and it costs a sub-100 ms command. Never cached across connections.
+    LaunchedEffect(link) {
+        if (link == Link.Ready && calState == null) readCal()
+    }
 
     Column(
         Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        if (link != Link.Ready) {
+            Warn("Not connected. Nothing on this screen can be read or set until a board is.")
+        }
         if (busy) Text("command in flight...", style = MaterialTheme.typography.labelMedium)
 
         last?.let { text ->
@@ -84,6 +105,153 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             }
         }
 
+        // ------------------------------------------------------------ calibration
+
+        Section("Calibration") {
+            Text(
+                "Two zero points, then one known value per channel. The device solves " +
+                    "and stores the trims itself — you supply the meter reading.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.height(10.dp))
+
+            // What the board thinks right now, so the meter reading has something to be
+            // compared against without leaving the screen.
+            Text("DEVICE READS NOW", style = MaterialTheme.typography.labelSmall)
+            KV("Voltage", t.volts?.let { String.format("%.3f V", it) } ?: "—")
+            KV("Current", t.amps?.let { String.format("%.4f A", it) } ?: "—")
+            KV("Shunt drop", t.shuntMv?.let { String.format("%.3f mV", it) } ?: "—")
+            if (t.saturated) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Shunt channel is SATURATED — calibrating current against this " +
+                        "reading will solve for a range limit, not a measurement.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(12.dp))
+
+            Text("ZERO POINTS", style = MaterialTheme.typography.labelSmall)
+            Text(
+                "Sets the offset: what the channel reads when the true value is zero. " +
+                    "Do these before the known-value points below.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.height(8.dp))
+            Wrap {
+                OutlinedButton(onClick = {
+                    guarded(
+                        Confirmation(
+                            "Record the current zero point?",
+                            "THE LOAD MUST BE DISCONNECTED. Running this with current " +
+                                "flowing poisons the offset permanently and the firmware " +
+                                "cannot detect it. Averages 256 samples, about 35 s.",
+                            "cal zero i",
+                        )
+                    )
+                }) { Text("Zero current") }
+                OutlinedButton(onClick = {
+                    guarded(
+                        Confirmation(
+                            "Record the voltage zero point?",
+                            "VBUS must be tied to GROUND, not merely disconnected — a " +
+                                "floating input reads a real voltage and the device will " +
+                                "refuse. Averages 256 samples, about 68 s.",
+                            "cal zero v",
+                        )
+                    )
+                }) { Text("Zero voltage") }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(12.dp))
+
+            Text("KNOWN VALUES", style = MaterialTheme.typography.labelSmall)
+            Text(
+                "Enter what your meter reads and the device solves the gain from it. " +
+                    "Current must exceed 10 mA and voltage 0.5 V, or there is no slope " +
+                    "to solve.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.height(8.dp))
+            MicroField(
+                "Measured current now", "A", "1.959",
+                prefill = t.amps?.let { String.format("%.4f", it) },
+            ) { v ->
+                guarded(
+                    Confirmation(
+                        "Set the current gain from " + v + " A?",
+                        "The meter and the device must be measuring the same current in " +
+                            "the same direction — a disagreement on sign is rejected " +
+                            "rather than absorbed. Averages 64 samples, about 17 s.",
+                        "cal top i " + Micro.amps(v),
+                    )
+                )
+            }
+            MicroField(
+                "Measured voltage AT REST", "V", "12.44",
+                prefill = t.volts?.let { String.format("%.3f", it) },
+            ) { v ->
+                guarded(
+                    Confirmation(
+                        "Set the voltage gain from " + v + " V?",
+                        "Take this reading with no load. Under load the harness drop " +
+                            "makes the solved gain wrong — that is what the harness " +
+                            "field below is for. About 17 s.",
+                        "cal top v " + Micro.volts(v),
+                    )
+                )
+            }
+            MicroField(
+                "Terminal voltage UNDER LOAD", "V", "12.10",
+                prefill = t.volts?.let { String.format("%.3f", it) },
+            ) { v ->
+                guarded(
+                    Confirmation(
+                        "Solve harness resistance from " + v + " V?",
+                        "Needs at least 0.5 A flowing, and the reading must be taken at " +
+                            "the battery terminals rather than at the board. This is what " +
+                            "separates a wiring drop from a gain error.",
+                        "cal vpath " + Micro.volts(v),
+                    )
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Wrap {
+                AssistChip(onClick = { run("cal save"); readCal() }, label = { Text("Save") })
+                AssistChip(onClick = { readCal() }, label = { Text("Refresh state") })
+                AssistChip(onClick = { run("curve") }, label = { Text("curve") })
+                OutlinedButton(onClick = {
+                    guarded(
+                        Confirmation(
+                            "Erase the stored calibration?",
+                            "Both live and stored trims are cleared. The board reverts to " +
+                                "nominal scaling until it is calibrated again.",
+                            "cal reset",
+                        )
+                    )
+                }) { Text("Erase") }
+            }
+
+            calState?.let { cs ->
+                Spacer(Modifier.height(12.dp))
+                Text("DEVICE CALIBRATION STATE", style = MaterialTheme.typography.labelSmall)
+                Text(
+                    cs,
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+
+        // ------------------------------------------------------------ the rest
+
         Section("Read state") {
             // The prose overviews. Displayed, never parsed.
             Wrap {
@@ -92,6 +260,34 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                     "stream", "profile", "disp", "ble", "scan", "stats", "read", "env",
                 ).forEach { c -> AssistChip(onClick = { run(c) }, label = { Text(c) }) }
             }
+        }
+
+        Section("Shunt and topology") {
+            Text(
+                "Get these right before calibrating: a wrong shunt value shows up as a " +
+                    "gain outside ±10 %, which the device refuses rather than absorbs.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.height(8.dp))
+            MicroField("Shunt resistance", "mOhm", "100") {
+                run("shunt " + Math.round(it * 1000.0))
+            }
+            Spacer(Modifier.height(8.dp))
+            Choice("shunt loc", listOf("p", "n", "single", "auto")) { run("shunt loc " + it) }
+            Choice("sense sign", listOf("normal", "invert")) { run("sense sign " + it) }
+            Choice("sense vbuscomp", listOf("none", "add", "sub")) { run("sense vbuscomp " + it) }
+            Choice("sense pgamax", listOf("1", "2", "4", "8")) { run("sense pgamax " + it) }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = {
+                guarded(
+                    Confirmation(
+                        "Detect topology?",
+                        "Needs a load -- the device refuses at zero current. Takes about " +
+                            "9 s and overwrites the shunt-location setting.",
+                        "detect",
+                    )
+                )
+            }) { Text("detect") }
         }
 
         Section("Telemetry rates") {
@@ -168,104 +364,6 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             }
         }
 
-        Section("Shunt and topology") {
-            MicroField("Shunt resistance", "mOhm", "100") {
-                run("shunt " + Math.round(it * 1000.0))
-            }
-            Spacer(Modifier.height(8.dp))
-            Choice("shunt loc", listOf("p", "n", "single", "auto")) { run("shunt loc " + it) }
-            Choice("sense sign", listOf("normal", "invert")) { run("sense sign " + it) }
-            Choice("sense vbuscomp", listOf("none", "add", "sub")) { run("sense vbuscomp " + it) }
-            Choice("sense pgamax", listOf("1", "2", "4", "8")) { run("sense pgamax " + it) }
-            Spacer(Modifier.height(8.dp))
-            OutlinedButton(onClick = {
-                guarded(
-                    Confirmation(
-                        "Detect topology?",
-                        "Needs a load -- the device refuses at zero current. Takes about " +
-                            "9 s and overwrites the shunt-location setting.",
-                        "detect",
-                    )
-                )
-            }) { Text("detect") }
-        }
-
-        Section("Calibration") {
-            Text(
-                "Each of these takes a meter reading and solves for the trim itself. The " +
-                    "preconditions are physical, and the firmware cannot check them for " +
-                    "you -- read each confirmation.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(Modifier.height(8.dp))
-            MicroField("Measured current now", "A", "1.959") { v ->
-                guarded(
-                    Confirmation(
-                        "Set the current gain from " + v + " A?",
-                        "The meter and the device must be measuring the same current, in " +
-                            "the same direction, and it must exceed 10 mA. Takes about 17 s.",
-                        "cal top i " + Micro.amps(v),
-                    )
-                )
-            }
-            MicroField("Measured voltage at rest", "V", "12.44") { v ->
-                guarded(
-                    Confirmation(
-                        "Set the voltage gain from " + v + " V?",
-                        "Take this reading AT REST. Under load the harness drop makes the " +
-                            "solved gain wrong -- use the harness field below for that.",
-                        "cal top v " + Micro.volts(v),
-                    )
-                )
-            }
-            MicroField("Terminal voltage under load", "V", "12.10") { v ->
-                guarded(
-                    Confirmation(
-                        "Solve harness resistance from " + v + " V?",
-                        "Needs at least 0.5 A flowing, and the reading must be taken at " +
-                            "the battery terminals rather than at the board.",
-                        "cal vpath " + Micro.volts(v),
-                    )
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            Wrap {
-                OutlinedButton(onClick = {
-                    guarded(
-                        Confirmation(
-                            "Zero the current channel?",
-                            "THE LOAD MUST BE DISCONNECTED. Running this with current " +
-                                "flowing poisons the offset permanently and the firmware " +
-                                "cannot detect it. Takes about 35 s.",
-                            "cal zero i",
-                        )
-                    )
-                }) { Text("cal zero i") }
-                OutlinedButton(onClick = {
-                    guarded(
-                        Confirmation(
-                            "Zero the voltage channel?",
-                            "VBUS must be tied to GROUND, not merely disconnected -- a " +
-                                "floating input reads a real voltage and the device will " +
-                                "refuse. Takes about 68 s.",
-                            "cal zero v",
-                        )
-                    )
-                }) { Text("cal zero v") }
-                OutlinedButton(onClick = { run("cal save") }) { Text("cal save") }
-                OutlinedButton(onClick = {
-                    guarded(
-                        Confirmation(
-                            "Erase the stored calibration?",
-                            "Both live and stored trims are cleared. The board reverts to " +
-                                "nominal scaling until it is calibrated again.",
-                            "cal reset",
-                        )
-                    )
-                }) { Text("cal reset") }
-            }
-        }
-
         Section("Display") {
             Wrap {
                 AssistChip(onClick = { run("disp on") }, label = { Text("on") })
@@ -329,7 +427,13 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             title = { Text(c.title) },
             text = { Text(c.body) },
             confirmButton = {
-                Button(onClick = { confirm = null; run(c.command) }) { Text("Run") }
+                Button(onClick = {
+                    confirm = null
+                    run(c.command)
+                    // Whatever it did, the stored state changed; re-read rather than
+                    // assume the command's own summary is the whole picture.
+                    readCal()
+                }) { Text("Run") }
             },
             dismissButton = {
                 TextButton(onClick = { confirm = null }) { Text("Cancel") }
@@ -387,23 +491,40 @@ private fun RateRow(group: String, hint: String, min: Int, max: Int, run: (Strin
     }
 }
 
-/** A field in human units; the lambda turns the value into a micro-unit command. */
+/**
+ * A field in human units; the lambda turns the value into a micro-unit command.
+ *
+ * [prefill] offers the device's own live reading as a starting point. It is a starting
+ * point and not a default: typing over it is the whole exercise, and submitting it
+ * unchanged would just re-solve unity.
+ */
 @Composable
-private fun MicroField(label: String, unit: String, hint: String, onSet: (Double) -> Unit) {
+private fun MicroField(
+    label: String,
+    unit: String,
+    hint: String,
+    prefill: String? = null,
+    onSet: (Double) -> Unit,
+) {
     var text by remember { mutableStateOf("") }
     val v = text.replace(',', '.').toDoubleOrNull()
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(
-            value = text,
-            onValueChange = { text = it },
-            label = { Text(if (unit.isBlank()) label else label + " (" + unit + ")") },
-            placeholder = { Text(hint) },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            modifier = Modifier.weight(1f),
-        )
-        Spacer(Modifier.width(8.dp))
-        Button(onClick = { v?.let(onSet) }, enabled = v != null) { Text("Set") }
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                label = { Text(if (unit.isBlank()) label else label + " (" + unit + ")") },
+                placeholder = { Text(hint) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = { v?.let(onSet) }, enabled = v != null) { Text("Set") }
+        }
+        if (prefill != null && text.isEmpty()) {
+            TextButton(onClick = { text = prefill }) { Text("use device reading " + prefill) }
+        }
     }
 }
 
