@@ -6,11 +6,14 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import ru.vitska.powermon.ble.BatmonClient
+import ru.vitska.powermon.ble.DeviceStore
 import ru.vitska.powermon.ble.Link
 import ru.vitska.powermon.ble.Nus
 import ru.vitska.powermon.ble.Record
+import ru.vitska.powermon.ble.Response
 
 /** Everything the monitor screen shows, assembled from the four record types. */
 data class Telemetry(
@@ -40,12 +43,24 @@ data class Handshake(
     val mismatch: Boolean = false,
 )
 
+/** One row in the device picker: a board this phone knows about, has just seen, or both. */
+data class DeviceEntry(
+    val address: String,
+    val name: String,
+    val rssi: Int?,
+    val known: Boolean,
+    val connected: Boolean,
+)
+
 class MonitorViewModel(app: Application) : AndroidViewModel(app) {
 
+    private val store = DeviceStore(app)
     val client = BatmonClient(app, viewModelScope)
 
     val link: StateFlow<Link> get() = client.link
     val deviceName: StateFlow<String?> get() = client.deviceName
+    val deviceAddress: StateFlow<String?> get() = client.deviceAddress
+    val scanning: StateFlow<Boolean> get() = client.scanning
 
     private val _tel = MutableStateFlow(Telemetry())
     val telemetry = _tel.asStateFlow()
@@ -59,22 +74,97 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
     private val _busy = MutableStateFlow(false)
     val busy = _busy.asStateFlow()
 
+    /** Bumped whenever the remembered set changes, to re-read it into [devices]. */
+    private val knownRevision = MutableStateFlow(0)
+
+    /**
+     * The picker's contents: remembered boards merged with whatever the scan has turned
+     * up, so a known board is listed (greyed, no signal) even before it answers a scan.
+     */
+    private val _devices = MutableStateFlow(emptyList<DeviceEntry>())
+    val devices = _devices.asStateFlow()
+
     /** Rolling window of fast-record arrivals, for a real rate rather than a claimed one. */
     private val fastStamps = ArrayDeque<Long>()
 
     init {
+        viewModelScope.launch { client.records.collect { r -> apply(r) } }
+        viewModelScope.launch { client.log.collect { l -> appendConsole(l) } }
         viewModelScope.launch {
-            client.records.collect { r -> apply(r) }
+            client.link.collect { st -> if (st == Link.Ready) onReady() }
         }
         viewModelScope.launch {
-            client.log.collect { l -> appendConsole(l) }
-        }
-        viewModelScope.launch {
-            client.link.collect { st ->
-                if (st == Link.Ready) onReady()
-            }
+            combine(
+                client.found,
+                knownRevision,
+                client.deviceAddress,
+            ) { found, _, current ->
+                val known = store.known()
+                val seen = found.associateBy { it.address.uppercase() }
+                val all = (known.keys.map { it.uppercase() } + seen.keys).distinct()
+                all.map { addr ->
+                    val hit = seen[addr]
+                    DeviceEntry(
+                        address = addr,
+                        name = hit?.name
+                            ?: known.entries.firstOrNull { it.key.uppercase() == addr }?.value
+                            ?: addr,
+                        rssi = hit?.rssi,
+                        known = known.keys.any { it.uppercase() == addr },
+                        connected = current?.uppercase() == addr,
+                    )
+                }.sortedWith(
+                    compareByDescending<DeviceEntry> { it.connected }
+                        .thenByDescending { it.rssi != null }
+                        .thenByDescending { it.rssi ?: Int.MIN_VALUE }
+                        .thenBy { it.name }
+                )
+            }.collect { list -> _devices.value = list }
         }
     }
+
+    // ------------------------------------------------------------------ devices
+
+    /**
+     * Called once the Bluetooth permissions are actually held. Reconnects to the board
+     * used last, via a scan rather than a direct connect: a scan hit proves the board is
+     * powered and in range, where a direct connect to an absent one just stalls until
+     * the stack gives up.
+     */
+    fun resumeLastOrScan() {
+        if (client.link.value == Link.Ready) return
+        knownRevision.value += 1
+        val last = store.last
+        if (last != null) appendConsole("looking for ${store.known()[last] ?: last}...")
+        // First run has no board to prefer, so the single board in range is the one
+        // meant; once anything is remembered, switching is always an explicit choice.
+        client.startScan(autoConnectTo = last, connectFirstFound = last == null)
+    }
+
+    fun scan() {
+        knownRevision.value += 1
+        client.startScan()
+    }
+
+    fun stopScan() = client.stopScan()
+
+    /** Switch to another board. The old link is dropped inside the client. */
+    fun connectTo(address: String, name: String? = null) {
+        // Nothing from the previous board should survive the switch: a stale voltage
+        // under a new device's name is worse than an empty panel.
+        _tel.value = Telemetry()
+        _shake.value = Handshake()
+        fastStamps.clear()
+        appendConsole("--- connecting to ${name ?: address}")
+        client.connect(address)
+    }
+
+    fun forget(address: String) {
+        store.forget(address)
+        knownRevision.value += 1
+    }
+
+    // ------------------------------------------------------------------ telemetry
 
     private fun apply(r: Record) {
         _tel.value = when (r) {
@@ -121,11 +211,18 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
                 mismatch = proto != null && proto != Nus.EXPECTED_PROTOCOL,
             )
         }
+        // Remember it only now: a board that reached a usable link is worth reconnecting
+        // to, whereas one that failed at discovery is not.
+        client.deviceAddress.value?.let { addr ->
+            store.remember(addr, client.deviceName.value ?: addr)
+            store.last = addr
+            knownRevision.value += 1
+        }
         run("stream csv")
     }
 
     /** Runs a command, appends the transcript, and hands back the response. */
-    suspend fun run(cmd: String): ru.vitska.powermon.ble.Response? {
+    suspend fun run(cmd: String): Response? {
         _busy.value = true
         appendConsole("> $cmd")
         val r = client.send(cmd)
@@ -142,10 +239,8 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
     fun launchCommand(cmd: String) = viewModelScope.launch { run(cmd) }
 
     /** Same, but hands the response back so a screen can show it in place. */
-    fun launchCommandWith(
-        cmd: String,
-        then: (ru.vitska.powermon.ble.Response?) -> Unit,
-    ) = viewModelScope.launch { then(run(cmd)) }
+    fun launchCommandWith(cmd: String, then: (Response?) -> Unit) =
+        viewModelScope.launch { then(run(cmd)) }
 
     private fun appendConsole(line: String) {
         // Bounded: a 10 Hz stream would otherwise turn the transcript into a leak.
@@ -154,6 +249,5 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearConsole() { _console.value = emptyList() }
 
-    fun connect() = client.startScan()
     fun disconnect() = client.disconnect()
 }

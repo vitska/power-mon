@@ -9,7 +9,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -23,21 +25,48 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import ru.vitska.powermon.ble.Link
 import ru.vitska.powermon.model.MonitorViewModel
-import ru.vitska.powermon.model.Telemetry
 
 private fun f(v: Double?, dp: Int, unit: String = ""): String =
     if (v == null) "—" else String.format("%.${dp}f%s", v, unit)
 
 @Composable
-fun MonitorScreen(vm: MonitorViewModel) {
+fun MonitorScreen(vm: MonitorViewModel, onPickDevice: () -> Unit = {}) {
     val t by vm.telemetry.collectAsState()
     val shake by vm.handshake.collectAsState()
+    val link by vm.link.collectAsState()
+    val scanning by vm.scanning.collectAsState()
 
     Column(
         Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        if (link != Link.Ready) {
+            // Without this the panel is a wall of dashes with no way forward: the way in
+            // is the device picker, so say so where the dashes are.
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        if (scanning) "Looking for boards" else "No board connected",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        if (scanning) {
+                            "Scanning for anything advertising as batmon-XXXX."
+                        } else {
+                            "Pick a board to monitor. The last one used is reconnected " +
+                                "automatically when the app starts."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Button(onClick = onPickDevice) { Text("Devices") }
+                }
+            }
+        }
+
         if (shake.mismatch) {
             // CLI.md: refuse to drive a protocol you do not know rather than guess.
             Warn(

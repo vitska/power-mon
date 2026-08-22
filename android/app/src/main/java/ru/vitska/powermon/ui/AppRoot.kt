@@ -3,25 +3,29 @@ package ru.vitska.powermon.ui
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TextButton
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ru.vitska.powermon.ble.Link
@@ -29,10 +33,21 @@ import ru.vitska.powermon.model.MonitorViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppRoot(vm: MonitorViewModel = viewModel()) {
+fun AppRoot(canScan: Boolean, vm: MonitorViewModel = viewModel()) {
     var tab by remember { mutableIntStateOf(0) }
+    var showDevices by remember { mutableStateOf(false) }
     val link by vm.link.collectAsState()
     val name by vm.deviceName.collectAsState()
+    val scanning by vm.scanning.collectAsState()
+
+    /*
+     * Reconnect to the board used last, but only once the Bluetooth permissions are
+     * actually held -- a scan started without them fails silently with an empty result,
+     * which looks exactly like a board that is switched off.
+     */
+    LaunchedEffect(canScan) {
+        if (canScan) vm.resumeLastOrScan()
+    }
 
     Scaffold(
         topBar = {
@@ -42,8 +57,8 @@ fun AppRoot(vm: MonitorViewModel = viewModel()) {
                         Text(name ?: "power-mon", style = MaterialTheme.typography.titleMedium)
                         Text(
                             when (link) {
-                                Link.Idle -> "not connected"
-                                Link.Scanning -> "scanning for batmon…"
+                                Link.Idle -> if (scanning) "scanning" else "not connected"
+                                Link.Scanning -> "scanning for batmon boards"
                                 Link.Connecting -> "connecting"
                                 Link.Discovering -> "discovering services"
                                 Link.Ready -> "ready"
@@ -56,8 +71,9 @@ fun AppRoot(vm: MonitorViewModel = viewModel()) {
                 actions = {
                     if (link == Link.Ready) {
                         TextButton(onClick = { vm.disconnect() }) { Text("Disconnect") }
-                    } else {
-                        TextButton(onClick = { vm.connect() }) { Text("Connect") }
+                    }
+                    IconButton(onClick = { vm.scan(); showDevices = true }) {
+                        Icon(Icons.Filled.Bluetooth, contentDescription = "Devices")
                     }
                 },
             )
@@ -87,10 +103,14 @@ fun AppRoot(vm: MonitorViewModel = viewModel()) {
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
             when (tab) {
-                0 -> MonitorScreen(vm)
+                0 -> MonitorScreen(vm) { vm.scan(); showDevices = true }
                 1 -> ConfigureScreen(vm)
                 else -> ConsoleScreen(vm)
             }
         }
+    }
+
+    if (showDevices) {
+        DeviceSheet(vm) { showDevices = false; vm.stopScan() }
     }
 }

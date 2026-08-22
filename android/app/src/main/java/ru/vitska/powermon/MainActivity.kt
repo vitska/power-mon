@@ -1,6 +1,7 @@
 package ru.vitska.powermon
 
 import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -10,7 +11,11 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
+import androidx.core.content.ContextCompat
 import ru.vitska.powermon.ui.AppRoot
 
 class MainActivity : ComponentActivity() {
@@ -28,13 +33,25 @@ class MainActivity : ComponentActivity() {
             arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
         }
 
+    /**
+     * Whether scanning is allowed to start. The auto-reconnect hangs off this rather than
+     * off startup, because a scan without the permission returns nothing at all and is
+     * indistinguishable from a board that is switched off.
+     */
+    private var canScan by mutableStateOf(false)
+
+    private fun held() = required.all {
+        ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+    }
+
     private val ask = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { /* The UI reflects the outcome by whether a scan finds anything. */ }
+    ) { canScan = held() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        ask.launch(required)
+        canScan = held()
+        if (!canScan) ask.launch(required)
 
         setContent {
             val dark = isSystemInDarkTheme()
@@ -55,7 +72,7 @@ class MainActivity : ComponentActivity() {
                     error = Color(0xFFA3322B),
                 )
             }
-            MaterialTheme(colorScheme = scheme) { AppRoot() }
+            MaterialTheme(colorScheme = scheme) { AppRoot(canScan = canScan) }
         }
     }
 }

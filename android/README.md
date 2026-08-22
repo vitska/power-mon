@@ -30,9 +30,35 @@ folder in Android Studio.
 | `ble/Protocol.kt` | The wire contract, transcribed from CLI.md: UUIDs, records, framing, micro-unit conversion, per-command timeouts. No Android APIs, so it is the part that can be reasoned about on its own. |
 | `ble/BatmonClient.kt` | One GATT connection. Scan → connect → MTU → discover → subscribe, then commands serialised through a channel. |
 | `model/MonitorViewModel.kt` | Folds the four record types into one `Telemetry`, runs the handshake, keeps a bounded transcript. |
+| `ble/DeviceStore.kt` | The boards this phone has talked to, and which one it used last. |
 | `ui/MonitorScreen.kt` | Live SoC, volts, amps, watts, gauge, diagnostics, environment. |
+| `ui/DeviceSheet.kt` | Device picker: remembered boards merged with scan results. |
 | `ui/ConfigureScreen.kt` | Every setter, grouped as CLI.md groups them, with guarded calibration. |
 | `ui/ConsoleScreen.kt` | Raw command entry and transcript. |
+
+## Several boards
+
+The app talks to one board at a time but remembers all of them. The Bluetooth button in
+the top bar opens the picker, which merges the boards this phone has connected to before
+with whatever the current scan turns up; tapping one switches to it, dropping the open
+link. A saved board with no signal reading is listed as "not seen in this scan", which is
+the honest statement — it may be powered down, or just out of range.
+
+On startup the app reconnects to the board it used last. It does that by **scanning for
+that address** rather than connecting to it directly: a scan hit proves the board is
+powered and in range, where a direct connect to an absent one stalls until the stack
+gives up. A board is remembered only once it reaches a usable link, so one that fails at
+service discovery does not become the thing the app chases on every launch. With nothing
+remembered yet — a fresh install — the first board found is taken, since there is no
+prior choice to respect.
+
+Switching clears the panel. A voltage from the previous board displayed under a new
+board's name would be worse than an empty readout, so telemetry and the handshake reset
+and the next connection re-reads everything.
+
+Identity is the MAC address, not the name. `batmon-DCFA` is derived from the MAC so it is
+stable in practice, but the name is cached only so the picker can label a saved board
+before a scan has found it.
 
 ## Three decisions worth knowing about
 
