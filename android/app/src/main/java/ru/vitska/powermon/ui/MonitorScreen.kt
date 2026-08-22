@@ -125,9 +125,15 @@ private fun Metric(label: String, value: String, modifier: Modifier = Modifier) 
             Text(label, style = MaterialTheme.typography.labelSmall)
             Text(
                 value,
-                fontSize = 26.sp,
+                // A signed four-decimal current ("-0.0216") is two characters longer
+                // than anything else shown here and wraps at the display size; step
+                // down rather than truncate, since the low-current digits are the
+                // ones worth reading.
+                fontSize = if (value.length > 6) 21.sp else 26.sp,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                softWrap = false,
             )
         }
     }
