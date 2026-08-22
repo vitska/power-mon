@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import ru.vitska.powermon.ble.ConfigState
 import ru.vitska.powermon.ble.Link
 import ru.vitska.powermon.ble.Micro
 import ru.vitska.powermon.model.MonitorViewModel
@@ -44,44 +45,57 @@ import ru.vitska.powermon.model.MonitorViewModel
  * because it is the reason to reach for this screen while standing at the bench with a
  * meter in hand. The rest is set once and left alone.
  *
+ * Every control shows what the device currently has, read from `config` rather than
+ * remembered from what this app last wrote: the device clamps values, another client can
+ * change them, and a stale echo of our own write is worse than no value at all. Each
+ * successful setter re-reads it.
+ *
  * Two rules from CLI.md section 7 are structural here, not cosmetic:
  *
  *   - Never auto-run calibration. `cal zero i` with a load connected permanently
  *     poisons the offset and the firmware cannot detect it, so every calibration
  *     action goes through a confirmation that states the physical precondition.
- *   - Most output is prose. So a command's result is shown verbatim rather than
- *     parsed -- including the refusal text, which always names a physical cause.
+ *   - Command output is prose. So a result is shown verbatim rather than parsed --
+ *     including the refusal text, which always names a physical cause.
  */
 @Composable
 fun ConfigureScreen(vm: MonitorViewModel) {
     val busy by vm.busy.collectAsState()
     val link by vm.link.collectAsState()
     val t by vm.telemetry.collectAsState()
+    val cfg by vm.config.collectAsState()
     var last by remember { mutableStateOf<String?>(null) }
-    var calState by remember { mutableStateOf<String?>(null) }
     var confirm by remember { mutableStateOf<Confirmation?>(null) }
 
+    /** A read-only command: show what it said, change nothing. */
     val run: (String) -> Unit = { cmd ->
         vm.launchCommandWith(cmd) { r ->
             last = if (r == null) {
                 "no reply -- timed out"
             } else {
-                (if (r.ok) "" else "exit " + r.exit + "\n") +
-                    r.text.ifBlank { "(no output)" }
+                (if (r.ok) "" else "exit " + r.exit + "\n") + r.text.ifBlank { "(no output)" }
             }
         }
         Unit
     }
-    val readCal: () -> Unit = {
-        vm.launchCommandWith("cal") { r -> calState = r?.text }
+
+    /** A setter: show what it said, then re-read what the device actually holds now. */
+    val set: (String) -> Unit = { cmd ->
+        vm.launchCommandWith(cmd) { r ->
+            last = if (r == null) {
+                "no reply -- timed out"
+            } else {
+                (if (r.ok) "" else "exit " + r.exit + "\n") + r.text.ifBlank { "(applied)" }
+            }
+            vm.launchRefreshConfig()
+        }
         Unit
     }
+
     val guarded: (Confirmation) -> Unit = { confirm = it }
 
-    // Which points are already set is the first thing to know before touching any of
-    // this, and it costs a sub-100 ms command. Never cached across connections.
     LaunchedEffect(link) {
-        if (link == Link.Ready && calState == null) readCal()
+        if (link == Link.Ready && !cfg.supported) vm.refreshConfig()
     }
 
     Column(
@@ -90,16 +104,19 @@ fun ConfigureScreen(vm: MonitorViewModel) {
     ) {
         if (link != Link.Ready) {
             Warn("Not connected. Nothing on this screen can be read or set until a board is.")
+        } else if (!cfg.supported) {
+            // Degrade honestly rather than showing values we would have to guess at.
+            Warn(
+                "This firmware has no `config` command, so current values cannot be " +
+                    "read. The controls still work; use `options` to see what is set."
+            )
         }
         if (busy) Text("command in flight...", style = MaterialTheme.typography.labelMedium)
 
         last?.let { text ->
             Section("Last response") {
-                Text(
-                    text,
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
-                )
+                Text(text, fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.height(6.dp))
                 TextButton(onClick = { last = null }) { Text("Dismiss") }
             }
@@ -115,8 +132,6 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             )
             Spacer(Modifier.height(10.dp))
 
-            // What the board thinks right now, so the meter reading has something to be
-            // compared against without leaving the screen.
             Text("DEVICE READS NOW", style = MaterialTheme.typography.labelSmall)
             KV("Voltage", t.volts?.let { String.format("%.3f V", it) } ?: "—")
             KV("Current", t.amps?.let { String.format("%.4f A", it) } ?: "—")
@@ -130,6 +145,29 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                     color = MaterialTheme.colorScheme.error,
                 )
             }
+
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(12.dp))
+
+            Text("TRIMS IN FORCE", style = MaterialTheme.typography.labelSmall)
+            KV("Current offset", cfg.long("cal.i_offset_ua")
+                ?.let { String.format("%+d uA", it) } ?: "—")
+            KV("Current gain", cfg.gainPct("cal.i_gain_ppm")
+                ?.let { it + "  (" + cfg.str("cal.i_gain_ppm") + " ppm)" } ?: "—")
+            KV("Voltage offset", cfg.long("cal.v_offset_uv")
+                ?.let { String.format("%+d uV", it) } ?: "—")
+            KV("Voltage gain", cfg.gainPct("cal.v_gain_ppm")
+                ?.let { it + "  (" + cfg.str("cal.v_gain_ppm") + " ppm)" } ?: "—")
+            KV("Harness path", cfg.milli("shunt.vpath_uohm", 3)?.let { it + " mOhm" } ?: "—")
+            KV(
+                "Stored in flash",
+                when (cfg.bool("cal.stored")) {
+                    true -> "yes"
+                    false -> "NO — unsaved, run Save"
+                    null -> "—"
+                },
+            )
 
             Spacer(Modifier.height(12.dp))
             HorizontalDivider()
@@ -224,8 +262,8 @@ fun ConfigureScreen(vm: MonitorViewModel) {
 
             Spacer(Modifier.height(12.dp))
             Wrap {
-                AssistChip(onClick = { run("cal save"); readCal() }, label = { Text("Save") })
-                AssistChip(onClick = { readCal() }, label = { Text("Refresh state") })
+                AssistChip(onClick = { set("cal save") }, label = { Text("Save") })
+                AssistChip(onClick = { vm.launchRefreshConfig() }, label = { Text("Refresh") })
                 AssistChip(onClick = { run("curve") }, label = { Text("curve") })
                 OutlinedButton(onClick = {
                     guarded(
@@ -238,29 +276,9 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                     )
                 }) { Text("Erase") }
             }
-
-            calState?.let { cs ->
-                Spacer(Modifier.height(12.dp))
-                Text("DEVICE CALIBRATION STATE", style = MaterialTheme.typography.labelSmall)
-                Text(
-                    cs,
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
         }
 
         // ------------------------------------------------------------ the rest
-
-        Section("Read state") {
-            // The prose overviews. Displayed, never parsed.
-            Wrap {
-                listOf(
-                    "ver", "options", "soc", "curve", "cal", "shunt", "sensors",
-                    "stream", "profile", "disp", "ble", "scan", "stats", "read", "env",
-                ).forEach { c -> AssistChip(onClick = { run(c) }, label = { Text(c) }) }
-            }
-        }
 
         Section("Shunt and topology") {
             Text(
@@ -269,14 +287,23 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(8.dp))
-            MicroField("Shunt resistance", "mOhm", "100") {
-                run("shunt " + Math.round(it * 1000.0))
-            }
+            MicroField(
+                "Shunt resistance", "mOhm", "100",
+                current = cfg.milli("shunt.uohm", 3),
+            ) { set("shunt " + Math.round(it * 1000.0)) }
             Spacer(Modifier.height(8.dp))
-            Choice("shunt loc", listOf("p", "n", "single", "auto")) { run("shunt loc " + it) }
-            Choice("sense sign", listOf("normal", "invert")) { run("sense sign " + it) }
-            Choice("sense vbuscomp", listOf("none", "add", "sub")) { run("sense vbuscomp " + it) }
-            Choice("sense pgamax", listOf("1", "2", "4", "8")) { run("sense pgamax " + it) }
+            Choice("shunt loc", listOf("p", "n", "single", "auto"),
+                cfg.str("shunt.loc")) { set("shunt loc " + it) }
+            Choice("sense sign", listOf("normal", "invert"),
+                cfg.str("sense.sign")) { set("sense sign " + it) }
+            Choice("sense vbuscomp", listOf("none", "add", "sub"),
+                cfg.str("sense.vbuscomp")) { set("sense vbuscomp " + it) }
+            Choice("sense pgamax", listOf("1", "2", "4", "8"),
+                cfg.str("sense.pgamax")) { set("sense pgamax " + it) }
+            Spacer(Modifier.height(4.dp))
+            KV("Roles", cfg.str("shunt.roles") ?: "—")
+            KV("Active range", cfg.str("sense.pga")?.let { "/" + it } ?: "—")
+            KV("Autorange", cfg.bool("sense.autorange")?.let { if (it) "on" else "off" } ?: "—")
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = {
                 guarded(
@@ -298,20 +325,34 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(8.dp))
-            RateRow("fast", "100", 20, 60_000, run)
-            RateRow("calc", "500", 20, 60_000, run)
-            RateRow("diag", "1000", 20, 60_000, run)
-            RateRow("env", "10000", 20, 600_000, run)
+            RateRow("fast", 20, 60_000, cfg.str("stream.fast_ms"), set)
+            RateRow("calc", 20, 60_000, cfg.str("stream.calc_ms"), set)
+            RateRow("diag", 20, 60_000, cfg.str("stream.diag_ms"), set)
+            RateRow("env", 20, 600_000, cfg.str("stream.env_ms"), set)
+            Spacer(Modifier.height(4.dp))
+            KV(
+                "Stream",
+                cfg.bool("stream.on")?.let {
+                    (if (it) "on" else "off") +
+                        (if (cfg.bool("stream.csv") == true) ", CSV" else ", text")
+                } ?: "—",
+            )
             Spacer(Modifier.height(8.dp))
             Wrap {
-                AssistChip(onClick = { run("stream csv") }, label = { Text("stream csv") })
-                AssistChip(onClick = { run("stream on") }, label = { Text("stream on") })
-                AssistChip(onClick = { run("stream off") }, label = { Text("stream off") })
+                AssistChip(onClick = { set("stream csv") }, label = { Text("stream csv") })
+                AssistChip(onClick = { set("stream on") }, label = { Text("stream on") })
+                AssistChip(onClick = { set("stream off") }, label = { Text("stream off") })
             }
             Spacer(Modifier.height(8.dp))
-            Choice("profile", listOf("continuous", "fast", "triggered")) {
-                run("profile " + it)
-            }
+            Choice("profile", listOf("continuous", "fast", "triggered"),
+                cfg.str("profile")) { set("profile " + it) }
+            KV(
+                "ADC pair time",
+                cfg.long("profile.pair_us")?.let {
+                    String.format("%.1f ms  (%.1f Hz ceiling)", it / 1000.0,
+                        if (it > 0) 1_000_000.0 / it else 0.0)
+                } ?: "—",
+            )
         }
 
         Section("Fuel gauge") {
@@ -321,23 +362,53 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(8.dp))
-            MicroField("Design capacity", "Ah", "44") { run("soc cap " + Micro.ampHours(it)) }
-            MicroField("0 % resting OCV", "V", "11.80") { run("soc v0 " + Micro.volts(it)) }
-            MicroField("100 % resting OCV", "V", "12.75") { run("soc v100 " + Micro.volts(it)) }
-            MicroField("Absorption (full) voltage", "V", "14.40") {
-                run("soc vfull " + Micro.volts(it))
+            MicroField("Design capacity", "Ah", "44", current = cfg.micro("soc.cap_uah", 1)) {
+                set("soc cap " + Micro.ampHours(it))
             }
-            MicroField("Internal resistance", "mOhm", "8") {
-                run("soc rint " + Math.round(it * 1000.0))
+            MicroField("0 % resting OCV", "V", "11.80", current = cfg.micro("soc.v0_uv", 3)) {
+                set("soc v0 " + Micro.volts(it))
             }
-            MicroField("Taper current", "A", "2.2") { run("soc taper " + Micro.amps(it)) }
-            MicroField("Rated discharge current", "A", "2.2") {
-                run("soc irated " + Micro.amps(it))
+            MicroField("100 % resting OCV", "V", "12.75", current = cfg.micro("soc.v100_uv", 3)) {
+                set("soc v100 " + Micro.volts(it))
             }
-            PlainField("Rest before OCV is trusted", "s", "600") { run("soc rest " + it) }
-            PlainField("Peukert k (Q8; 256 disables)", "q8", "300") { run("soc peukert " + it) }
-            PlainField("Learning depth", "per mille", "500") { run("soc depth " + it) }
-            MicroField("Force SoC", "%", "80") { run("soc set " + Micro.permille(it)) }
+            MicroField("Absorption (full) voltage", "V", "14.40",
+                current = cfg.micro("soc.vfull_uv", 3)) {
+                set("soc vfull " + Micro.volts(it))
+            }
+            MicroField("Internal resistance", "mOhm", "8",
+                current = cfg.milli("soc.rint_uohm", 3)) {
+                set("soc rint " + Math.round(it * 1000.0))
+            }
+            MicroField("Taper current", "A", "2.2", current = cfg.micro("soc.taper_ua", 3)) {
+                set("soc taper " + Micro.amps(it))
+            }
+            MicroField("Rated discharge current", "A", "2.2",
+                current = cfg.micro("soc.irated_ua", 3)) {
+                set("soc irated " + Micro.amps(it))
+            }
+            PlainField("Rest before OCV is trusted", "s", "600",
+                current = cfg.str("soc.rest_s")) { set("soc rest " + it) }
+            PlainField("Peukert k (Q8; 256 disables)", "q8", "300",
+                current = cfg.str("soc.peukert_q8")?.let { q ->
+                    q + "  (k " + String.format("%.3f", (q.toIntOrNull() ?: 256) / 256.0) + ")"
+                }) { set("soc peukert " + it) }
+            PlainField("Learning depth", "per mille", "500",
+                current = cfg.str("soc.depth_permille")) { set("soc depth " + it) }
+            MicroField("Force SoC", "%", "80",
+                current = cfg.long("soc.permille")?.let { String.format("%.1f", it / 10.0) }) {
+                set("soc set " + Micro.permille(it))
+            }
+            Spacer(Modifier.height(4.dp))
+            KV("Learned capacity", cfg.micro("soc.learned_uah", 2)?.let { it + " Ah" } ?: "—")
+            KV("Integration deadband", cfg.micro("soc.deadband_ua", 3)?.let { it + " A" } ?: "—")
+            KV(
+                "SoC source",
+                when (cfg.bool("soc.voltage_only")) {
+                    true -> "VOLTAGE only — no count behind it"
+                    false -> "counted"
+                    null -> "—"
+                },
+            )
             Spacer(Modifier.height(8.dp))
             Wrap {
                 OutlinedButton(onClick = {
@@ -365,14 +436,31 @@ fun ConfigureScreen(vm: MonitorViewModel) {
         }
 
         Section("Display") {
+            KV(
+                "Panel",
+                when (cfg.bool("disp.present")) {
+                    true -> if (cfg.bool("disp.on") == true) "on" else "blanked"
+                    false -> "none fitted"
+                    null -> "—"
+                },
+            )
+            KV(
+                "Screen",
+                cfg.str("disp.screen")?.let { sc ->
+                    if (sc == "auto") "auto-cycling " + (cfg.str("disp.screens") ?: "")
+                    else "pinned to " + sc
+                } ?: "—",
+            )
+            Spacer(Modifier.height(8.dp))
             Wrap {
-                AssistChip(onClick = { run("disp on") }, label = { Text("on") })
-                AssistChip(onClick = { run("disp off") }, label = { Text("off") })
-                AssistChip(onClick = { run("disp screen auto") }, label = { Text("screen auto") })
-                AssistChip(onClick = { run("disp screen 0") }, label = { Text("screen 0") })
+                AssistChip(onClick = { set("disp on") }, label = { Text("on") })
+                AssistChip(onClick = { set("disp off") }, label = { Text("off") })
+                AssistChip(onClick = { set("disp screen auto") }, label = { Text("screen auto") })
+                AssistChip(onClick = { set("disp screen 0") }, label = { Text("screen 0") })
             }
             Spacer(Modifier.height(8.dp))
-            PlainField("Contrast (1-255; 0x40 default)", "", "64") { run("disp contrast " + it) }
+            PlainField("Contrast (1-255; 0x40 default)", "", "64",
+                current = cfg.str("disp.contrast")) { set("disp contrast " + it) }
         }
 
         Section("BLE and pairing") {
@@ -383,7 +471,16 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(8.dp))
-            Choice("ble pair", listOf("open", "bonded")) { mode ->
+            KV("Name", cfg.str("ble.name") ?: "—")
+            KV(
+                "Links",
+                cfg.str("ble.conns")?.let { c ->
+                    c + " connected, " + (cfg.str("ble.subs") ?: "?") + " subscribed"
+                } ?: "—",
+            )
+            KV("Bonds", cfg.str("ble.bonds") ?: "—")
+            Spacer(Modifier.height(8.dp))
+            Choice("ble pair", listOf("open", "bonded"), cfg.str("ble.pair")) { mode ->
                 guarded(
                     Confirmation(
                         "Switch pairing to " + mode + "?",
@@ -400,8 +497,9 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                 )
             }
             Spacer(Modifier.height(8.dp))
-            PlainField("Fixed passkey (blank for random)", "", "random") {
-                run("ble passkey " + it.ifBlank { "random" })
+            PlainField("Fixed passkey (blank for random)", "", "random",
+                current = cfg.str("ble.passkey")) {
+                set("ble passkey " + it.ifBlank { "random" })
             }
             Wrap {
                 AssistChip(onClick = { run("ble bonds") }, label = { Text("bonds") })
@@ -418,6 +516,18 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             }
         }
 
+        Section("Read state") {
+            // The prose overviews, for the things `config` deliberately does not carry:
+            // history, statistics, and anything a person reads rather than a program.
+            Wrap {
+                listOf(
+                    "ver", "options", "soc", "curve", "cal", "shunt", "sensors",
+                    "stream", "profile", "disp", "ble", "scan", "stats", "read", "env",
+                    "config",
+                ).forEach { c -> AssistChip(onClick = { run(c) }, label = { Text(c) }) }
+            }
+        }
+
         Spacer(Modifier.height(24.dp))
     }
 
@@ -427,13 +537,7 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             title = { Text(c.title) },
             text = { Text(c.body) },
             confirmButton = {
-                Button(onClick = {
-                    confirm = null
-                    run(c.command)
-                    // Whatever it did, the stored state changed; re-read rather than
-                    // assume the command's own summary is the whole picture.
-                    readCal()
-                }) { Text("Run") }
+                Button(onClick = { confirm = null; set(c.command) }) { Text("Run") }
             },
             dismissButton = {
                 TextButton(onClick = { confirm = null }) { Text("Cancel") }
@@ -454,55 +558,74 @@ private fun Wrap(content: @Composable () -> Unit) {
     ) { content() }
 }
 
+/** Options for one setting, with the device's current choice marked. */
 @Composable
-private fun Choice(label: String, options: List<String>, onPick: (String) -> Unit) {
+private fun Choice(
+    label: String,
+    options: List<String>,
+    current: String?,
+    onPick: (String) -> Unit,
+) {
     Column(Modifier.fillMaxWidth()) {
         Text(label, style = MaterialTheme.typography.labelMedium)
         Wrap {
             options.forEach { o ->
-                // No selected state: the device is the authority on what is set, and this
-                // app deliberately does not cache configuration across connections.
-                FilterChip(selected = false, onClick = { onPick(o) }, label = { Text(o) })
+                FilterChip(
+                    selected = current == o,
+                    onClick = { onPick(o) },
+                    label = { Text(o) },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun RateRow(group: String, hint: String, min: Int, max: Int, run: (String) -> Unit) {
+private fun RateRow(
+    group: String,
+    min: Int,
+    max: Int,
+    current: String?,
+    set: (String) -> Unit,
+) {
     var text by remember { mutableStateOf("") }
     val v = text.toIntOrNull()
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(
-            value = text,
-            onValueChange = { s -> text = s.filter { it.isDigit() } },
-            label = { Text("stream " + group + " (ms)") },
-            placeholder = { Text(hint) },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.weight(1f),
-        )
-        Spacer(Modifier.width(8.dp))
-        Button(
-            onClick = { if (v != null && v in min..max) run("stream " + group + " " + v) },
-            enabled = v != null && v in min..max,
-        ) { Text("Set") }
-        TextButton(onClick = { run("stream " + group + " off") }) { Text("Off") }
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { s -> text = s.filter { it.isDigit() } },
+                label = { Text("stream " + group + " (ms)") },
+                // The placeholder is the device's value, so an untouched field is not
+                // silently suggesting a default the board does not have.
+                placeholder = { Text(current ?: "—") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            Button(
+                onClick = { if (v != null && v in min..max) set("stream " + group + " " + v) },
+                enabled = v != null && v in min..max,
+            ) { Text("Set") }
+            TextButton(onClick = { set("stream " + group + " off") }) { Text("Off") }
+        }
+        Current(current, if (current == "0") "off" else current?.let { it + " ms" })
     }
 }
 
 /**
  * A field in human units; the lambda turns the value into a micro-unit command.
  *
- * [prefill] offers the device's own live reading as a starting point. It is a starting
- * point and not a default: typing over it is the whole exercise, and submitting it
- * unchanged would just re-solve unity.
+ * [current] is what the device holds, shown under the field. [prefill] offers a live
+ * reading as a starting point — used for calibration, where the point is to type over it.
  */
 @Composable
 private fun MicroField(
     label: String,
     unit: String,
     hint: String,
+    current: String? = null,
     prefill: String? = null,
     onSet: (Double) -> Unit,
 ) {
@@ -514,7 +637,7 @@ private fun MicroField(
                 value = text,
                 onValueChange = { text = it },
                 label = { Text(if (unit.isBlank()) label else label + " (" + unit + ")") },
-                placeholder = { Text(hint) },
+                placeholder = { Text(current ?: hint) },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 modifier = Modifier.weight(1f),
@@ -522,6 +645,7 @@ private fun MicroField(
             Spacer(Modifier.width(8.dp))
             Button(onClick = { v?.let(onSet) }, enabled = v != null) { Text("Set") }
         }
+        Current(current, current?.let { it + " " + unit })
         if (prefill != null && text.isEmpty()) {
             TextButton(onClick = { text = prefill }) { Text("use device reading " + prefill) }
         }
@@ -530,18 +654,39 @@ private fun MicroField(
 
 /** A field whose value is already in the units the command wants. */
 @Composable
-private fun PlainField(label: String, unit: String, hint: String, onSet: (String) -> Unit) {
+private fun PlainField(
+    label: String,
+    unit: String,
+    hint: String,
+    current: String? = null,
+    onSet: (String) -> Unit,
+) {
     var text by remember { mutableStateOf("") }
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(
-            value = text,
-            onValueChange = { text = it },
-            label = { Text(if (unit.isBlank()) label else label + " (" + unit + ")") },
-            placeholder = { Text(hint) },
-            singleLine = true,
-            modifier = Modifier.weight(1f),
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                label = { Text(if (unit.isBlank()) label else label + " (" + unit + ")") },
+                placeholder = { Text(current ?: hint) },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = { onSet(text) }, enabled = text.isNotBlank()) { Text("Set") }
+        }
+        Current(current, current)
+    }
+}
+
+/** "on the device: X", or nothing at all when the device has not told us. */
+@Composable
+private fun Current(current: String?, rendered: String?) {
+    if (current != null && rendered != null) {
+        Text(
+            "on the device: " + rendered,
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
         )
-        Spacer(Modifier.width(8.dp))
-        Button(onClick = { onSet(text) }) { Text("Set") }
     }
 }

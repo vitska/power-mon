@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import ru.vitska.powermon.ble.BatmonClient
+import ru.vitska.powermon.ble.ConfigState
 import ru.vitska.powermon.ble.DeviceStore
 import ru.vitska.powermon.ble.Link
 import ru.vitska.powermon.ble.Nus
@@ -73,6 +74,13 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _busy = MutableStateFlow(false)
     val busy = _busy.asStateFlow()
+
+    /**
+     * What the device says its settings are. Re-read on connect and after every setter,
+     * never carried across connections: another client may have changed any of it.
+     */
+    private val _config = MutableStateFlow(ConfigState.EMPTY)
+    val config = _config.asStateFlow()
 
     /** Bumped whenever the remembered set changes, to re-read it into [devices]. */
     private val knownRevision = MutableStateFlow(0)
@@ -154,6 +162,7 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
         // under a new device's name is worse than an empty panel.
         _tel.value = Telemetry()
         _shake.value = Handshake()
+        _config.value = ConfigState.EMPTY
         fastStamps.clear()
         appendConsole("--- connecting to ${name ?: address}")
         client.connect(address)
@@ -218,8 +227,21 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
             store.last = addr
             knownRevision.value += 1
         }
+        refreshConfig()
         run("stream csv")
     }
+
+    /**
+     * Re-reads every setting. Cheap (one sub-100 ms command) and the only honest way to
+     * show a current value: the alternative is echoing back what this app last wrote,
+     * which is wrong the moment the device clamps a value or another client changes one.
+     */
+    suspend fun refreshConfig() {
+        val r = client.send("config")
+        _config.value = if (r != null && r.ok) ConfigState.parse(r.lines) else ConfigState.EMPTY
+    }
+
+    fun launchRefreshConfig() = viewModelScope.launch { refreshConfig() }
 
     /** Runs a command, appends the transcript, and hands back the response. */
     suspend fun run(cmd: String): Response? {
