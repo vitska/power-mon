@@ -2237,7 +2237,14 @@ static int cmd_config(int argc, char **argv)
     ina219_handle_t vd = s_ctx->sensors ? sensors_voltage_dev(s_ctx->sensors) : NULL;
 
     if (s_ctx->sensors) {
-        printf("shunt.loc=%s\n", sensors_mode_str(sensors_get_mode(s_ctx->sensors)));
+        /* sensors_mode_str() is prose for a person ("N: shunt in negative lead").
+         * This command's contract is that a value is what the setter takes, so
+         * emit the keyword `shunt loc` accepts and nothing else. */
+        const sensors_mode_t m = sensors_get_mode(s_ctx->sensors);
+        printf("shunt.loc=%s\n",
+               m == SENSORS_MODE_P      ? "p" :
+               m == SENSORS_MODE_N      ? "n" :
+               m == SENSORS_MODE_SINGLE ? "single" : "auto");
         printf("shunt.roles=%s\n",
                sensors_get_role_state(s_ctx->sensors) == SENSORS_ROLE_RESOLVED
                    ? "resolved" : "unresolved");
