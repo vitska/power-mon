@@ -195,6 +195,91 @@ should refuse to drive a `protocol` it does not know rather than guess.
 
 ---
 
+## 3b. `config` — reading the current settings
+
+`ver` says what the device *is*. `config` says what it is *set to*, and it is the only
+command besides `ver` and the CSV stream meant for a program to read.
+
+One `key=value` per line, no prose, no alignment to match on:
+
+```
+> config
+protocol=3
+firmware=0.5.0-m2
+stream.on=1
+stream.csv=1
+stream.fast_ms=100
+stream.calc_ms=500
+stream.diag_ms=1000
+stream.env_ms=10000
+shunt.loc=single
+shunt.roles=resolved
+shunt.vpath_uohm=36000
+sensors.pos=1
+sensors.neg=0
+profile=fast
+profile.pair_us=68100
+shunt.uohm=100000
+cal.i_offset_ua=-142
+cal.i_gain_ppm=1003800
+cal.v_offset_uv=0
+cal.v_gain_ppm=1000000
+cal.v_divider_q16=65536
+cal.stored=1
+sense.sign=invert
+sense.vbuscomp=none
+sense.pgamax=8
+sense.pga=1
+sense.autorange=1
+soc.cap_uah=44000000
+soc.v0_uv=11800000
+soc.v100_uv=12750000
+soc.vfull_uv=14400000
+soc.rint_uohm=8000
+soc.taper_ua=2200000
+soc.rest_s=600
+soc.peukert_q8=294
+soc.irated_ua=2200000
+soc.depth_permille=500
+disp.present=1
+disp.on=1
+disp.screen=auto
+disp.contrast=64
+ble.pair=open
+ble.passkey=random
+ble.conns=1
+ble.bonds=0
+env.sensor=BME280
+exit 0
+```
+
+**Values are in the units the matching setter takes.** `soc.cap_uah=44000000` is what
+`soc cap 44000000` set, and enums are the exact keyword the setter accepts — so
+`sense.sign=invert` came from `sense sign invert`. That round-trip is the point: a client
+can show current values and write new ones without a table mapping one spelling to the
+other. Two deliberate exceptions, both because the setter's argument is not the natural
+reading: `sense.pgamax` and `sense.pga` print the **divisor** (`8`, matching
+`sense pgamax 8`) rather than the register's index, and `disp.screen` is `auto` or a
+number, matching `disp screen auto`.
+
+**Keys are namespaced by the command that owns them.** Skip keys you do not recognise,
+exactly as you skip unknown telemetry records: new settings appear here without a
+protocol bump, and only a change to an existing key's *meaning* is breaking.
+
+Some keys are state rather than settings, included because a client showing a setting
+usually wants them in the same breath: `soc.permille`, `soc.voltage_only`,
+`soc.learned_uah`, `shunt.roles`, `sense.pga`, `cal.stored`, `ble.conns`, `ble.bonds`,
+`profile.pair_us`.
+
+**Re-read it after every setter rather than echoing back what you wrote.** The device
+clamps and rejects values, and another client may change one at any time — CLI.md's rule
+about not caching configuration across connections applies just as much within one.
+
+A firmware without this command answers `exit -2`. Treat that as "current values
+unavailable" and carry on; every setter still works.
+
+---
+
 ## 4. Units — the thing to get right first
 
 **Every numeric argument is an integer in micro-units. There are no decimal points
@@ -357,7 +442,8 @@ Grouped by what they touch. "Persists" means it survives a power cycle.
 |---|---|
 | `ver` | §3. Machine-parseable. |
 | `help` | All commands with hints. ~1.5 KB, near the truncation cap. |
-| `options` | Everything currently set, in labelled sections. Human-oriented; use the specific commands for parsing. |
+| `options` | Everything currently set, in labelled sections. Human-oriented; use `config` for parsing. |
+| `config` | Every setting as `key=value`, one per line. **This is the machine-readable one.** |
 
 ### Measurement
 
@@ -485,9 +571,9 @@ including calibration. It is the default and it is a bench setting.
 ```
 scan / connect to batmon-XXXX
 subscribe to TX                     <- before anything else
-send  ver                           -> check protocol == 1
-send  soc                           -> capacity, endpoints, state
-send  curve                         -> calibration state, to show "uncalibrated"
+send  ver                           -> check protocol == 3
+send  config                        -> every setting, machine-readable
+send  soc                           -> the prose gauge detail, if you show it
 send  stream csv                    -> live telemetry begins
 send  stream 1000                   -> pick a cadence
 ```
@@ -513,9 +599,10 @@ Things worth building in from the start:
 
 Stated plainly, because a client author will hit them.
 
-1. **Most output is prose, not a data format.** `ver` and `stream csv` are the only
-   machine-oriented surfaces. Everything else is designed to be read by a person, and
-   parsing it means matching on label text. A structured mode (JSON or TLV) is the
+1. **Most output is prose, not a data format.** `ver`, `config` and `stream csv` are
+   the machine-oriented surfaces; `config` covers every *setting*, but command results,
+   `stats`, `scan` and the rest are designed to be read by a person, and parsing those
+   means matching on label text. A fully structured mode (JSON or TLV) is still the
    obvious next protocol version; DESIGN.md §7.8 specifies a binary telemetry
    characteristic that supersedes CSV.
 2. **No push telemetry outside the stream.** There is no notification on state change,
