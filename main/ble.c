@@ -1,5 +1,5 @@
 /*
- * ble_serial.c — see ble_serial.h.
+ * ble.c — see ble.h.
  *
  * Three structural decisions, each of which is easy to get wrong and expensive to
  * debug:
@@ -18,7 +18,7 @@
  *    goes to everyone.
  */
 
-#include "ble_serial.h"
+#include "ble.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -79,20 +79,20 @@ typedef struct {
 
 static struct {
     char                 name[BLE_NAME_MAX + 1];
-    ble_serial_line_cb_t on_line;
+    ble_line_cb_t on_line;
     void                *user;
 
-    conn_slot_t     conns[BLE_SERIAL_MAX_CONNS];
+    conn_slot_t     conns[BLE_MAX_CONNS];
     QueueHandle_t   cmdq;
     uint16_t        tx_val_handle;
     bool            advertising;
     uint8_t         addr_type;
 
-    ble_serial_stats_t stats;
+    ble_stats_t stats;
 
     ble_sec_mode_t          mode;
     uint32_t                passkey_cfg;
-    ble_serial_passkey_cb_t on_passkey;
+    ble_passkey_cb_t on_passkey;
 } s_ble = {.passkey_cfg = PASSKEY_RANDOM};
 
 static void advertise(void);
@@ -101,7 +101,7 @@ static void advertise(void);
 
 static conn_slot_t *slot_by_handle(uint16_t h)
 {
-    for (int i = 0; i < BLE_SERIAL_MAX_CONNS; i++) {
+    for (int i = 0; i < BLE_MAX_CONNS; i++) {
         if (s_ble.conns[i].handle == h) {
             return &s_ble.conns[i];
         }
@@ -111,7 +111,7 @@ static conn_slot_t *slot_by_handle(uint16_t h)
 
 static conn_slot_t *slot_alloc(uint16_t h)
 {
-    for (int i = 0; i < BLE_SERIAL_MAX_CONNS; i++) {
+    for (int i = 0; i < BLE_MAX_CONNS; i++) {
         if (s_ble.conns[i].handle == BLE_HS_CONN_HANDLE_NONE) {
             s_ble.conns[i].handle     = h;
             s_ble.conns[i].subscribed = false;
@@ -135,7 +135,7 @@ static void slot_free(uint16_t h)
 static int conn_count(void)
 {
     int n = 0;
-    for (int i = 0; i < BLE_SERIAL_MAX_CONNS; i++) {
+    for (int i = 0; i < BLE_MAX_CONNS; i++) {
         if (s_ble.conns[i].handle != BLE_HS_CONN_HANDLE_NONE) {
             n++;
         }
@@ -146,7 +146,7 @@ static int conn_count(void)
 static int sub_count(void)
 {
     int n = 0;
-    for (int i = 0; i < BLE_SERIAL_MAX_CONNS; i++) {
+    for (int i = 0; i < BLE_MAX_CONNS; i++) {
         if (s_ble.conns[i].handle != BLE_HS_CONN_HANDLE_NONE &&
             s_ble.conns[i].subscribed) {
             n++;
@@ -241,7 +241,7 @@ static int gatt_rx_write(uint16_t conn_handle, uint16_t attr_handle,
                  * command. A silently shortened command is how you run `zero 5`
                  * instead of `zero 512`. */
                 slot->len = 0;
-                ble_serial_write_conn(conn_handle, "\r\nline too long, discarded\r\n", 0);
+                ble_write_conn(conn_handle, "\r\nline too long, discarded\r\n", 0);
             }
         }
 
@@ -307,7 +307,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
                 return 0;
             }
             ESP_LOGI(TAG, "connected, handle %u (%d of %d)",
-                     event->connect.conn_handle, conn_count(), BLE_SERIAL_MAX_CONNS);
+                     event->connect.conn_handle, conn_count(), BLE_MAX_CONNS);
 
             if (s_ble.mode == BLE_SEC_BONDED) {
                 const int rc = ble_gap_security_initiate(event->connect.conn_handle);
@@ -323,7 +323,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
          * when it is not.
          */
         s_ble.advertising = false;
-        if (conn_count() < BLE_SERIAL_MAX_CONNS) {
+        if (conn_count() < BLE_MAX_CONNS) {
             advertise();
         }
         return 0;
@@ -350,7 +350,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
                 /* A terminal app shows nothing until something arrives, so say hello:
                  * it proves the link works before anything is typed. Unicast -- the
                  * other clients do not need to see it. */
-                ble_serial_write_conn(event->subscribe.conn_handle,
+                ble_write_conn(event->subscribe.conn_handle,
                                       "\r\nbat-monitor console over BLE. 'help' lists "
                                       "commands.\r\n", 0);
             }
@@ -426,7 +426,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
 
 static void advertise(void)
 {
-    if (conn_count() >= BLE_SERIAL_MAX_CONNS || s_ble.advertising) {
+    if (conn_count() >= BLE_MAX_CONNS || s_ble.advertising) {
         return;
     }
 
@@ -484,7 +484,7 @@ static void on_sync(void)
     }
     advertise();
     ESP_LOGI(TAG, "advertising as '%s', up to %d connections", s_ble.name,
-             BLE_SERIAL_MAX_CONNS);
+             BLE_MAX_CONNS);
 }
 
 static void on_reset(int reason)
@@ -492,7 +492,7 @@ static void on_reset(int reason)
     /* DESIGN.md §10: a BLE fault must never stop the gauge. Log and let NimBLE come
      * back; nothing above this line depends on the link. */
     ESP_LOGW(TAG, "stack reset, reason %d", reason);
-    for (int i = 0; i < BLE_SERIAL_MAX_CONNS; i++) {
+    for (int i = 0; i < BLE_MAX_CONNS; i++) {
         s_ble.conns[i].handle     = BLE_HS_CONN_HANDLE_NONE;
         s_ble.conns[i].subscribed = false;
         s_ble.conns[i].len        = 0;
@@ -540,7 +540,7 @@ static void notify_one(uint16_t conn, const char *data, size_t n)
     }
 }
 
-void ble_serial_write_conn(uint16_t conn, const char *data, size_t n)
+void ble_write_conn(uint16_t conn, const char *data, size_t n)
 {
     if (!data) {
         return;
@@ -556,7 +556,7 @@ void ble_serial_write_conn(uint16_t conn, const char *data, size_t n)
     notify_one(conn, data, n);
 }
 
-void ble_serial_write(const char *data, size_t n)
+void ble_write(const char *data, size_t n)
 {
     if (!data) {
         return;
@@ -568,7 +568,7 @@ void ble_serial_write(const char *data, size_t n)
         s_ble.stats.dropped += n;
         return;
     }
-    for (int i = 0; i < BLE_SERIAL_MAX_CONNS; i++) {
+    for (int i = 0; i < BLE_MAX_CONNS; i++) {
         if (s_ble.conns[i].handle != BLE_HS_CONN_HANDLE_NONE &&
             s_ble.conns[i].subscribed) {
             notify_one(s_ble.conns[i].handle, data, n);
@@ -576,17 +576,17 @@ void ble_serial_write(const char *data, size_t n)
     }
 }
 
-bool ble_serial_ready(void)
+bool ble_ready(void)
 {
     return sub_count() > 0;
 }
 
-const char *ble_serial_name(void)
+const char *ble_name(void)
 {
     return s_ble.name;
 }
 
-void ble_serial_get_stats(ble_serial_stats_t *out)
+void ble_get_stats(ble_stats_t *out)
 {
     if (!out) {
         return;
@@ -603,7 +603,7 @@ void ble_serial_get_stats(ble_serial_stats_t *out)
     out->authenticated = out->connections > 0;
     out->mtu           = 0;
 
-    for (int i = 0; i < BLE_SERIAL_MAX_CONNS; i++) {
+    for (int i = 0; i < BLE_MAX_CONNS; i++) {
         const uint16_t h = s_ble.conns[i].handle;
         if (h == BLE_HS_CONN_HANDLE_NONE) {
             continue;
@@ -658,7 +658,7 @@ static void sec_load(void)
     nvs_close(h);
 }
 
-esp_err_t ble_serial_set_sec_mode(ble_sec_mode_t mode)
+esp_err_t ble_set_sec_mode(ble_sec_mode_t mode)
 {
     if (mode != BLE_SEC_OPEN && mode != BLE_SEC_BONDED) {
         return ESP_ERR_INVALID_ARG;
@@ -671,17 +671,17 @@ esp_err_t ble_serial_set_sec_mode(ble_sec_mode_t mode)
      * rules. Dropping them forces every peer through the new path, which is also the
      * only way the change is visible to the person who made it. */
     if (tightening) {
-        (void)ble_serial_disconnect();
+        (void)ble_disconnect();
     }
     return ESP_OK;
 }
 
-ble_sec_mode_t ble_serial_get_sec_mode(void)
+ble_sec_mode_t ble_get_sec_mode(void)
 {
     return s_ble.mode;
 }
 
-esp_err_t ble_serial_set_passkey(uint32_t passkey)
+esp_err_t ble_set_passkey(uint32_t passkey)
 {
     if (passkey != PASSKEY_RANDOM && passkey > 999999u) {
         return ESP_ERR_INVALID_ARG;
@@ -691,12 +691,12 @@ esp_err_t ble_serial_set_passkey(uint32_t passkey)
     return ESP_OK;
 }
 
-uint32_t ble_serial_get_passkey(void)
+uint32_t ble_get_passkey(void)
 {
     return s_ble.passkey_cfg;
 }
 
-int ble_serial_list_bonds(char out[][24], int max)
+int ble_list_bonds(char out[][24], int max)
 {
     ble_addr_t peers[8];
     int        num = 0;
@@ -719,19 +719,19 @@ int ble_serial_list_bonds(char out[][24], int max)
     return num;
 }
 
-esp_err_t ble_serial_clear_bonds(void)
+esp_err_t ble_clear_bonds(void)
 {
     /* ble_store_clear() drops the live links' keys too, so terminate first: an
      * encrypted connection whose keys have been deleted underneath it is a connection
      * in an undefined state. */
-    (void)ble_serial_disconnect();
+    (void)ble_disconnect();
     return ble_store_clear() == 0 ? ESP_OK : ESP_FAIL;
 }
 
-esp_err_t ble_serial_disconnect(void)
+esp_err_t ble_disconnect(void)
 {
     int n = 0;
-    for (int i = 0; i < BLE_SERIAL_MAX_CONNS; i++) {
+    for (int i = 0; i < BLE_MAX_CONNS; i++) {
         const uint16_t h = s_ble.conns[i].handle;
         if (h != BLE_HS_CONN_HANDLE_NONE) {
             ble_gap_terminate(h, BLE_ERR_REM_USER_CONN_TERM);
@@ -760,7 +760,7 @@ static void worker_task(void *arg)
 
 /* --- start --------------------------------------------------------------------- */
 
-esp_err_t ble_serial_start(const ble_serial_config_t *cfg)
+esp_err_t ble_start(const ble_config_t *cfg)
 {
     if (!cfg || !cfg->device_name) {
         return ESP_ERR_INVALID_ARG;
@@ -769,7 +769,7 @@ esp_err_t ble_serial_start(const ble_serial_config_t *cfg)
     s_ble.on_line    = cfg->on_line;
     s_ble.on_passkey = cfg->on_passkey;
     s_ble.user       = cfg->user;
-    for (int i = 0; i < BLE_SERIAL_MAX_CONNS; i++) {
+    for (int i = 0; i < BLE_MAX_CONNS; i++) {
         s_ble.conns[i].handle = BLE_HS_CONN_HANDLE_NONE;
     }
 

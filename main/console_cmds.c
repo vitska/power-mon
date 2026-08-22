@@ -19,7 +19,7 @@
 #include "freertos/task.h"
 
 #include "app_ctx.h"
-#include "ble_serial.h"
+#include "ble.h"
 #include "bme280.h"
 #include "cal_store.h"
 #include "console_io.h"
@@ -1337,10 +1337,10 @@ static int cmd_mon(int argc, char **argv)
 
 #if CONFIG_BATMON_BLE_ENABLE
         {
-            ble_serial_stats_t bs;
-            ble_serial_get_stats(&bs);
+            ble_stats_t bs;
+            ble_get_stats(&bs);
             printf("  link  BLE %d/%d conn %d sub  pair %-8s disp %s\033[K\n",
-                   bs.connections, BLE_SERIAL_MAX_CONNS, bs.subscribers,
+                   bs.connections, BLE_MAX_CONNS, bs.subscribers,
                    bs.mode == BLE_SEC_BONDED ? "required" : "OPEN",
                    display_debug_present()
                        ? (display_debug_enabled() ? "on" : "off") : "none");
@@ -2018,12 +2018,12 @@ static int cmd_disp(int argc, char **argv)
 #if CONFIG_BATMON_BLE_ENABLE
 static void ble_show(void)
 {
-    ble_serial_stats_t st;
-    ble_serial_get_stats(&st);
+    ble_stats_t st;
+    ble_get_stats(&st);
 
-    printf("name        %s\n", ble_serial_name());
+    printf("name        %s\n", ble_name());
     printf("state       %d of %d connected, %d subscribed%s\n", st.connections,
-           BLE_SERIAL_MAX_CONNS, st.subscribers,
+           BLE_MAX_CONNS, st.subscribers,
            st.advertising ? ", advertising" : "");
     if (st.connections > 0) {
         printf("MTU         %u  (%u bytes per notification, smallest link)\n", st.mtu,
@@ -2036,10 +2036,10 @@ static void ble_show(void)
     }
 
     printf("pairing     %s\n",
-           ble_serial_get_sec_mode() == BLE_SEC_BONDED
+           ble_get_sec_mode() == BLE_SEC_BONDED
                ? "bonded -- pairing required"
                : "OPEN -- no pairing, anyone in range can run commands");
-    const uint32_t pk = ble_serial_get_passkey();
+    const uint32_t pk = ble_get_passkey();
     printf("passkey     %s\n", pk == 0xFFFFFFFFu ? "random each pairing"
                                                  : "fixed");
     if (pk != 0xFFFFFFFFu) {
@@ -2094,7 +2094,7 @@ static int cmd_ble(int argc, char **argv)
             return 1;
         }
 
-        const esp_err_t err = ble_serial_set_sec_mode(m);
+        const esp_err_t err = ble_set_sec_mode(m);
         if (err != ESP_OK) {
             printf("failed: %s\n", esp_err_to_name(err));
             return 1;
@@ -2129,7 +2129,7 @@ static int cmd_ble(int argc, char **argv)
             }
             pk = (uint32_t)v;
         }
-        const esp_err_t err = ble_serial_set_passkey(pk);
+        const esp_err_t err = ble_set_passkey(pk);
         if (err != ESP_OK) {
             printf("failed: %s\n", esp_err_to_name(err));
             return 1;
@@ -2147,7 +2147,7 @@ static int cmd_ble(int argc, char **argv)
 
     if (strcmp(argv[1], "bonds") == 0) {
         char list[8][24];
-        const int n = ble_serial_list_bonds(list, 8);
+        const int n = ble_list_bonds(list, 8);
         if (n < 0) {
             printf("could not read the bond store\n");
             return 1;
@@ -2167,7 +2167,7 @@ static int cmd_ble(int argc, char **argv)
         /* No magic constant here, unlike the destructive commands of DESIGN.md 8.4:
          * forgetting a bond costs one re-pairing, not a year of accumulated charge.
          * Guarding it would be security theatre. */
-        const esp_err_t err = ble_serial_clear_bonds();
+        const esp_err_t err = ble_clear_bonds();
         if (err != ESP_OK) {
             printf("failed: %s\n", esp_err_to_name(err));
             return 1;
@@ -2177,7 +2177,7 @@ static int cmd_ble(int argc, char **argv)
     }
 
     if (strcmp(argv[1], "disconnect") == 0) {
-        const esp_err_t err = ble_serial_disconnect();
+        const esp_err_t err = ble_disconnect();
         if (err == ESP_ERR_INVALID_STATE) {
             printf("nothing connected\n");
             return 0;
@@ -2317,10 +2317,10 @@ static int cmd_config(int argc, char **argv)
 
 #if CONFIG_BATMON_BLE_ENABLE
     {
-        ble_serial_stats_t bst;
-        ble_serial_get_stats(&bst);
-        const uint32_t pk = ble_serial_get_passkey();
-        printf("ble.name=%s\n", ble_serial_name());
+        ble_stats_t bst;
+        ble_get_stats(&bst);
+        const uint32_t pk = ble_get_passkey();
+        printf("ble.name=%s\n", ble_name());
         printf("ble.pair=%s\n", bst.mode == BLE_SEC_BONDED ? "bonded" : "open");
         if (pk == 0xFFFFFFFFu) {
             printf("ble.passkey=random\n");
@@ -2447,11 +2447,11 @@ static int cmd_options(int argc, char **argv)
 
 #if CONFIG_BATMON_BLE_ENABLE
     printf("== BLE =================================== (ble)\n");
-    ble_serial_stats_t bst;
-    ble_serial_get_stats(&bst);
-    printf("name          %s\n", ble_serial_name());
+    ble_stats_t bst;
+    ble_get_stats(&bst);
+    printf("name          %s\n", ble_name());
     printf("state         %d/%d connected, %d subscribed%s\n", bst.connections,
-           BLE_SERIAL_MAX_CONNS, bst.subscribers,
+           BLE_MAX_CONNS, bst.subscribers,
            bst.advertising ? ", advertising" : "");
     printf("pairing       %s, %d bond%s\n",
            bst.mode == BLE_SEC_BONDED ? "required" : "OPEN -- anyone can connect",

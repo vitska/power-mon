@@ -20,7 +20,7 @@
 #include <string.h>
 
 #include "app_ctx.h"
-#include "ble_serial.h"
+#include "ble.h"
 #include "console_io.h"
 #include "display_debug.h"
 #include "esp_log.h"
@@ -38,7 +38,7 @@ static const char *TAG = "ble_con";
  */
 static void ble_sink(void *user, const char *data, size_t len)
 {
-    ble_serial_write_conn((uint16_t)(uintptr_t)user, data, len);
+    ble_write_conn((uint16_t)(uintptr_t)user, data, len);
 }
 
 static void on_line(const char *line, uint16_t conn, void *user)
@@ -52,7 +52,7 @@ static void on_line(const char *line, uint16_t conn, void *user)
 /*
  * Show the pairing passkey wherever it can be seen. The OLED is the primary place --
  * that is what makes DISPLAY_ONLY pairing honest -- but a board with no panel fitted
- * is a normal configuration here, and ble_serial already logs the passkey at WARN so
+ * is a normal configuration here, and ble.c already logs the passkey at WARN so
  * the USB console shows it either way. A zero clears the screen after pairing.
  */
 static void on_passkey(uint32_t passkey, void *user)
@@ -65,7 +65,7 @@ static void on_passkey(uint32_t passkey, void *user)
 
 esp_err_t ble_console_start(void)
 {
-    const ble_serial_config_t cfg = {
+    const ble_config_t cfg = {
         .device_name = CONFIG_BATMON_BLE_NAME,
 #ifdef CONFIG_BATMON_BLE_APPEND_MAC
         .append_mac = true,
@@ -75,7 +75,7 @@ esp_err_t ble_console_start(void)
         .user       = NULL,
     };
 
-    const esp_err_t err = ble_serial_start(&cfg);
+    const esp_err_t err = ble_start(&cfg);
     if (err != ESP_OK) {
         /* Not fatal, on purpose: the USB console is unaffected and the gauge does not
          * depend on the radio (DESIGN.md §10). */

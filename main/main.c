@@ -17,7 +17,7 @@
 
 #include "app_ctx.h"
 #include "ble_console.h"
-#include "ble_serial.h"
+#include "ble.h"
 #include "bme280.h"
 #include "cal_store.h"
 #include "display_debug.h"
@@ -383,7 +383,7 @@ esp_err_t run_zero_voltage_calibration(app_ctx_t *ctx, uint32_t n_samples,
  * the worker task, and only while a command is running -- so anything the sampler task
  * prints reaches USB and nothing else. That left a BLE client with no way to obtain
  * live telemetry at all, which is the one thing a phone app most needs. Emitting here
- * covers both, and ble_serial_write() is a no-op when nobody is subscribed.
+ * covers both, and ble_write() is a no-op when nobody is subscribed.
  *
  * CRLF for the radio, bare LF for the terminal: the BLE side matches the framing that
  * command responses use, so one client-side line splitter handles everything.
@@ -394,8 +394,8 @@ static void stream_emit(const char *line)
      * bare LF locally would leave the two wires subtly different after all. */
     printf("%s\r\n", line);
 #if CONFIG_BATMON_BLE_ENABLE
-    ble_serial_write(line, 0);
-    ble_serial_write("\r\n", 2);
+    ble_write(line, 0);
+    ble_write("\r\n", 2);
 #endif
 }
 
