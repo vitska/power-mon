@@ -100,6 +100,22 @@ shows every 30 seconds:
 I (31402) ui: batmon-DCFA live: 71.5 % 12.424 V -0.0091 A (avg -0.0091) RESTING, cap 44000 mAh, flooded 6S
 ```
 
+## Versions and releases
+
+`remote/version.txt` is the remote's version, separate from the monitor's. It shows on
+the boot splash and in the serial log. A release is tagged `remote-vX.Y.Z`, with
+`batmon-remote.bin` attached:
+
+```powershell
+.	oolselease.ps1 -Remote -Bump patch -DryRun   # bump, build, verify; publish nothing
+.	oolselease.ps1 -Remote -Bump minor           # commit, tag, push, publish
+```
+
+Remote releases are never marked "latest" on GitHub. That spot belongs to the monitor
+firmware, which the phone app looks up there. To install a released image, download
+`batmon-remote.bin` and flash it at 0x10000 over the existing bootloader and partition
+table, or build the tag and run `.	oolslash.ps1 -Remote`.
+
 ## Board wiring (fixed on the PCB)
 
 | | Pins |

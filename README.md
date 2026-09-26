@@ -151,6 +151,19 @@ It refuses a dirty tree, and it reads the version back out of the built image be
 publishing, so a stale build directory cannot ship under the wrong number. Local builds
 carry whatever `version.txt` says; `build` in `ver` tells two of them apart.
 
+**The remote display has its own series.** It has its own version file
+(`remote/version.txt`), tagged `remote-vX.Y.Z` with `batmon-remote.bin` attached, and is
+cut with `-Remote`:
+
+```powershell
+.	oolselease.ps1 -Remote -Bump patch
+```
+
+A monitor release is always published as GitHub's *latest* release, and a remote release
+never is. The phone app reads the latest release, and a remote release in that spot would
+hide the monitor firmware from it. Each release's notes list only the commits that touched
+that firmware.
+
 ### Updating over BLE
 
 The app's **Firmware** tab shows what the board runs and what is published, and flashes
