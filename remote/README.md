@@ -21,6 +21,12 @@ graph of SoC over the last 1, 6 or 24 hours. **Tap the graph** to change the spa
     It is optimistic near the end of a charge, when the current tapers.
   - Currents under 5 mA read as idle, and anything past 99 days as `>99d`.
 - Values turn grey when no telemetry has arrived for 5 seconds.
+- **Communications, top right.** A Bluetooth icon in the link-state colour: blue while
+  searching, yellow while connecting or in setup, orange while pairing, green when live.
+  - It flashes white on every notification received and yellow on every command sent. At
+    10 Hz telemetry it flickers steadily, and when it stops, the data has stopped.
+  - Beside it is the packet rate, e.g. `LIVE 9/s` or `PAIRED 9/s`. A stalled stream shows
+    `0/s`, where a resting battery's unchanging numbers alone would not show it.
 
 **Settings** (tap the header). Five rows:
 

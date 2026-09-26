@@ -8,6 +8,18 @@ where the shunt is mounted. Nothing here needs a rebuild, and **the device recor
 every value to flash itself** — there is nothing to write down and nothing to type
 back after a reboot.
 
+**Without a laptop.** Both clients run the same commands, with the same preconditions
+stated before each step:
+
+- **The phone app:** Configure → Calibration, which shows the live readings next to
+  the fields.
+- **The remote display:** Settings → Zero current, Zero voltage, Measured current,
+  Measured voltage. Its keypad's USE key starts from the board's own reading.
+
+This document is still worth reading first. The steps are the same, and the reasons
+behind them, especially the zero-point preconditions, are what keep a calibration
+correct.
+
 ---
 
 ## 1. The one thing that catches everybody: units

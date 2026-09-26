@@ -1434,6 +1434,29 @@ which matters when several monitors are in range:
 Refreshed every 2 s; advertising interval 500 ms. Legacy advertising is used rather than
 extended advertising, to maximise Android compatibility.
 
+### 7.7a Clients as built
+
+The JBD service above is not implemented yet. Everything today speaks the NUS console
+(CLI.md), and two clients exist:
+
+- **Android app** (`android/`), a BLE central on the phone. Commands and firmware chunks
+  share one serialised write path, because Android refuses a second GATT write while one
+  is in flight. It dials the chosen board directly and redials after any drop, rather
+  than scanning first: a board picked from a list is already known.
+- **Remote display** (`remote/`), a second firmware on an ESP32-2432S028: a classic
+  ESP32 with a 320×240 SPI panel and resistive touch. It is a NimBLE central. Its IO
+  capability is keyboard-only, and against the monitor's display-only one that makes LE
+  Secure Connections use passkey entry: the monitor shows six digits and the remote's
+  keypad takes them.
+  - It has no framebuffer (150 KB of the ESP32's RAM would starve the BLE stack), so
+    fields redraw only on change and the SoC graph is rendered in strips.
+  - The monitor keeps no history, so the remote records its own SoC history, one point a
+    minute for 24 hours.
+
+The monitor accepts three connections, so a phone and a remote can watch the same pack.
+Telemetry is broadcast to both, and command replies are unicast to whichever sent the
+command.
+
 ### 7.8 Vendor telemetry characteristic
 
 Everything JBD truncates, at full precision, notified at 1 Hz:
@@ -2045,7 +2068,7 @@ on the BLE task in either direction beyond a lock-free snapshot.
 | **M5** Standard + vendor | 0x180F, vendor telemetry/config/command | Android shows a battery level; TLV round-trips |
 | **M5b** UI + temperature | Rail gating, SSD1306 screens on the shared bus, button gestures, debug mode (§9.11), BME280 driver, §5.6 corrections | Press shows fresh SoC within 200 ms (no boot — §9.10); rail measures 0 µA when off **and sensor reads are unaffected with it off** (§2.5); capacity and endpoint corrections verified in a thermal chamber or a domestic freezer at ≥3 temperatures |
 | **M6** Low power | Tier state machine, triggered sensor profile, automatic light sleep down to the T2 floor (§9.3), brownout hook, fault injection. No LP-core work — the single bus rules it out | Measured T2 < 400 µA (Appendix C), with the wake term itemised; 7-day soak against a reference coulomb counter with drift within budget *and* tier transitions exercised throughout |
-| **M7** Polish | OTA over Wi-Fi (optional), user guide, calibration procedure | — |
+| **M7** Polish | ~~OTA over Wi-Fi~~ OTA over BLE, user guide, calibration procedure | **Done**: two app slots with bootloader rollback, updates from versioned GitHub releases through the app (CLI.md §6) |
 
 ### Test strategy
 
@@ -2168,6 +2191,14 @@ on the BLE task in either direction beyond a lock-free snapshot.
 | ESP-IDF `esp_pm` + automatic light-sleep docs | Tickless idle, PM locks, and what NimBLE holds (§9.3) |
 
 ## Appendix B — Default chemistry parameters
+
+> **As implemented** (`fg_chem_profile()`, CLI.md §6 "Battery chemistry"): eight
+> chemistries, each an 11-point resting-OCV curve per cell plus full voltage, taper and
+> rated current as fractions of capacity, Peukert k, rest time, and a re-sync trust band.
+> They are flooded, AGM and gel lead-acid, LiFePO₄ (re-sync below 15 % and above 95 %
+> only), Li-ion NMC/NCA, LiPo, LTO, and NiMH (below 15 % and above 90 % only).
+> `battery <chemistry> [cells]` loads one and restarts the count. The table below is the
+> original design's three-chemistry starting point.
 
 Starting points only. `v_0pct` and `v_100pct` are user configuration (§8.6); these values
 seed them at first boot and whenever `chemistry` changes *before* either has been set

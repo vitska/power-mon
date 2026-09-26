@@ -2,8 +2,15 @@
 
 A phone client for the battery monitor, speaking the Nordic-UART console described in
 [`../CLI.md`](../CLI.md) — protocol **3**. Everything the console exposes is reachable
-from here: live telemetry, the fuel-gauge configuration, shunt topology, calibration,
-the display, BLE pairing, and a raw command line for whatever is left.
+from here, in four tabs:
+
+- **Monitor:** SoC labelled with the battery chemistry, volts, amps, watts, gauge state,
+  diagnostics, environment.
+- **Configure:** calibration first, then battery chemistry and cell count, the fuel gauge,
+  shunt topology, telemetry rates, the display and BLE pairing.
+- **Console:** a raw command line for whatever is left.
+- **Firmware:** the board's version and slot, the newest GitHub release, and the update
+  over BLE, with rollback if the new firmware does not come back.
 
 ## Build
 

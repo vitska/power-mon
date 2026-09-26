@@ -212,7 +212,7 @@ One `key=value` per line, no prose, no alignment to match on:
 ```
 > config
 protocol=3
-firmware=0.5.0-m2
+firmware=0.8.0
 stream.on=1
 stream.csv=1
 stream.fast_ms=100
@@ -740,3 +740,21 @@ Stated plainly, because a client author will hit them.
    belonging to no command. Filter by prefix if you parse USB captures.
 7. **`mon` is local-only** — the single command whose behaviour differs by transport.
    It refuses remotely rather than degrading silently.
+8. **A command's output arrives when it finishes.** Output is captured and sent in one
+   go after the command returns, so the `.` progress marks of a long calibration arrive
+   all at once at the end rather than during the ~35–70 s it takes. Show elapsed time
+   against the expected duration (the timeouts in §2) instead of waiting for progress.
+
+---
+
+## 9. Clients that exist
+
+Two clients implement this protocol end to end, and are the reference for writing
+another:
+
+- **The Android app**, [`android/`](android/README.md). It uses every surface: `ver` and
+  `config` on connect, the CSV stream, every setter, calibration with confirmation
+  dialogs, and the firmware update of §6.
+- **The remote display**, [`remote/`](remote/README.md), a BLE central on an
+  ESP32-2432S028. It sends `ver`, `config` and `stream csv`, parses `f` and `c`, and runs
+  calibration. It pairs by passkey entry when the board is in `bonded` mode.

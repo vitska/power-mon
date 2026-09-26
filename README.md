@@ -1,21 +1,22 @@
 # bat-monitor
 
 Battery monitor for the Seeed XIAO ESP32-C6 with dual INA219 shunt sensors.
-Coulomb-counting fuel gauge with voltage re-anchoring, OLED readout, and the whole
-console reachable over BLE. Full design: [DESIGN.md](DESIGN.md).
+Coulomb-counting fuel gauge with voltage re-anchoring for eight battery chemistries, OLED
+readout, and the whole console reachable over BLE. The monitor has two clients: an
+Android app, and a touch-screen remote display on a second board. Full design:
+[DESIGN.md](DESIGN.md).
 
-**Current state: M1–M2 complete and running on hardware, with the fuel gauge, the
-display and a BLE console brought forward from later milestones.** Calibration and
-gauge state persist in NVS. Verified against a 12 V / 44 A·h lead-acid battery.
+**Current state: running on hardware.** Firmware updates reach the board over BLE from the
+app, with automatic rollback. Calibration, gauge state and settings persist in NVS.
+Verified against a 12 V / 44 A·h flooded lead-acid battery.
 
-Three documents, three jobs:
-
-| | |
+| Document | What it is for |
 |---|---|
 | [DESIGN.md](DESIGN.md) | why everything is the way it is |
 | [CALIBRATION.md](CALIBRATION.md) | bench procedure: meter readings → firmware constants |
 | [CLI.md](CLI.md) | command and protocol reference, sufficient to write a client |
-| [remote/](remote/README.md) | a touch-screen remote display on the ESP32-2432S028, a second firmware |
+| [android/README.md](android/README.md) | the phone app: monitor, configure, console, firmware updates |
+| [remote/README.md](remote/README.md) | the touch-screen remote display on the ESP32-2432S028, a second firmware |
 
 ## Milestones
 
@@ -28,7 +29,7 @@ Three documents, three jobs:
 | M5 | Battery Service + vendor service | not started; pairing (§8.5) **done** |
 | M5b | OLED + button + BME280 + temperature corrections | **OLED and BME280 done**; button and §5.6 corrections outstanding |
 | M6 | Low power (tiers down to the light-sleep floor) | not started |
-| M7 | OTA, docs | **OTA over BLE done** — two slots, rollback, the app updates from GitHub releases; docs in progress |
+| M7 | OTA, docs | **done** — OTA over BLE with two slots and rollback, versioned GitHub releases, the app updates from them |
 
 ## What works today
 
@@ -37,6 +38,10 @@ Three documents, three jobs:
   correction, all of it written to flash and restored at boot.
 - **Fuel gauge**: coulomb counting with I·R-compensated OCV re-anchoring, Peukert
   compensation, capacity learning, full/empty/rest anchors.
+  - It counts as resting below C/400 (110 mA on 44 Ah), not below the 3 mA
+    deadband. A pack that powers its own monitor never stops drawing a few mA, and still
+    has to re-sync.
+  - The empty anchor must hold for 10 s.
 - **Battery chemistries**: lead-acid (flooded, AGM, gel), LiFePO₄, Li-ion, LiPo, LTO
   and NiMH, any cell count. `battery lifepo4 4` loads the voltage curve, endpoints and
   charge behaviour for that pack (CLI.md §6).
@@ -47,9 +52,18 @@ Three documents, three jobs:
   centrals at once**, with LE Secure Connections passkey pairing.
 - **Live monitoring**: a repainting dashboard (`mon`), and grouped telemetry at three
   independent rates to both transports.
-- **Remote display** (`remote/`): an ESP32-2432S028 touch screen that connects over BLE
-  and shows SoC, voltage, current, mode, time to empty/full and an SoC graph, with
-  passkey pairing on its keypad.
+- **Android app** (`android/`), with four tabs:
+  - **Monitor:** live SoC, voltage, current, power, gauge state and diagnostics.
+  - **Configure:** calibration, battery chemistry and every other setting.
+  - **Console:** raw commands.
+  - **Firmware:** checks GitHub for a newer release and flashes it over BLE.
+
+  Tapping a board connects to it straight away, and a dropped link reconnects on its own.
+- **Remote display** (`remote/`): an ESP32-2432S028 touch screen that connects over BLE.
+  - It shows SoC, voltage, current, power, mode, time to empty/full and an SoC graph.
+  - A Bluetooth icon flashes on each packet, with the packet rate beside it.
+  - Its Settings screen switches boards and runs the calibration points.
+  - It pairs with the monitor on its own keypad.
 - **Firmware updates over BLE**: the phone app checks GitHub for a newer release and
   flashes it. A new image runs on probation and rolls back on its own unless confirmed.
 
@@ -115,6 +129,16 @@ BATMON_PORT=/dev/ttyACM0 ./tools/idf.sh flash monitor   # not on Windows, see be
 > with esptool 4.x and 5.x (5.0 hyphenated the subcommands; the script detects which).
 
 Pin a different IDF version with `$env:BATMON_IDF_IMAGE` / `BATMON_IDF_IMAGE`.
+
+### Tools at a glance
+
+| Script | What it does |
+|---|---|
+| `tools\idf.ps1 build` | Build the monitor in Docker. `--project-dir remote build` builds the remote display |
+| `tools\flash.ps1` | Flash the monitor over USB. `-Remote` flashes the remote display. Auto-detect picks only USB serial ports |
+| `tools\monitor.ps1` | Serial console |
+| `tools\android.ps1` | Build the Android app, install it on a USB-attached phone and launch it. `-Logcat` follows its log |
+| `tools\release.ps1` | Bump, build, verify, tag and publish a monitor release. `-Remote` does the same for the remote display |
 
 ### Option B — local ESP-IDF
 
