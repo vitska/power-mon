@@ -51,6 +51,49 @@ typedef enum {
     FG_EMPTY,       /**< hit the empty endpoint under load */
 } fg_state_t;
 
+/*
+ * BATTERY CHEMISTRY. What differs between chemistries, as far as a gauge cares, is the
+ * shape of the resting-voltage curve, what "charged" looks like to a charger, how the
+ * capacity is rated, and how flat the curve is in the middle. Everything else -- the
+ * integrator, the anchors, learning -- is the same machine. So a chemistry is a
+ * profile (fg_chem_profile()) and choosing one fills in the chemistry-dependent
+ * fields of fg_config_t, scaled by the number of cells in series.
+ *
+ * The numeric values are part of the stored config: do not reorder, only append.
+ */
+typedef enum {
+    FG_CHEM_FLOODED = 0, /**< lead-acid, flooded (wet) */
+    FG_CHEM_AGM,         /**< lead-acid, absorbed glass mat */
+    FG_CHEM_GEL,         /**< lead-acid, gel */
+    FG_CHEM_LIFEPO4,     /**< lithium iron phosphate */
+    FG_CHEM_LIION,       /**< lithium-ion NMC/NCA, e.g. 18650 / 21700 cells */
+    FG_CHEM_LIPO,        /**< lithium polymer (LiCoO2) */
+    FG_CHEM_LTO,         /**< lithium titanate */
+    FG_CHEM_NIMH,        /**< nickel-metal hydride */
+    FG_CHEM_COUNT
+} fg_chem_t;
+
+#define FG_OCV_POINTS 11 /* resting OCV at 0, 10, 20 ... 100 % */
+
+typedef struct {
+    const char *key;   /**< the keyword `battery` takes and `config` prints */
+    const char *name;  /**< for people */
+    uint32_t    ocv_cell_uv[FG_OCV_POINTS]; /**< resting OCV per cell, 25 °C */
+    uint32_t    v_full_cell_uv;  /**< charger has reached absorption / CV */
+    uint16_t    taper_div;       /**< full once charge current < capacity / this */
+    uint16_t    rated_div;       /**< nameplate capacity is rated at capacity / this */
+    uint16_t    peukert_q8;
+    uint16_t    t_rest_s;        /**< settling time before resting voltage means OCV */
+    /**
+     * Where the curve is too flat to re-anchor on. A resting voltage whose SoC falls
+     * strictly between these two is not trusted to correct a count: on LiFePO4 the
+     * whole 20..90 % range spans about 0.15 V per 4 cells, less than a temperature
+     * swing moves it. 1000/1000 means the curve is usable end to end.
+     */
+    uint16_t    trust_lo_permille;
+    uint16_t    trust_hi_permille;
+} fg_chem_profile_t;
+
 typedef struct {
     uint32_t design_capacity_uah; /**< nameplate, e.g. 44 Ah = 44000000 */
     uint32_t v_0pct_uv;           /**< resting OCV at 0 % */
@@ -79,6 +122,11 @@ typedef struct {
     /* Capacity learning (§5.4). */
     uint16_t learn_min_depth_permille; /**< minimum discharge depth to learn from */
     uint16_t learn_blend_q8;           /**< how hard to move capacity, 256 = snap */
+
+    /* Appended, not inserted: config.c reads the stored blob by size, and a config
+     * saved before these existed is the same struct without them. */
+    uint8_t  chemistry;                /**< fg_chem_t: which OCV curve applies */
+    uint8_t  cells;                    /**< cells in series */
 } fg_config_t;
 
 /** Defaults for a 12 V / 44 A·h flooded lead-acid — the battery this was brought up
@@ -99,6 +147,8 @@ typedef struct {
         .i_rated_ua          = 2200000u,  /* C/20 = 2.2 A: how car batteries are rated */ \
         .learn_min_depth_permille = 600u, /* §8.3 tag 0x0024 */ \
         .learn_blend_q8      = 64u,       /* 0.25 -- learn slowly, it is a big claim */ \
+        .chemistry           = FG_CHEM_FLOODED,                                  \
+        .cells               = 6,                                                \
     })
 
 typedef struct {
@@ -135,6 +185,22 @@ fg_config_t fg_get_config(void);
 /** Validates and stores a whole config. Rejects an inverted or zero-width voltage
  *  window, or a zero capacity, rather than dividing by them later. */
 esp_err_t fg_set_config(const fg_config_t *cfg);
+
+/** The profile for a chemistry, or NULL for an out-of-range value. */
+const fg_chem_profile_t *fg_chem_profile(fg_chem_t c);
+
+/** Looks up a chemistry by keyword ("lifepo4") or alias ("lfp", "lead"). */
+bool fg_chem_parse(const char *key, fg_chem_t *out);
+
+/** Fills the chemistry-dependent fields of `cfg` for `cells` cells of chemistry `c`:
+ *  the voltage window, full voltage, taper and rated currents, Peukert, rest time.
+ *  Capacity, internal resistance, deadband, blends and learning are left alone. */
+void fg_config_apply_chem(fg_config_t *cfg, fg_chem_t c, uint8_t cells);
+
+/** Switches the running gauge to another chemistry or cell count; config.c persists
+ *  it, as with every setting. A different battery makes the old count meaningless,
+ *  so SoC re-seeds from voltage on the next sample; the lifetime counters are kept. */
+esp_err_t fg_set_chemistry(fg_chem_t c, uint8_t cells);
 
 /** Force SoC — the user knows better (§8.4 cmd 0x02). */
 esp_err_t fg_set_soc_permille(uint32_t permille);

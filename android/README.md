@@ -142,6 +142,14 @@ speaks prose, and a refusal always names a physical cause (`too noisy -- current
 flowing`, `that is a real voltage, not an offset`) that is more useful to read than to
 pattern-match.
 
+## Battery chemistry
+
+Configure → **Battery** picks the chemistry (flooded, AGM and gel lead-acid, LiFePO4,
+Li-ion, LiPo, LTO, NiMH) and the number of cells in series, and sends `battery <chem>
+[cells]` (CLI.md §6). Nothing is sent until Apply, behind a dialog, because applying
+restarts the charge count. Left blank, the cell count is guessed on the board from the
+present voltage. The Monitor tab labels the SoC with the chemistry it is computed for.
+
 ## Firmware updates
 
 The Firmware tab compares the board's version with the newest GitHub release of

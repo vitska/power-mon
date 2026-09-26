@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import ru.vitska.powermon.ble.Chemistries
 import ru.vitska.powermon.ble.Link
 import ru.vitska.powermon.model.MonitorViewModel
 
@@ -37,6 +38,7 @@ fun MonitorScreen(vm: MonitorViewModel, onPickDevice: () -> Unit = {}) {
     val shake by vm.handshake.collectAsState()
     val link by vm.link.collectAsState()
     val scanning by vm.scanning.collectAsState()
+    val cfg by vm.config.collectAsState()
 
     Column(
         Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
@@ -83,7 +85,14 @@ fun MonitorScreen(vm: MonitorViewModel, onPickDevice: () -> Unit = {}) {
         // State of charge gets the space, as it does on the device's own panel.
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
-                Text("STATE OF CHARGE", style = MaterialTheme.typography.labelSmall)
+                // Which curve the percentage comes from: a LiFePO4 pack gauged on the
+                // lead-acid curve reads nonsense, and this is where that would show.
+                val chem = Chemistries.byKey(cfg.str("battery.chem"))
+                Text(
+                    "STATE OF CHARGE" +
+                        (chem?.let { "  ·  ${it.short} ${cfg.str("battery.cells") ?: "?"}S" } ?: ""),
+                    style = MaterialTheme.typography.labelSmall,
+                )
                 Row(verticalAlignment = Alignment.Bottom) {
                     Text(
                         f(t.socPct, 1),

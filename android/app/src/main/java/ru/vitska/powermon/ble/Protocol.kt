@@ -224,3 +224,25 @@ object Timeouts {
         }
     }
 }
+
+/**
+ * The chemistries `battery` accepts (CLI.md §6, "Battery chemistry"), in the order the
+ * firmware lists them. The key is what goes on the wire and what `config` reports as
+ * `battery.chem`; the name is for people.
+ */
+object Chemistries {
+    data class Chem(val key: String, val name: String, val short: String)
+
+    val ALL = listOf(
+        Chem("flooded", "Lead-acid, flooded", "Flooded"),
+        Chem("agm", "Lead-acid, AGM", "AGM"),
+        Chem("gel", "Lead-acid, gel", "Gel"),
+        Chem("lifepo4", "LiFePO4", "LiFePO4"),
+        Chem("liion", "Li-ion (NMC/NCA)", "Li-ion"),
+        Chem("lipo", "LiPo", "LiPo"),
+        Chem("lto", "Lithium titanate", "LTO"),
+        Chem("nimh", "NiMH", "NiMH"),
+    )
+
+    fun byKey(key: String?): Chem? = ALL.firstOrNull { it.key == key }
+}

@@ -1014,9 +1014,12 @@ them in `v_curve_mode = 0`). The first rest after a boot **replaces** the count 
 of blending: a count restored from flash has not been checked against the pack in this
 power-up, and blending a stale 0 % toward the truth at 25 % per rest period takes hours.
 
-*As implemented:* the table is five points from the common 25 °C chart for a 12 V
-flooded pack — 0 % 11.50 V, 25 % 11.95 V, 50 % 12.25 V, 75 % 12.45 V, 100 % 12.70 V —
-stored as fractions of the window so `v_0pct`/`v_100pct` stretch it (`soc_from_ocv()`). Applied only when the disagreement exceeds 5 %; below that
+*As implemented:* one 11-point per-cell table per chemistry (`fg_chem_profile()`:
+flooded, AGM, gel, LiFePO₄, Li-ion, LiPo, LTO, NiMH), multiplied by the cell count and
+stretched to `v_0pct`/`v_100pct`. Flooded is the common 25 °C 12 V chart (0 % 11.50 V,
+25 % 11.95 V, 50 % 12.25 V, 75 % 12.45 V, 100 % 12.70 V). The `ocv_valid_band` above is
+the profile's trust band: LiFePO₄ re-syncs only below 15 % and above 95 %, NiMH below
+15 % and above 90 %. A resting voltage in between leaves the count alone. Applied only when the disagreement exceeds 5 %; below that
 the OCV table is less accurate than the counter. **Gated by chemistry:** for LiFePO₄ the
 OCV curve is famously flat between roughly 20 % and 80 %, so `cfg.ocv_valid_band`
 suppresses re-sync in that region.

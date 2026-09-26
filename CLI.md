@@ -238,6 +238,8 @@ sense.vbuscomp=none
 sense.pgamax=8
 sense.pga=1
 sense.autorange=1
+battery.chem=flooded
+battery.cells=6
 soc.cap_uah=44000000
 soc.v0_uv=11500000
 soc.v100_uv=12700000
@@ -507,6 +509,45 @@ Refusals a client should expect and surface verbatim — each names a physical c
 - `too noisy -- current was flowing` — load still connected during a zero point
 - `that is a real voltage, not an offset` — VBUS not at ground
 - `sensor busy -- try again` — another acquisition held the mutex
+
+### Battery chemistry
+
+| Command | Notes |
+|---|---|
+| `battery` | Chemistry, cells, the resting-voltage window, full detection, where voltage re-sync applies |
+| `battery list` | The chemistries and their per-cell resting window |
+| `battery <chemistry> [cells]` | **Persists.** Loads that chemistry's profile for `cells` in series. Without `cells`, the count is guessed from the present resting voltage and reported, so check it |
+
+| Keyword | Chemistry | Resting V/cell, 0–100 % | Full at V/cell | Voltage re-sync |
+|---|---|---|---|---|
+| `flooded` (`lead`) | Lead-acid, flooded | 1.917–2.117 | 2.40 | everywhere |
+| `agm` | Lead-acid, AGM | 1.967–2.142 | 2.40 | everywhere |
+| `gel` | Lead-acid, gel | 1.967–2.150 | 2.33 | everywhere |
+| `lifepo4` (`lfp`) | LiFePO4 | 2.50–3.40 | 3.50 | below 15 %, above 95 % |
+| `liion` (`nmc`, `nca`) | Li-ion NMC/NCA | 3.00–4.17 | 4.18 | everywhere |
+| `lipo` | LiPo (LiCoO₂) | 3.27–4.17 | 4.18 | everywhere |
+| `lto` | Lithium titanate | 2.00–2.65 | 2.70 | everywhere |
+| `nimh` | NiMH | 1.00–1.40 | 1.45 | below 15 %, above 90 % |
+
+A profile sets `v0`, `v100` and `vfull` (per-cell values × cells), the taper and rated
+currents (as a fraction of the capacity: lead-acid C/30–C/50 taper and C/20 rating,
+lithium C/20 and C/5), Peukert k and the rest time. It keeps capacity, internal
+resistance, deadband and learning settings. Every `soc` setter still works afterwards,
+to fine-tune a particular battery. Between the endpoints SoC follows the chemistry's
+11-point resting-voltage curve, stretched to `v0`/`v100`.
+
+**Changing chemistry or cell count restarts the charge count** from the next resting
+voltage, as on a first boot. The count belonged to a curve that no longer applies. The
+lifetime in/out counters are kept.
+
+**Flat curves.** LiFePO₄ spans about 0.15 V per 4S pack between 20 % and 90 %, and NiMH
+is nearly as flat. That is less than temperature moves it, so on those chemistries a
+resting voltage in the flat band does not correct the count. Only the steep ends do,
+plus the full anchor. Expect SoC on such a pack to come mostly from counting, and to be
+re-anchored by a full charge.
+
+The INA219 measures up to 26 V on VBUS. A pack above that (7S Li-ion, 8S LiFePO₄, 24 V
+lead-acid while charging) needs the divider (`curve v divider`).
 
 ### Fuel gauge
 

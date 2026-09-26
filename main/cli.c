@@ -1817,6 +1817,11 @@ static void soc_show(void)
         printf("last anchor  %lu s ago\n", (unsigned long)st.s_since_anchor);
     }
     printf("\n");
+    {
+        const fg_chem_profile_t *chem = fg_chem_profile((fg_chem_t)c.chemistry);
+        printf("battery      %s, %u cells -- 'battery' to change\n",
+               chem ? chem->name : "unknown", (unsigned)c.cells);
+    }
     printf("0%% at        %s V (resting OCV)\n", FMT_V(b1, c.v_0pct_uv));
     printf("100%% at      %s V (resting OCV)\n", FMT_V(b2, c.v_100pct_uv));
     printf("full at      %s V with charge current below %s A\n",
@@ -1923,6 +1928,100 @@ static int cmd_soc(int argc, char **argv)
      * after the next reset. */
     cal_autosave();
     soc_show();
+    return 0;
+}
+
+/* --- battery chemistry ------------------------------------------------------- */
+
+static void battery_show(void)
+{
+    const fg_config_t        c = fg_get_config();
+    const fg_chem_profile_t *p = fg_chem_profile((fg_chem_t)c.chemistry);
+    char b1[24], b2[24], b3[24];
+    if (!p) {
+        printf("chemistry    unknown (%u) -- set one with 'battery <chemistry>'\n",
+               (unsigned)c.chemistry);
+        return;
+    }
+    printf("chemistry    %s, %u cells in series   (battery %s %u)\n", p->name,
+           (unsigned)c.cells, p->key, (unsigned)c.cells);
+    printf("resting      %s V = 0 %%  ..  %s V = 100 %%\n", FMT_V(b1, c.v_0pct_uv),
+           FMT_V(b2, c.v_100pct_uv));
+    printf("full at      %s V with charge current below %s A\n", FMT_V(b3, c.v_full_uv),
+           FMT_A(b1, c.i_taper_ua));
+    if (p->trust_lo_permille >= 1000) {
+        printf("re-sync      from resting voltage anywhere on the curve\n");
+    } else {
+        printf("re-sync      from resting voltage only below %u %% and above %u %% --\n"
+               "             the curve is too flat in between to correct a count with\n",
+               (unsigned)(p->trust_lo_permille / 10), (unsigned)(p->trust_hi_permille / 10));
+    }
+}
+
+static int cmd_battery(int argc, char **argv)
+{
+    if (argc >= 2 && strcmp(argv[1], "list") == 0) {
+        char b1[24], b2[24];
+        for (int i = 0; i < FG_CHEM_COUNT; i++) {
+            const fg_chem_profile_t *p = fg_chem_profile((fg_chem_t)i);
+            printf("  %-8s %-24s %s .. %s V/cell resting\n", p->key, p->name,
+                   FMT_V(b1, p->ocv_cell_uv[0]), FMT_V(b2, p->ocv_cell_uv[FG_OCV_POINTS - 1]));
+        }
+        printf("usage: battery <chemistry> [cells]. Without cells, the count is guessed\n"
+               "from the present resting voltage.\n");
+        return 0;
+    }
+
+    if (argc >= 2) {
+        fg_chem_t chem;
+        if (!fg_chem_parse(argv[1], &chem)) {
+            printf("unknown chemistry '%s' -- 'battery list' shows them\n", argv[1]);
+            return 1;
+        }
+        const fg_chem_profile_t *p = fg_chem_profile(chem);
+
+        long cells   = 0;
+        bool guessed = false;
+        if (argc >= 3) {
+            char *end = NULL;
+            cells = strtol(argv[2], &end, 10);
+            if (!end || *end != '\0' || cells < 1 || cells > 32) {
+                printf("cells is 1..32, the number in series\n");
+                return 1;
+            }
+        } else {
+            /* Nearest whole number of cells at mid charge. Right for a pack anywhere
+             * near the middle of its range; a nearly flat or nearly full pack of a
+             * wide-window chemistry can land one out, hence the note below. */
+            fg_status_t st;
+            fg_get(&st);
+            const uint32_t mid = p->ocv_cell_uv[FG_OCV_POINTS / 2];
+            cells   = (long)((st.ocv_uv + mid / 2) / mid);
+            guessed = true;
+            if (cells < 1 || cells > 32) {
+                printf("cannot guess the cell count from %lu mV -- give it: battery %s <cells>\n",
+                       (unsigned long)(st.ocv_uv / 1000), p->key);
+                return 1;
+            }
+        }
+
+        const esp_err_t err = fg_set_chemistry(chem, (uint8_t)cells);
+        if (err != ESP_OK) {
+            printf("rejected: %s\n", esp_err_to_name(err));
+            return 1;
+        }
+        cal_autosave();
+        if (guessed) {
+            char b1[24];
+            fg_status_t st;
+            fg_get(&st);
+            printf("%ld cells, guessed from %s V. If that is wrong: battery %s <cells>\n",
+                   cells, FMT_V(b1, st.ocv_uv), p->key);
+        }
+        printf("The charge count starts over from the resting voltage.\n\n");
+    }
+
+    battery_show();
     return 0;
 }
 
@@ -2684,6 +2783,9 @@ static int cmd_config(int argc, char **argv)
         fg_config_t c = fg_get_config();
         fg_status_t st;
         fg_get(&st);
+        const fg_chem_profile_t *chem = fg_chem_profile((fg_chem_t)c.chemistry);
+        printf("battery.chem=%s\n", chem ? chem->key : "unknown");
+        printf("battery.cells=%u\n", (unsigned)c.cells);
         printf("soc.cap_uah=%lu\n", (unsigned long)c.design_capacity_uah);
         printf("soc.learned_uah=%lu\n", (unsigned long)st.full_capacity_uah);
         printf("soc.v0_uv=%lu\n", (unsigned long)c.v_0pct_uv);
@@ -3064,6 +3166,7 @@ void cli_start(app_ctx_t *ctx)
 #if CONFIG_BATMON_BLE_ENABLE
     register_cmd("ble",     "BLE link, pairing and bonds",                  "[pair <open|bonded>|passkey <random|NNNNNN>|bonds|unpair|disconnect]", cmd_ble);
 #endif
+    register_cmd("battery", "Battery chemistry and cells: the SoC curve and endpoints", "[list | <chemistry> [cells]]", cmd_battery);
     register_cmd("soc",     "State of charge, endpoints and accumulators",   "[set|full|reset|cap|v0|v100|vfull|rint|taper|rest] [v]", cmd_soc);
     register_cmd("options", "Everything that is set, in one place",         NULL,             cmd_options);
     register_cmd("config",  "Every setting as key=value, for programs",   NULL,             cmd_config);

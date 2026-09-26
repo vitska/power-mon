@@ -36,6 +36,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import ru.vitska.powermon.ble.ConfigState
+import ru.vitska.powermon.ble.Chemistries
 import ru.vitska.powermon.ble.Link
 import ru.vitska.powermon.ble.Micro
 import ru.vitska.powermon.model.MonitorViewModel
@@ -353,6 +354,28 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                         if (it > 0) 1_000_000.0 / it else 0.0)
                 } ?: "—",
             )
+        }
+
+        Section("Battery") {
+            BatteryPicker(
+                currentKey = cfg.str("battery.chem"),
+                currentCells = cfg.str("battery.cells"),
+                window = cfg.micro("soc.v0_uv", 2)?.let { a ->
+                    cfg.micro("soc.v100_uv", 2)?.let { b -> "$a – $b V resting" }
+                },
+            ) { chem, cells ->
+                guarded(
+                    Confirmation(
+                        "Switch to ${chem.name}" + (cells?.let { ", $it cells" } ?: "") + "?",
+                        "Loads that chemistry's voltage curve, endpoints and charge " +
+                            "behaviour" + (if (cells == null) ", with the cell count " +
+                            "guessed from the present voltage" else "") + ". The charge " +
+                            "count restarts from the resting voltage; capacity and " +
+                            "calibration are kept.",
+                        "battery ${chem.key}" + (cells?.let { " $it" } ?: ""),
+                    )
+                )
+            }
         }
 
         Section("Fuel gauge") {
@@ -676,6 +699,71 @@ private fun PlainField(
             Button(onClick = { onSet(text) }, enabled = text.isNotBlank()) { Text("Set") }
         }
         Current(current, current)
+    }
+}
+
+/**
+ * Chemistry chips plus a cell count. Nothing is sent until Apply, because applying
+ * restarts the charge count -- picking a chip by accident must not do that.
+ */
+@Composable
+private fun BatteryPicker(
+    currentKey: String?,
+    currentCells: String?,
+    window: String?,
+    onApply: (Chemistries.Chem, Int?) -> Unit,
+) {
+    var picked by remember(currentKey) { mutableStateOf(Chemistries.byKey(currentKey)) }
+    var cellsText by remember(currentCells) { mutableStateOf(currentCells ?: "") }
+    val cells = cellsText.toIntOrNull()?.takeIf { it in 1..32 }
+    val current = Chemistries.byKey(currentKey)
+
+    Column(Modifier.fillMaxWidth()) {
+        Text(
+            "Sets the voltage-to-SoC curve, the 0 %/100 %/full voltages and the charge " +
+                "behaviour for this chemistry. Every Fuel gauge value below can still be " +
+                "fine-tuned afterwards.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Spacer(Modifier.height(8.dp))
+        Wrap {
+            Chemistries.ALL.forEach { c ->
+                FilterChip(
+                    selected = picked == c,
+                    onClick = { picked = c },
+                    label = { Text(c.short) },
+                )
+            }
+        }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = cellsText,
+                onValueChange = { s -> cellsText = s.filter { it.isDigit() }.take(2) },
+                label = { Text("cells in series") },
+                placeholder = { Text("guess") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            Button(
+                onClick = { picked?.let { onApply(it, cells) } },
+                enabled = picked != null && (cellsText.isEmpty() || cells != null),
+            ) { Text("Apply") }
+        }
+        if (current != null) {
+            Text(
+                "on the device: ${current.name}, ${currentCells ?: "?"} cells" +
+                    (window?.let { " — $it" } ?: ""),
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+            )
+        } else if (currentKey == null) {
+            Text(
+                "This firmware does not report a chemistry (before 0.8.0).",
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
     }
 }
 

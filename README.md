@@ -36,6 +36,9 @@ Three documents, three jobs:
   correction, all of it written to flash and restored at boot.
 - **Fuel gauge**: coulomb counting with I·R-compensated OCV re-anchoring, Peukert
   compensation, capacity learning, full/empty/rest anchors.
+- **Battery chemistries**: lead-acid (flooded, AGM, gel), LiFePO₄, Li-ion, LiPo, LTO
+  and NiMH, any cell count. `battery lifepo4 4` loads the voltage curve, endpoints and
+  charge behaviour for that pack (CLI.md §6).
 - **OLED**: SoC in large digits with volts and amps beside it, plus diagnostic screens.
 - **Environmental sensor**: BME280 or BMP280 probed by chip ID, read once a minute,
   surfaced on the console, in the stream and on the panel.

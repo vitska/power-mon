@@ -5,6 +5,7 @@
 #include "fuelgauge.h"
 
 #include <string.h>
+#include <strings.h>
 
 #include "esp_log.h"
 #include "nvs.h"
@@ -144,28 +145,147 @@ static uint32_t soc_from_charge(void)
 }
 
 /*
- * Voltage to SoC through the SHAPE of the lead-acid resting-OCV curve (§8.6,
- * v_curve_mode 1), scaled between the configured v_0pct and v_100pct.
+ * CHEMISTRY PROFILES. Resting (open-circuit) voltage per cell at 0, 10 ... 100 %, 25 °C,
+ * from the published charts for each chemistry; lead-acid flooded is the 12 V chart
+ * this gauge was verified against (11.50 / 11.95 / 12.25 / 12.45 / 12.70 V at 0/25/50/
+ * 75/100 %), divided by six. None of these is exact for any particular cell -- brand,
+ * age and temperature all move them by tens of millivolts -- which is why the count,
+ * not the voltage, is the primary SoC source, and why v0/v100 remain settable.
  *
- * The shape is the common 25 °C chart for a 12 V flooded pack, taken at its range
- * midpoints: 0 % 11.50 V, 25 % 11.95 V, 50 % 12.25 V, 75 % 12.45 V, 100 % 12.70 V.
- * It is not a straight line -- the voltage climbs fast through the bottom quarter and
- * flattens toward full -- and the straight line this replaced read a rested 12.44 V
- * pack about ten points low.
- *
- * Stored as fractions of the window rather than as volts, so v0/v100 still move the
- * endpoints and the curve stretches with them: a pack whose owner sets a conservative
- * 0 % keeps the curve's shape rather than getting a table that disagrees with them.
+ * v_full is what a charger's absorption / CV stage reaches; with the taper current it
+ * is the full anchor. For lithium it sits just under the 100 % resting voltage the
+ * validator requires it to meet, since a cell at CV relaxes to about that.
  */
-#define OCV_POINTS 5
-static const uint32_t OCV_SHAPE_Q16[OCV_POINTS] = {
-    0,     /*   0 %  11.50 V */
-    24576, /*  25 %  11.95 V: (11.95 - 11.50) / 1.20 = 0.375 */
-    40960, /*  50 %  12.25 V: 0.625 */
-    51883, /*  75 %  12.45 V: 0.7917 */
-    65536, /* 100 %  12.70 V */
+static const fg_chem_profile_t CHEM[FG_CHEM_COUNT] = {
+    [FG_CHEM_FLOODED] = {
+        .key = "flooded", .name = "Lead-acid (flooded)",
+        .ocv_cell_uv = {1916667, 1946667, 1976667, 2001667, 2021667, 2041667,
+                        2055000, 2068333, 2083333, 2100000, 2116667},
+        .v_full_cell_uv = 2400000, .taper_div = 30, .rated_div = 20,
+        .peukert_q8 = 294, .t_rest_s = 600,
+        .trust_lo_permille = 1000, .trust_hi_permille = 1000,
+    },
+    [FG_CHEM_AGM] = {
+        .key = "agm", .name = "Lead-acid (AGM)",
+        .ocv_cell_uv = {1966667, 1983333, 2000000, 2021667, 2041667, 2058333,
+                        2075000, 2091667, 2108333, 2125000, 2141667},
+        .v_full_cell_uv = 2400000, .taper_div = 50, .rated_div = 20,
+        .peukert_q8 = 282, .t_rest_s = 600,
+        .trust_lo_permille = 1000, .trust_hi_permille = 1000,
+    },
+    [FG_CHEM_GEL] = {
+        .key = "gel", .name = "Lead-acid (gel)",
+        .ocv_cell_uv = {1966667, 1986667, 2008333, 2030000, 2050000, 2066667,
+                        2083333, 2100000, 2116667, 2133333, 2150000},
+        .v_full_cell_uv = 2333333, .taper_div = 50, .rated_div = 20,
+        .peukert_q8 = 287, .t_rest_s = 600,
+        .trust_lo_permille = 1000, .trust_hi_permille = 1000,
+    },
+    [FG_CHEM_LIFEPO4] = {
+        .key = "lifepo4", .name = "LiFePO4",
+        .ocv_cell_uv = {2500000, 3000000, 3200000, 3220000, 3250000, 3260000,
+                        3270000, 3300000, 3320000, 3350000, 3400000},
+        .v_full_cell_uv = 3500000, .taper_div = 20, .rated_div = 5,
+        .peukert_q8 = 269, .t_rest_s = 1800,
+        .trust_lo_permille = 150, .trust_hi_permille = 950,
+    },
+    [FG_CHEM_LIION] = {
+        .key = "liion", .name = "Li-ion (NMC/NCA)",
+        .ocv_cell_uv = {3000000, 3450000, 3600000, 3670000, 3720000, 3770000,
+                        3830000, 3900000, 3980000, 4080000, 4170000},
+        .v_full_cell_uv = 4180000, .taper_div = 20, .rated_div = 5,
+        .peukert_q8 = 266, .t_rest_s = 1200,
+        .trust_lo_permille = 1000, .trust_hi_permille = 1000,
+    },
+    [FG_CHEM_LIPO] = {
+        .key = "lipo", .name = "LiPo",
+        .ocv_cell_uv = {3270000, 3690000, 3730000, 3770000, 3800000, 3840000,
+                        3870000, 3950000, 4020000, 4110000, 4170000},
+        .v_full_cell_uv = 4180000, .taper_div = 20, .rated_div = 5,
+        .peukert_q8 = 266, .t_rest_s = 1200,
+        .trust_lo_permille = 1000, .trust_hi_permille = 1000,
+    },
+    [FG_CHEM_LTO] = {
+        .key = "lto", .name = "LTO (lithium titanate)",
+        .ocv_cell_uv = {2000000, 2200000, 2270000, 2310000, 2350000, 2380000,
+                        2410000, 2450000, 2500000, 2560000, 2650000},
+        .v_full_cell_uv = 2700000, .taper_div = 20, .rated_div = 2,
+        .peukert_q8 = 261, .t_rest_s = 900,
+        .trust_lo_permille = 1000, .trust_hi_permille = 1000,
+    },
+    [FG_CHEM_NIMH] = {
+        .key = "nimh", .name = "NiMH",
+        .ocv_cell_uv = {1000000, 1150000, 1200000, 1220000, 1240000, 1250000,
+                        1260000, 1280000, 1300000, 1330000, 1400000},
+        /* NiMH chargers end in a trickle rather than a CV taper; C/10 catches both. */
+        .v_full_cell_uv = 1450000, .taper_div = 10, .rated_div = 5,
+        .peukert_q8 = 282, .t_rest_s = 1800,
+        .trust_lo_permille = 150, .trust_hi_permille = 900,
+    },
 };
 
+const fg_chem_profile_t *fg_chem_profile(fg_chem_t c)
+{
+    return (unsigned)c < FG_CHEM_COUNT ? &CHEM[c] : NULL;
+}
+
+static const fg_chem_profile_t *chem(void)
+{
+    const fg_chem_profile_t *p = fg_chem_profile((fg_chem_t)s_fg.cfg.chemistry);
+    return p ? p : &CHEM[FG_CHEM_FLOODED];
+}
+
+bool fg_chem_parse(const char *key, fg_chem_t *out)
+{
+    static const struct { const char *alias; fg_chem_t c; } ALIASES[] = {
+        {"lead", FG_CHEM_FLOODED}, {"wet", FG_CHEM_FLOODED},
+        {"lfp", FG_CHEM_LIFEPO4},  {"lifepo", FG_CHEM_LIFEPO4},
+        {"li-ion", FG_CHEM_LIION}, {"nmc", FG_CHEM_LIION}, {"nca", FG_CHEM_LIION},
+        {"li-po", FG_CHEM_LIPO},
+        {"ni-mh", FG_CHEM_NIMH},
+    };
+    for (int i = 0; i < FG_CHEM_COUNT; i++) {
+        if (strcasecmp(key, CHEM[i].key) == 0) {
+            *out = (fg_chem_t)i;
+            return true;
+        }
+    }
+    for (size_t i = 0; i < sizeof(ALIASES) / sizeof(ALIASES[0]); i++) {
+        if (strcasecmp(key, ALIASES[i].alias) == 0) {
+            *out = ALIASES[i].c;
+            return true;
+        }
+    }
+    return false;
+}
+
+void fg_config_apply_chem(fg_config_t *cfg, fg_chem_t c, uint8_t cells)
+{
+    const fg_chem_profile_t *p = fg_chem_profile(c);
+    if (!p || cells == 0) {
+        return;
+    }
+    cfg->chemistry   = (uint8_t)c;
+    cfg->cells       = cells;
+    cfg->v_0pct_uv   = p->ocv_cell_uv[0] * cells;
+    cfg->v_100pct_uv = p->ocv_cell_uv[FG_OCV_POINTS - 1] * cells;
+    cfg->v_full_uv   = p->v_full_cell_uv * cells;
+    cfg->i_taper_ua  = cfg->design_capacity_uah / p->taper_div; /* uAh / h = uA */
+    cfg->i_rated_ua  = cfg->design_capacity_uah / p->rated_div;
+    cfg->peukert_q8  = p->peukert_q8;
+    cfg->t_rest_s    = p->t_rest_s;
+}
+
+/*
+ * Voltage to SoC through the SHAPE of the chemistry's resting-OCV curve (§8.6,
+ * v_curve_mode 1), scaled between the configured v_0pct and v_100pct.
+ *
+ * The position of the voltage within the configured window is mapped onto the same
+ * position within the table's own 0..100 % span, then interpolated between the two
+ * neighbouring 10 % points. So v0/v100 move the endpoints and the curve stretches with
+ * them: an owner who sets a conservative 0 % keeps the chemistry's shape rather than
+ * getting a table that disagrees with them.
+ */
 static uint32_t soc_from_ocv(uint32_t ocv_uv)
 {
     if (s_fg.cfg.v_100pct_uv <= s_fg.cfg.v_0pct_uv) {
@@ -177,14 +297,16 @@ static uint32_t soc_from_ocv(uint32_t ocv_uv)
     if (ocv_uv >= s_fg.cfg.v_100pct_uv) {
         return 1000;
     }
-    const uint64_t span = s_fg.cfg.v_100pct_uv - s_fg.cfg.v_0pct_uv;
-    const uint32_t x    = (uint32_t)(((uint64_t)(ocv_uv - s_fg.cfg.v_0pct_uv) << 16) / span);
+    const uint32_t *t     = chem()->ocv_cell_uv;
+    const uint64_t  span  = s_fg.cfg.v_100pct_uv - s_fg.cfg.v_0pct_uv;
+    const uint64_t  tspan = t[FG_OCV_POINTS - 1] - t[0];
+    const uint32_t  x     = t[0] + (uint32_t)(((uint64_t)(ocv_uv - s_fg.cfg.v_0pct_uv) * tspan) / span);
 
-    for (int i = 0; i < OCV_POINTS - 1; i++) {
-        const uint32_t lo = OCV_SHAPE_Q16[i], hi = OCV_SHAPE_Q16[i + 1];
-        if (x <= hi) {
-            const uint32_t step = 1000 / (OCV_POINTS - 1);
-            return step * (uint32_t)i + (uint32_t)(((uint64_t)(x - lo) * step) / (hi - lo));
+    const uint32_t step = 1000 / (FG_OCV_POINTS - 1);
+    for (int i = 0; i < FG_OCV_POINTS - 1; i++) {
+        if (x <= t[i + 1]) {
+            return step * (uint32_t)i +
+                   (uint32_t)(((uint64_t)(x - t[i]) * step) / (t[i + 1] - t[i]));
         }
     }
     return 1000;
@@ -544,15 +666,27 @@ void fg_update(const power_sample_t *s)
 
         const uint32_t ocv_soc = soc_from_ocv(s_fg.ocv_uv);
 
-        /* A count carried over from before boot has never been checked against this
-         * pack in this power-up (see fg_init), so the first rest replaces it rather
-         * than nudging it: blending a stale 0 % toward the truth at 25 % per rest
-         * period takes hours to undo. */
-        if (s_fg.voltage_only || s_fg.state == FG_UNKNOWN ||
-            s_fg.s_since_anchor == UINT32_MAX) {
-            /* No count worth keeping: take the voltage estimate outright. */
+        /* On the flat part of a flat chemistry (LiFePO4, NiMH) the resting voltage
+         * says too little to correct a count with; see fg_chem_profile_t. */
+        const bool flat = ocv_soc > chem()->trust_lo_permille &&
+                          ocv_soc < chem()->trust_hi_permille;
+        bool anchored = true;
+
+        if (s_fg.voltage_only || s_fg.state == FG_UNKNOWN) {
+            /* No count worth keeping: take the voltage estimate outright, flat curve
+             * or not -- a rough guess beats none. */
             set_charge_from_soc(ocv_soc);
             s_fg.voltage_only = false;
+        } else if (flat) {
+            /* Keep the count. It is not an anchor, so the time since one keeps
+             * running and a restored count stays marked unverified. */
+            anchored = false;
+        } else if (s_fg.s_since_anchor == UINT32_MAX) {
+            /* A count carried over from before boot has never been checked against
+             * this pack in this power-up (see fg_init), so the first rest replaces
+             * it rather than nudging it: blending a stale 0 % toward the truth at
+             * 25 % per rest period takes hours to undo. */
+            set_charge_from_soc(ocv_soc);
         } else {
             /* Blend, do not snap. A rested OCV is good but not exact, and snapping
              * would make the displayed SoC jump every time the load goes away. */
@@ -560,8 +694,10 @@ void fg_update(const power_sample_t *s)
             const int64_t delta  = target - s_fg.charge_uas;
             s_fg.charge_uas += (delta * (int64_t)s_fg.cfg.ocv_blend_q8) / 256;
         }
-        s_fg.state          = FG_RESTING;
-        s_fg.s_since_anchor = 0;
+        s_fg.state = FG_RESTING;
+        if (anchored) {
+            s_fg.s_since_anchor = 0;
+        }
         s_fg.idle_since_us  = now; /* re-arm; blend again after another rest period */
         s_fg.dirty          = true;
     } else if (s_fg.state == FG_UNKNOWN && s->v_valid) {
@@ -641,6 +777,9 @@ esp_err_t fg_set_config(const fg_config_t *cfg)
     if (cfg->peukert_q8 < 256 || cfg->peukert_q8 > 512) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (cfg->chemistry >= FG_CHEM_COUNT || cfg->cells == 0 || cfg->cells > 32) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
     const uint32_t old_cap = s_fg.cfg.design_capacity_uah;
     s_fg.cfg = *cfg;
@@ -653,6 +792,28 @@ esp_err_t fg_set_config(const fg_config_t *cfg)
         set_charge_from_soc(soc);
     }
     return store();
+}
+
+esp_err_t fg_set_chemistry(fg_chem_t c, uint8_t cells)
+{
+    fg_config_t cfg = s_fg.cfg;
+    fg_config_apply_chem(&cfg, c, cells);
+    const esp_err_t err = fg_set_config(&cfg);
+    if (err != ESP_OK) {
+        return err;
+    }
+    /* A different battery, or the same one described differently: either way the
+     * count was accumulated against a curve that no longer applies. Re-seed from the
+     * next voltage sample, as on a first boot. Lifetime counters are history and stay. */
+    s_fg.state            = FG_UNKNOWN;
+    s_fg.voltage_only     = true;
+    s_fg.have_full_anchor = false;
+    s_fg.s_since_anchor   = UINT32_MAX;
+    s_fg.idle_since_us    = 0;
+    s_fg.full_since_us    = 0;
+    s_fg.empty_since_us   = 0;
+    s_fg.dirty            = true;
+    return ESP_OK;
 }
 
 esp_err_t fg_set_soc_permille(uint32_t permille)
