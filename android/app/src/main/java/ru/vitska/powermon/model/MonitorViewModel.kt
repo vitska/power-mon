@@ -3,14 +3,29 @@ package ru.vitska.powermon.model
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import ru.vitska.powermon.ble.BatmonClient
 import ru.vitska.powermon.ble.ConfigState
 import ru.vitska.powermon.ble.DeviceStore
+import ru.vitska.powermon.ble.FirmwareImage
+import ru.vitska.powermon.ble.FirmwareReleases
+import ru.vitska.powermon.ble.GATT_NOT_STARTED
+import ru.vitska.powermon.ble.GATT_TIMEOUT
+import ru.vitska.powermon.ble.OtaStatus
+import ru.vitska.powermon.ble.OtaWriteError
+import ru.vitska.powermon.ble.Release
 import ru.vitska.powermon.ble.Link
 import ru.vitska.powermon.ble.Nus
 import ru.vitska.powermon.ble.Record
@@ -42,6 +57,25 @@ data class Handshake(
     val firmware: String = "",
     val mac: String = "",
     val mismatch: Boolean = false,
+)
+
+/** The Firmware tab: what the board runs, what is published, and any update under way. */
+data class FirmwareState(
+    /** From `ota status`; null until read, or on firmware that lacks the command. */
+    val ota: OtaStatus? = null,
+    /** The board answered `ota` with "unknown command": it predates BLE updates. */
+    val unsupported: Boolean = false,
+    val latest: Release? = null,
+    val checking: Boolean = false,
+    /** True once a check has completed, so "no release" can be told from "not asked". */
+    val checked: Boolean = false,
+    val updating: Boolean = false,
+    /** 0..1 during the transfer, null otherwise. */
+    val progress: Float? = null,
+    /** What is happening now, in words. */
+    val phase: String? = null,
+    val error: String? = null,
+    val notice: String? = null,
 )
 
 /** One row in the device picker: a board this phone knows about, has just seen, or both. */
@@ -81,6 +115,13 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
      */
     private val _config = MutableStateFlow(ConfigState.EMPTY)
     val config = _config.asStateFlow()
+
+    private val _fw = MutableStateFlow(FirmwareState())
+    val firmware = _fw.asStateFlow()
+
+    /** Set just before rebooting into a new image: the version it should come back as. */
+    private var expectAfterReboot: String? = null
+    private var updateJob: Job? = null
 
     /** Bumped whenever the remembered set changes, to re-read it into [devices]. */
     private val knownRevision = MutableStateFlow(0)
@@ -134,19 +175,21 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------------ devices
 
     /**
-     * Called once the Bluetooth permissions are actually held. Reconnects to the board
-     * used last, via a scan rather than a direct connect: a scan hit proves the board is
-     * powered and in range, where a direct connect to an absent one just stalls until
-     * the stack gives up.
+     * Called once the Bluetooth permissions are actually held. Connects straight to the
+     * board used last; if it is off, the client keeps retrying until it appears. Only a
+     * fresh install, with nothing remembered, scans -- and then takes the first board
+     * found, since there is no earlier choice to respect.
      */
     fun resumeLastOrScan() {
         if (client.link.value == Link.Ready) return
         knownRevision.value += 1
         val last = store.last
-        if (last != null) appendConsole("looking for ${store.known()[last] ?: last}...")
-        // First run has no board to prefer, so the single board in range is the one
-        // meant; once anything is remembered, switching is always an explicit choice.
-        client.startScan(autoConnectTo = last, connectFirstFound = last == null)
+        if (last != null) {
+            appendConsole("connecting to ${store.known()[last] ?: last}...")
+            client.connect(last)
+        } else {
+            client.startScan(connectFirstFound = true)
+        }
     }
 
     fun scan() {
@@ -163,6 +206,8 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
         _tel.value = Telemetry()
         _shake.value = Handshake()
         _config.value = ConfigState.EMPTY
+        _fw.value = FirmwareState(latest = _fw.value.latest, checked = _fw.value.checked)
+        expectAfterReboot = null
         fastStamps.clear()
         appendConsole("--- connecting to ${name ?: address}")
         client.connect(address)
@@ -228,6 +273,8 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
             knownRevision.value += 1
         }
         refreshConfig()
+        refreshOta()
+        settleUpdate()
         run("stream csv")
     }
 
@@ -242,6 +289,172 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun launchRefreshConfig() = viewModelScope.launch { refreshConfig() }
+
+    // ------------------------------------------------------------------ firmware
+
+    /** Re-reads `ota status`. "unknown command" (-2) means firmware before BLE updates. */
+    suspend fun refreshOta() {
+        val r = client.send("ota status") ?: return
+        _fw.value = when {
+            r.ok -> _fw.value.copy(ota = OtaStatus.parse(r.lines), unsupported = false)
+            r.exit == -2 -> _fw.value.copy(ota = null, unsupported = true)
+            else -> _fw.value
+        }
+    }
+
+    /** Asks GitHub for the newest release. Off the main thread; errors land in [firmware]. */
+    fun checkLatest() = viewModelScope.launch {
+        _fw.value = _fw.value.copy(checking = true, error = null)
+        val result = runCatching { withContext(Dispatchers.IO) { FirmwareReleases.latest() } }
+        _fw.value = _fw.value.copy(
+            checking = false,
+            checked = result.isSuccess,
+            latest = result.getOrNull(),
+            error = result.exceptionOrNull()?.let { "release check failed: ${it.message}" },
+        )
+    }
+
+    fun updateFromRelease() {
+        val rel = _fw.value.latest ?: return
+        startUpdate("downloading ${rel.tag}") {
+            val bytes = withContext(Dispatchers.IO) { FirmwareReleases.download(rel) }
+            FirmwareImage.parse(bytes)
+        }
+    }
+
+    fun updateFromFile(bytes: ByteArray) = startUpdate("checking the file") {
+        FirmwareImage.parse(bytes)
+    }
+
+    fun cancelUpdate() {
+        updateJob?.cancel()
+    }
+
+    private fun startUpdate(first: String, load: suspend () -> FirmwareImage) {
+        if (updateJob?.isActive == true) return
+        updateJob = viewModelScope.launch {
+            _fw.value = _fw.value.copy(
+                updating = true, phase = first, progress = null, error = null, notice = null,
+            )
+            try {
+                flash(load())
+            } catch (e: CancellationException) {
+                _fw.value = _fw.value.copy(error = "cancelled; the running firmware is untouched")
+                withContext(NonCancellable) { client.send("ota abort") }
+                throw e
+            } catch (e: Exception) {
+                _fw.value = _fw.value.copy(error = e.message ?: e.toString())
+            } finally {
+                client.fastLink(false)
+                _fw.value = _fw.value.copy(updating = false, progress = null, phase = null)
+            }
+        }
+    }
+
+    /**
+     * The whole update, CLI.md §6 "Firmware update": announce size and hash (the device
+     * erases the spare slot), stream the image in acknowledged chunks each prefixed with
+     * its offset, have the device verify it and select it for boot, then reboot.
+     * Confirmation happens after reconnecting, in [settleUpdate].
+     */
+    private suspend fun flash(img: FirmwareImage) {
+        if (client.link.value != Link.Ready) error("not connected")
+        if (!client.otaSupported) {
+            error("this firmware predates BLE updates; flash it once over USB (tools/flash.ps1)")
+        }
+        val size = img.bytes.size
+
+        _fw.value = _fw.value.copy(phase = "erasing the spare slot for ${img.version}")
+        val begin = run("ota begin $size ${img.sha256Hex}") ?: error("no reply to ota begin")
+        if (!begin.ok) error(begin.text)
+
+        client.fastLink(true)
+        val chunk = client.otaChunk
+        val started = System.currentTimeMillis()
+        var off = 0
+        while (off < size) {
+            val n = minOf(chunk, size - off)
+            val buf = ByteArray(4 + n)
+            buf[0] = off.toByte(); buf[1] = (off shr 8).toByte()
+            buf[2] = (off shr 16).toByte(); buf[3] = (off shr 24).toByte()
+            System.arraycopy(img.bytes, off, buf, 4, n)
+
+            var st = client.writeOta(buf)
+            var tries = 0
+            // Busy, or an acknowledgement that never came: the device accepts an exact
+            // repeat of the last chunk, so resending is safe.
+            while ((st == 0x83 || st == GATT_TIMEOUT || st == GATT_NOT_STARTED) && tries++ < 5) {
+                delay(100)
+                st = client.writeOta(buf)
+            }
+            if (st != 0) {
+                client.send("ota abort")
+                error("transfer stopped at $off of $size bytes: ${OtaWriteError.describe(st)}")
+            }
+            off += n
+            val secs = (System.currentTimeMillis() - started) / 1000.0
+            _fw.value = _fw.value.copy(
+                progress = off.toFloat() / size,
+                phase = "sending ${img.version}: ${off / 1024} of ${size / 1024} KB" +
+                    if (secs > 1) ", %.1f KB/s".format(off / 1024.0 / secs) else "",
+            )
+        }
+        client.fastLink(false)
+
+        _fw.value = _fw.value.copy(progress = null, phase = "device is verifying the image")
+        val end = run("ota end") ?: error("no reply to ota end")
+        if (!end.ok) error(end.text)
+
+        expectAfterReboot = img.version
+        _fw.value = _fw.value.copy(phase = "restarting into ${img.version}")
+        run("reboot")
+        // The client reconnects on its own when the link drops; just wait for it.
+        withTimeoutOrNull(5_000) { client.link.first { it != Link.Ready } }
+        _fw.value = _fw.value.copy(phase = "waiting for the board to come back")
+        withTimeoutOrNull(60_000) { client.link.first { it == Link.Ready } }
+            ?: error("${img.version} was written, but the board did not reconnect within a " +
+                "minute. If it never does, it rolls back on its own after ten minutes.")
+    }
+
+    /**
+     * After a reconnect: if this app just flashed the board, check that it came back
+     * running what was sent, and end its probation. The handshake that got us here is the
+     * proof the new image works -- its radio and its console both answered.
+     */
+    private suspend fun settleUpdate() {
+        val want = expectAfterReboot ?: return
+        expectAfterReboot = null
+        val ota = _fw.value.ota
+        when {
+            ota?.version != want -> _fw.value = _fw.value.copy(
+                error = "the board came back running ${ota?.version ?: "?"}, not $want -- " +
+                    "the update did not take, or was rolled back",
+            )
+            ota.onProbation -> {
+                val r = run("ota confirm")
+                refreshOta()
+                _fw.value = _fw.value.copy(
+                    notice = if (r?.ok == true) "updated to $want and confirmed"
+                    else "updated to $want, but confirming failed: ${r?.text ?: "no reply"}",
+                )
+            }
+            else -> _fw.value = _fw.value.copy(notice = "updated to $want")
+        }
+    }
+
+    /** Keep the image on probation. */
+    fun confirmFirmware() = viewModelScope.launch { run("ota confirm"); refreshOta() }
+
+    /** Go back to the other slot's image. The board reboots, so the link drops. */
+    fun rollbackFirmware() = viewModelScope.launch {
+        val r = run("ota rollback")
+        if (r?.ok == true) {
+            // The board reboots; the client reconnects by itself.
+            _fw.value = _fw.value.copy(notice = "rolling back; reconnecting")
+        } else {
+            _fw.value = _fw.value.copy(error = r?.text ?: "no reply to ota rollback")
+        }
+    }
 
     /** Runs a command, appends the transcript, and hands back the response. */
     suspend fun run(cmd: String): Response? {

@@ -58,8 +58,8 @@ fun DeviceSheet(vm: MonitorViewModel, onDismiss: () -> Unit) {
             }
 
             Text(
-                "Boards advertise as batmon-XXXX. One connection at a time — tapping " +
-                    "another board drops the current link.",
+                "Tap a board to connect to it now. One connection at a time — tapping " +
+                    "another board drops the current link. Scan finds boards not yet listed.",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(12.dp))
@@ -93,12 +93,14 @@ fun DeviceSheet(vm: MonitorViewModel, onDismiss: () -> Unit) {
                                 Text("connected", style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.primary)
                             }
-                            Text(
-                                // No RSSI means it has not answered this scan. That is the
-                                // honest thing to show: it may be off, or out of range.
-                                d.rssi?.let { "$it dBm" } ?: "not seen in this scan",
-                                style = MaterialTheme.typography.labelSmall,
-                            )
+                            // A signal reading only exists while scanning. A saved board
+                            // without one can still be tapped: the client dials it and
+                            // keeps trying until it answers.
+                            val signal = d.rssi?.let { "$it dBm" }
+                                ?: if (scanning) "not seen yet" else null
+                            if (signal != null) {
+                                Text(signal, style = MaterialTheme.typography.labelSmall)
+                            }
                             if (d.known) {
                                 Text("saved", style = MaterialTheme.typography.labelSmall)
                             }

@@ -7,6 +7,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -49,6 +50,13 @@ fun AppRoot(canScan: Boolean, vm: MonitorViewModel = viewModel()) {
         if (canScan) vm.resumeLastOrScan()
     }
 
+    // Opening the picker lists the saved boards at once. It scans only when there is
+    // nothing to list; finding a new board is what the sheet's Scan button is for.
+    val openDevices = {
+        if (vm.devices.value.isEmpty()) vm.scan()
+        showDevices = true
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -59,7 +67,7 @@ fun AppRoot(canScan: Boolean, vm: MonitorViewModel = viewModel()) {
                             when (link) {
                                 Link.Idle -> if (scanning) "scanning" else "not connected"
                                 Link.Scanning -> "scanning for batmon boards"
-                                Link.Connecting -> "connecting"
+                                Link.Connecting -> "connecting — retrying until the board answers"
                                 Link.Discovering -> "discovering services"
                                 Link.Ready -> "ready"
                                 Link.Failed -> "failed"
@@ -72,7 +80,7 @@ fun AppRoot(canScan: Boolean, vm: MonitorViewModel = viewModel()) {
                     if (link == Link.Ready) {
                         TextButton(onClick = { vm.disconnect() }) { Text("Disconnect") }
                     }
-                    IconButton(onClick = { vm.scan(); showDevices = true }) {
+                    IconButton(onClick = openDevices) {
                         Icon(Icons.Filled.Bluetooth, contentDescription = "Devices")
                     }
                 },
@@ -98,14 +106,21 @@ fun AppRoot(canScan: Boolean, vm: MonitorViewModel = viewModel()) {
                     icon = { Icon(Icons.Filled.Terminal, null) },
                     label = { Text("Console") },
                 )
+                NavigationBarItem(
+                    selected = tab == 3,
+                    onClick = { tab = 3 },
+                    icon = { Icon(Icons.Filled.SystemUpdate, null) },
+                    label = { Text("Firmware") },
+                )
             }
         },
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
             when (tab) {
-                0 -> MonitorScreen(vm) { vm.scan(); showDevices = true }
+                0 -> MonitorScreen(vm, openDevices)
                 1 -> ConfigureScreen(vm)
-                else -> ConsoleScreen(vm)
+                2 -> ConsoleScreen(vm)
+                else -> FirmwareScreen(vm)
             }
         }
     }

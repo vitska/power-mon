@@ -27,10 +27,17 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 enum class Link { Idle, Scanning, Connecting, Discovering, Ready, Failed }
+
+/** Write outcomes that are not ATT codes from the device. */
+const val GATT_LINK_LOST = -1
+const val GATT_NOT_STARTED = -2
+const val GATT_TIMEOUT = -3
 
 /** A board seen in a scan. */
 data class Discovered(val address: String, val name: String, val rssi: Int)
@@ -81,6 +88,16 @@ class BatmonClient(private val context: Context, private val scope: CoroutineSco
     private var gatt: BluetoothGatt? = null
     private var rx: BluetoothGattCharacteristic? = null
     private var tx: BluetoothGattCharacteristic? = null
+    /** Absent on firmware older than BLE updates; see [otaSupported]. */
+    private var ota: BluetoothGattCharacteristic? = null
+
+    /**
+     * Android allows one GATT operation in flight per connection; a second write issued
+     * before the first completes is simply refused. Commands and firmware chunks share
+     * the link, so every write goes through this lock and waits for its callback.
+     */
+    private val writeLock = Mutex()
+    private var writeDone: CompletableDeferred<Int>? = null
 
     private var awaiting: CompletableDeferred<Response>? = null
 
@@ -199,30 +216,72 @@ class BatmonClient(private val context: Context, private val scope: CoroutineSco
     // ----------------------------------------------------------------- connection
 
     /**
-     * Connects to one board by address, dropping whatever link is open. Switching devices
-     * goes through here, so there is exactly one place that tears the old one down.
+     * The board the user has chosen, or null after an explicit disconnect. While set, a
+     * link that drops for any reason -- the board rebooting after an update, walking out
+     * of range, a stack hiccup -- is re-established without anyone asking.
+     */
+    private var wanted: String? = null
+    private var reconnectJob: Job? = null
+    private var attempts = 0
+    private var refreshedThisLink = false
+
+    /**
+     * Connects to one board by address, straight away: stops any scan and dials it
+     * directly. A board picked from the list is already known, so there is nothing a scan
+     * would add except delay. Switching devices goes through here too, so there is exactly
+     * one place that tears the old link down.
      */
     fun connect(address: String) {
+        stopScan()
+        reconnectJob?.cancel()
+        closeGatt()
+        wanted = address
+        attempts = 0
+        _deviceName.value = _found.value
+            .firstOrNull { it.address.equals(address, ignoreCase = true) }?.name
+            ?: _deviceName.value.takeIf { _deviceAddress.value.equals(address, true) }
+        dial(address)
+    }
+
+    /** Drops the link and stops trying to get it back. */
+    fun disconnect() {
+        wanted = null
+        reconnectJob?.cancel()
+        stopScan()
+        closeGatt()
+        _link.value = Link.Idle
+    }
+
+    private fun dial(address: String) {
         val dev = try {
             adapter?.getRemoteDevice(address)
         } catch (e: IllegalArgumentException) {
             _log.tryEmit("Not a usable address: $address")
             null
-        } ?: run { _link.value = Link.Failed; return }
+        } ?: run { wanted = null; _link.value = Link.Failed; return }
 
-        stopScan()
-        closeGatt()
         _deviceAddress.value = dev.address
-        _deviceName.value = dev.name ?: _found.value
-            .firstOrNull { it.address.equals(dev.address, ignoreCase = true) }?.name
+        if (_deviceName.value == null) _deviceName.value = dev.name
         _link.value = Link.Connecting
+        // autoConnect=false: a direct connect, which is fast when the board is there. When
+        // it is not, the attempt times out after ~30 s and onConnectionStateChange brings
+        // us back here via redial().
         gatt = dev.connectGatt(context, false, gattCb, BluetoothDevice.TRANSPORT_LE)
     }
 
-    fun disconnect() {
-        stopScan()
-        closeGatt()
-        _link.value = Link.Idle
+    /** After a drop or a failed attempt: try the same board again, backing off to 5 s. */
+    private fun redial() {
+        val addr = wanted ?: return
+        attempts++
+        _link.value = Link.Connecting
+        reconnectJob?.cancel()
+        reconnectJob = scope.launch {
+            delay(minOf(attempts, 5) * 1_000L)
+            if (wanted == addr && gatt == null) {
+                if (attempts == 1 || attempts % 5 == 0) _log.tryEmit("reconnecting (attempt $attempts)")
+                dial(addr)
+            }
+        }
     }
 
     private fun closeGatt() {
@@ -234,6 +293,8 @@ class BatmonClient(private val context: Context, private val scope: CoroutineSco
         gatt = null
         rx = null
         tx = null
+        ota = null
+        writeDone?.complete(GATT_LINK_LOST)
         _mtu.value = 23
     }
 
@@ -241,16 +302,17 @@ class BatmonClient(private val context: Context, private val scope: CoroutineSco
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             if (g !== gatt) return                       // a link we already replaced
             if (newState == BluetoothProfile.STATE_CONNECTED) {
+                attempts = 0
+                refreshedThisLink = false
                 _link.value = Link.Discovering
                 // 512 to match the device's preferred ATT MTU; it decides the chunk size
                 // for every notification, so asking early is worth it.
                 g.requestMtu(512)
             } else {
-                awaiting?.cancel()
-                awaiting = null
-                rx = null
-                tx = null
-                _link.value = Link.Idle
+                // close(), not just forget: Android has a small fixed pool of GATT clients,
+                // and a dropped one left open is how status 133 starts appearing.
+                closeGatt()
+                if (wanted != null) redial() else _link.value = Link.Idle
             }
         }
 
@@ -266,8 +328,19 @@ class BatmonClient(private val context: Context, private val scope: CoroutineSco
                 _link.value = Link.Failed
                 return
             }
+            // Android caches a device's services, and a cache taken before the firmware had
+            // the OTA characteristic hides it for good. Once per link, if it is missing,
+            // drop the cache and discover again; older firmware just repeats the answer.
+            if (svc.getCharacteristic(Nus.OTA) == null && !refreshedThisLink) {
+                refreshedThisLink = true
+                val refreshed = runCatching {
+                    g.javaClass.getMethod("refresh").invoke(g) as Boolean
+                }.getOrDefault(false)
+                if (refreshed && g.discoverServices()) return
+            }
             rx = svc.getCharacteristic(Nus.RX)
             tx = svc.getCharacteristic(Nus.TX)
+            ota = svc.getCharacteristic(Nus.OTA)
             val t = tx
             if (rx == null || t == null) {
                 _log.tryEmit("NUS present but RX/TX characteristics missing")
@@ -293,6 +366,14 @@ class BatmonClient(private val context: Context, private val scope: CoroutineSco
         ) {
             // Only now is output actually reaching us, so only now is the link usable.
             _link.value = if (status == BluetoothGatt.GATT_SUCCESS) Link.Ready else Link.Failed
+        }
+
+        override fun onCharacteristicWrite(
+            g: BluetoothGatt,
+            c: BluetoothGattCharacteristic,
+            status: Int,
+        ) {
+            writeDone?.complete(status)
         }
 
         override fun onCharacteristicChanged(
@@ -328,6 +409,62 @@ class BatmonClient(private val context: Context, private val scope: CoroutineSco
         }
     }
 
+    // ----------------------------------------------------------------- writes
+
+    /**
+     * One acknowledged write. Returns the GATT status: 0 on success, the device's ATT
+     * error code when it refused, [GATT_LINK_LOST] when there is no link, or
+     * [GATT_TIMEOUT] when no acknowledgement came at all.
+     */
+    private suspend fun write(c: BluetoothGattCharacteristic, value: ByteArray): Int =
+        writeLock.withLock {
+            val g = gatt ?: return GATT_LINK_LOST
+            val done = CompletableDeferred<Int>()
+            writeDone = done
+            val started = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                g.writeCharacteristic(
+                    c, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                ) == android.bluetooth.BluetoothStatusCodes.SUCCESS
+            } else {
+                @Suppress("DEPRECATION")
+                c.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                @Suppress("DEPRECATION")
+                c.value = value
+                @Suppress("DEPRECATION")
+                g.writeCharacteristic(c)
+            }
+            val status = if (!started) GATT_NOT_STARTED
+            else withTimeoutOrNull(5_000) { done.await() } ?: GATT_TIMEOUT
+            writeDone = null
+            status
+        }
+
+    // ----------------------------------------------------------------- firmware update
+
+    /** True when the connected firmware has the update characteristic. */
+    val otaSupported: Boolean get() = ota != null
+
+    /** Largest image payload per write: the ATT payload less the 4-byte offset. */
+    val otaChunk: Int get() = (_mtu.value - 3 - 4).coerceAtLeast(16)
+
+    /** Writes one firmware chunk; see [write] for the status. */
+    suspend fun writeOta(value: ByteArray): Int {
+        val c = ota ?: return GATT_LINK_LOST
+        return withContext(Dispatchers.IO) { write(c, value) }
+    }
+
+    /**
+     * A short connection interval for the transfer: one acknowledged write per
+     * connection event makes the interval the whole speed limit. Back to balanced
+     * afterwards -- telemetry at 10 Hz does not need 7.5 ms.
+     */
+    fun fastLink(fast: Boolean) {
+        gatt?.requestConnectionPriority(
+            if (fast) BluetoothGatt.CONNECTION_PRIORITY_HIGH
+            else BluetoothGatt.CONNECTION_PRIORITY_BALANCED
+        )
+    }
+
     // ----------------------------------------------------------------- commands
 
     /**
@@ -350,7 +487,6 @@ class BatmonClient(private val context: Context, private val scope: CoroutineSco
     }
 
     private suspend fun execute(cmd: String): Response? {
-        val g = gatt ?: return null
         val c = rx ?: return null
 
         val deferred = CompletableDeferred<Response>()
@@ -362,14 +498,11 @@ class BatmonClient(private val context: Context, private val scope: CoroutineSco
         var off = 0
         while (off < payload.size) {
             val take = minOf(chunk, payload.size - off)
-            val slice = payload.copyOfRange(off, off + take)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                g.writeCharacteristic(c, slice, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-            } else {
-                @Suppress("DEPRECATION")
-                c.value = slice
-                @Suppress("DEPRECATION")
-                g.writeCharacteristic(c)
+            val st = write(c, payload.copyOfRange(off, off + take))
+            if (st != BluetoothGatt.GATT_SUCCESS) {
+                awaiting = null
+                _log.tryEmit("write failed ($st): $cmd")
+                return null
             }
             off += take
         }

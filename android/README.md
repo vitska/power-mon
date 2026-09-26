@@ -44,6 +44,8 @@ To build, install on a USB-attached phone and launch in one go, from the repo ro
 | `ui/DeviceSheet.kt` | Device picker: remembered boards merged with scan results. |
 | `ui/ConfigureScreen.kt` | Calibration first, then every other setter, grouped as CLI.md groups them. |
 | `ui/ConsoleScreen.kt` | Raw command entry and transcript. |
+| `ble/Firmware.kt` | Firmware versions, reading an image's identity out of the `.bin`, and the GitHub release lookup. |
+| `ui/FirmwareScreen.kt` | What the board runs, what is published, and the update itself. |
 
 ## Several boards
 
@@ -53,13 +55,18 @@ with whatever the current scan turns up; tapping one switches to it, dropping th
 link. A saved board with no signal reading is listed as "not seen in this scan", which is
 the honest statement — it may be powered down, or just out of range.
 
-On startup the app reconnects to the board it used last. It does that by **scanning for
-that address** rather than connecting to it directly: a scan hit proves the board is
-powered and in range, where a direct connect to an absent one stalls until the stack
-gives up. A board is remembered only once it reaches a usable link, so one that fails at
-service discovery does not become the thing the app chases on every launch. With nothing
-remembered yet — a fresh install — the first board found is taken, since there is no
-prior choice to respect.
+Tapping a board connects to it **immediately**: any scan stops and the app dials that
+address directly. Opening the picker does not scan either -- it lists the saved boards at
+once, and scans only when there is nothing to list. Scan is for finding a board that is
+not listed yet.
+
+**The app keeps the chosen board connected.** If the link drops -- the board reboots after
+a firmware update, you walk out of range, the stack hiccups -- it redials the same board,
+backing off to one attempt every five seconds, until the board answers or you disconnect
+or pick another. On startup it dials the board used last the same way. Only a fresh
+install, with nothing remembered, scans, and then takes the first board found. A board is
+remembered once it reaches a usable link, so one that fails at service discovery does not
+become the thing the app chases on every launch.
 
 Switching clears the panel. A voltage from the previous board displayed under a new
 board's name would be worse than an empty readout, so telemetry and the handshake reset
@@ -134,6 +141,24 @@ Command output is shown verbatim. Apart from `ver` and the CSV stream, the conso
 speaks prose, and a refusal always names a physical cause (`too noisy -- current was
 flowing`, `that is a real voltage, not an offset`) that is more useful to read than to
 pattern-match.
+
+## Firmware updates
+
+The Firmware tab compares the board's version with the newest GitHub release of
+`vitska/power-mon` and offers the update only when the release is strictly newer;
+reinstalling or going back is possible but behind a dialog. A local
+`build/bat-monitor.bin` can be flashed too. Either way the image is checked before a byte
+is sent: ESP-IDF images carry their chip ID and app descriptor (version, project name) at
+fixed offsets, so a wrong file is refused on the phone, not discovered on the board.
+
+The transfer is CLI.md §6: `ota begin` with size and SHA-256, the image in acknowledged
+writes to the OTA characteristic, each prefixed with its offset, then `ota end` and
+`reboot`. The app then finds the board again by address, and once the handshake succeeds
+-- the evidence that the new firmware's radio and console both work -- sends
+`ota confirm`. If it never gets that far, the board rolls itself back.
+
+Every GATT write now waits for its acknowledgement behind one lock. Android refuses a
+second write while one is in flight, and commands and firmware chunks share the link.
 
 ## Pairing
 

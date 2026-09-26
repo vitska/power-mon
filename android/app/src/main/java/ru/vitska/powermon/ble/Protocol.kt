@@ -12,6 +12,8 @@ object Nus {
     val SERVICE: UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
     val RX: UUID = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")   // write
     val TX: UUID = UUID.fromString("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")   // notify
+    /** Firmware-update data, not part of Nordic's NUS. CLI.md §6, "Firmware update". */
+    val OTA: UUID = UUID.fromString("6E400004-B5A3-F393-E0A9-E50E24DCCA9E")  // write
 
     const val NAME_PREFIX = "batmon"
     const val EOT = 0x04.toByte()
@@ -214,6 +216,10 @@ object Timeouts {
             w.getOrNull(0) == "zero" -> arg(1, 256) * ONE_SENSOR_MS * 2 + 2_000
             w.getOrNull(0) == "detect" -> arg(1, 32) * BOTH_SENSORS_MS * 2 + 2_000
             w.getOrNull(0) == "read" -> 5_000
+            // Erasing the slot is ~40 ms per 4 KB sector: ~8 s for an 800 KB image, and
+            // the slot is 1.75 MB. `end` re-reads and hashes the whole image.
+            w.getOrNull(0) == "ota" && w.getOrNull(1) == "begin" -> 60_000
+            w.getOrNull(0) == "ota" && w.getOrNull(1) == "end" -> 30_000
             else -> 4_000
         }
     }
