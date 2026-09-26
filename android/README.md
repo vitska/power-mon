@@ -20,6 +20,15 @@ $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
 The APK lands in `app/build/outputs/apk/debug/app-debug.apk`. Or just open the `android`
 folder in Android Studio.
 
+To build, install on a USB-attached phone and launch in one go, from the repo root:
+
+```powershell
+.\tools\android.ps1                 # finds the JDK, SDK and adb itself
+.\tools\android.ps1 -Serial <id>    # when several devices are attached
+.\tools\android.ps1 -Logcat         # then follow the app's log
+.\tools\android.ps1 -Reinstall      # signature mismatch: uninstall first (clears saved boards)
+```
+
 - Kotlin 2.0.21, AGP 8.7.2, Gradle 8.11.1, Compose BOM 2024.10.01
 - `minSdk 26`, `compileSdk`/`targetSdk 35`
 
