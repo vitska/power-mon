@@ -22,6 +22,11 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Signed with this machine's debug key, so the APK published on GitHub
+            // installs over a development build without an uninstall -- which would
+            // erase the saved boards. A personal tool; switch to a dedicated release
+            // keystore before handing the app to anyone else.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

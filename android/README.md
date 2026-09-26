@@ -1,4 +1,8 @@
-# power-mon Android client
+# Battery monitor — Android client
+
+**Install:** download `battery-monitor-X.Y.Z.apk` from the newest `app-v…` release on
+[GitHub](https://github.com/vitska/power-mon/releases) on the phone and open it. It
+installs over an earlier version and keeps the saved boards.
 
 A phone client for the battery monitor, speaking the Nordic-UART console described in
 [`../CLI.md`](../CLI.md) — protocol **3**. Everything the console exposes is reachable
@@ -39,6 +43,23 @@ To build, install on a USB-attached phone and launch in one go, from the repo ro
 
 - Kotlin 2.0.21, AGP 8.7.2, Gradle 8.11.1, Compose BOM 2024.10.01
 - `minSdk 26`, `compileSdk`/`targetSdk 35`
+
+## Icon, name, releases
+
+The launcher shows **Battery monitor** with a batteries icon. `art/ic_launcher_source.png`
+is the source, and `art/make_icons.py` regenerates every density. It writes an adaptive
+foreground scaled into the 66 dp safe circle, so no launcher mask crops it, plus legacy
+square and round icons.
+
+`.\tools\release.ps1 -App -Bump minor` publishes the APK:
+- It bumps `versionName` and `versionCode`, builds the release APK, and reads the version
+  back out of it with `aapt`.
+- It publishes as `app-vX.Y.Z`, never as GitHub's "latest": that spot belongs to the
+  monitor firmware, which the app itself looks up.
+- Release builds are signed with this machine's debug key, so a downloaded APK installs
+  over a development build without an uninstall (which would erase the saved boards).
+  That's fine for a personal tool. Use a dedicated keystore before giving the app to
+  anyone else.
 
 ## Layout
 

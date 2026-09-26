@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-    Cut a firmware release -- the monitor, or with -Remote the remote display: bump the
-    version, build, tag, and publish on GitHub.
+    Cut a release -- the monitor firmware, the remote display (-Remote), or the Android
+    app (-App): bump the version, build, verify, tag, and publish on GitHub.
 
 .DESCRIPTION
     Two firmwares live in this repository, each with its own version.txt and its own
@@ -9,6 +9,8 @@
 
       monitor  version.txt         tag vX.Y.Z          asset bat-monitor.bin
       remote   remote/version.txt  tag remote-vX.Y.Z   asset batmon-remote.bin
+      app      android/app/build.gradle.kts (versionName; a bump also raises
+               versionCode)       tag app-vX.Y.Z      asset battery-monitor-X.Y.Z.apk
 
     The phone app offers a monitor update when GitHub's LATEST release of this repo is
     newer than the board (README.md "Versioning"). So a monitor release is always
@@ -34,6 +36,7 @@
     .\tools\release.ps1 -Bump patch -DryRun   # bump, build, verify; publish nothing
     .\tools\release.ps1 -Bump minor           # monitor 0.8.0 -> 0.9.0, published
     .\tools\release.ps1 -Remote -Bump patch   # remote display 0.1.0 -> 0.1.1
+    .\tools\release.ps1 -App -Bump minor      # Android app, APK on GitHub
     .\tools\release.ps1                       # publish version.txt as it stands
 #>
 
@@ -43,6 +46,7 @@ param(
     [string]$Bump,
     [string]$Notes,
     [switch]$Remote,
+    [switch]$App,
     [switch]$DryRun
 )
 
@@ -50,8 +54,25 @@ $ErrorActionPreference = 'Stop'
 
 $proj = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 
-# Everything that differs between the two firmwares.
-$t = if ($Remote) {
+if ($Remote -and $App) {
+    Write-Host "-Remote and -App are different releases; pick one." -ForegroundColor Red
+    exit 1
+}
+
+# Everything that differs between the three.
+$t = if ($App) {
+    @{
+        Label       = 'Android app'
+        VersionFile = 'android\app\build.gradle.kts'
+        Bin         = 'android\app\build\outputs\apk\release\app-release.apk'
+        TagPrefix   = 'app-v'
+        Title       = 'Android app'
+        Paths       = @('android')
+        Latest      = $false
+        Blurb       = 'The Battery monitor Android app: monitor, configure, console, and firmware updates for the monitor and the remote display.' +
+                      "`n`nInstall: download the APK on the phone and open it (allow installing from your browser when Android asks). It installs over an earlier version, keeping the saved boards."
+    }
+} elseif ($Remote) {
     @{
         Label       = 'remote display'
         VersionFile = 'remote\version.txt'
@@ -84,6 +105,16 @@ $versionFile = Join-Path $proj $t.VersionFile
 $bin         = Join-Path $proj $t.Bin
 $asset       = Split-Path $t.Bin -Leaf
 
+# The app's version lives in the Gradle script, not in a version.txt.
+function Get-Version {
+    $text = Get-Content $versionFile -Raw
+    if ($App) {
+        if ($text -notmatch 'versionName\s*=\s*"([^"]+)"') { return $null }
+        return $Matches[1]
+    }
+    return $text.Trim()
+}
+
 function Fail([string]$msg) {
     Write-Host $msg -ForegroundColor Red
     exit 1
@@ -97,7 +128,7 @@ try {
         Fail "The working tree has uncommitted changes. Commit or stash them first: a release must be a commit."
     }
 
-    $version = (Get-Content $versionFile -Raw).Trim()
+    $version = Get-Version
     if ($version -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
         Fail "$($t.VersionFile) holds '$version'; a release needs MAJOR.MINOR.PATCH."
     }
@@ -126,9 +157,20 @@ try {
     # --- bump --------------------------------------------------------------------
 
     if ($Bump) {
-        Set-Content -Path $versionFile -Value $version -NoNewline:$false
+        if ($App) {
+            # versionName to the new version; versionCode up by one, because Android
+            # refuses to install an update whose versionCode is not higher.
+            $text = Get-Content $versionFile -Raw
+            if ($text -notmatch 'versionCode\s*=\s*(\d+)') { Fail "no versionCode in $($t.VersionFile)" }
+            $code = [int]$Matches[1] + 1
+            $text = $text -replace 'versionCode\s*=\s*\d+', "versionCode = $code"
+            $text = $text -replace 'versionName\s*=\s*"[^"]+"', "versionName = `"$version`""
+            [IO.File]::WriteAllText($versionFile, $text)
+        } else {
+            Set-Content -Path $versionFile -Value $version -NoNewline:$false
+        }
         git add $t.VersionFile
-        $what = if ($Remote) { "Release remote $version" } else { "Release $version" }
+        $what = if ($Remote) { "Release remote $version" } elseif ($App) { "Release app $version" } else { "Release $version" }
         git commit -q -m $what
         if ($LASTEXITCODE -ne 0) { Fail "commit failed" }
         Write-Host "==> $($t.VersionFile) -> $version (committed)" -ForegroundColor Cyan
@@ -136,20 +178,46 @@ try {
 
     # --- build and verify ----------------------------------------------------------
 
-    & (Join-Path $PSScriptRoot 'idf.ps1') @($t.BuildArgs)
-    if ($LASTEXITCODE -ne 0) { Fail "Build failed." }
+    if ($App) {
+        & (Join-Path $PSScriptRoot 'android.ps1') -Release -NoInstall
+        if ($LASTEXITCODE -ne 0) { Fail "Build failed." }
 
-    # The app descriptor sits right after the 24-byte image header and the first 8-byte
-    # segment header, on the C6 and the classic ESP32 alike; version is 16 bytes into
-    # it, the project name 48. Same offsets the phone app reads.
-    $bytes = [IO.File]::ReadAllBytes($bin)
-    $built = [Text.Encoding]::ASCII.GetString($bytes, 48, 32).TrimEnd([char]0)
-    $name  = [Text.Encoding]::ASCII.GetString($bytes, 80, 32).TrimEnd([char]0)
-    if ($built -ne $version -or $name -ne $t.Project) {
-        Fail "The built image says '$name' $built, not $($t.Project) $version. Try a fullclean."
+        # Read the version back out of the APK itself, as the firmware checks read the
+        # image's descriptor: aapt from the newest installed build-tools.
+        $sdkDir = ((Get-Content (Join-Path $proj 'android\local.properties') |
+                    Where-Object { $_ -match '^sdk\.dir=' }) -replace '^sdk\.dir=', '') -replace '\\(.)', '$1'
+        $aapt = Get-ChildItem (Join-Path $sdkDir 'build-tools') -Directory | Sort-Object Name -Descending |
+                ForEach-Object { Join-Path $_.FullName 'aapt.exe' } | Where-Object { Test-Path $_ } |
+                Select-Object -First 1
+        if (-not $aapt) { Fail "No aapt in the SDK's build-tools; cannot verify the APK." }
+        $badging = (& $aapt dump badging $bin) -join "`n"
+        if ($badging -notmatch "package: name='ru\.vitska\.powermon'.*versionName='([^']+)'") {
+            Fail "Cannot read the package and version out of $bin."
+        }
+        if ($Matches[1] -ne $version) {
+            Fail "The built APK says version $($Matches[1]), not $version."
+        }
+        # Published under a name that says what it is, rather than app-release.apk.
+        $asset = "battery-monitor-$version.apk"
+        $named = Join-Path (Split-Path $bin) $asset
+        Copy-Item $bin $named -Force
+        $bin = $named
+    } else {
+        & (Join-Path $PSScriptRoot 'idf.ps1') @($t.BuildArgs)
+        if ($LASTEXITCODE -ne 0) { Fail "Build failed." }
+
+        # The app descriptor sits right after the 24-byte image header and the first
+        # 8-byte segment header, on the C6 and the classic ESP32 alike; version is 16
+        # bytes into it, the project name 48. Same offsets the phone app reads.
+        $bytes = [IO.File]::ReadAllBytes($bin)
+        $built = [Text.Encoding]::ASCII.GetString($bytes, 48, 32).TrimEnd([char]0)
+        $name  = [Text.Encoding]::ASCII.GetString($bytes, 80, 32).TrimEnd([char]0)
+        if ($built -ne $version -or $name -ne $t.Project) {
+            Fail "The built image says '$name' $built, not $($t.Project) $version. Try a fullclean."
+        }
     }
     $sha = (Get-FileHash $bin -Algorithm SHA256).Hash.ToLower()
-    Write-Host "==> $($t.Bin)  $version  $([math]::Round($bytes.Length / 1KB)) KB  sha256 $sha" -ForegroundColor Green
+    Write-Host "==> $asset  $version  $([math]::Round((Get-Item $bin).Length / 1KB)) KB  sha256 $sha" -ForegroundColor Green
 
     if ($DryRun) {
         Write-Host "==> dry run: not tagging, pushing or publishing." -ForegroundColor Yellow

@@ -27,6 +27,7 @@
     .\tools\android.ps1 -NoBuild            # reinstall the last APK
     .\tools\android.ps1 -Clean -Logcat      # clean build, then follow the app's log
     .\tools\android.ps1 -Reinstall          # signature mismatch: uninstall first
+    .\tools\android.ps1 -Release -NoInstall # the release APK only, as release.ps1 -App uses
 #>
 
 [CmdletBinding()]
@@ -36,14 +37,20 @@ param(
     [switch]$NoBuild,
     [switch]$NoLaunch,
     [switch]$Reinstall,
-    [switch]$Logcat
+    [switch]$Logcat,
+    # Build the release APK (app/build/outputs/apk/release/app-release.apk) instead of
+    # the debug one. See app/build.gradle.kts for how it is signed.
+    [switch]$Release,
+    # Build only: no device needed, nothing installed.
+    [switch]$NoInstall
 )
 
 $ErrorActionPreference = 'Stop'
 
 $proj       = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $androidDir = Join-Path $proj 'android'
-$apk        = Join-Path $androidDir 'app\build\outputs\apk\debug\app-debug.apk'
+$apk        = if ($Release) { Join-Path $androidDir 'app\build\outputs\apk\release\app-release.apk' }
+              else          { Join-Path $androidDir 'app\build\outputs\apk\debug\app-debug.apk' }
 $appId      = 'ru.vitska.powermon'
 
 # --- JDK -------------------------------------------------------------------------
@@ -93,7 +100,7 @@ Write-Host "==> SDK  $sdk" -ForegroundColor DarkGray
 # --- device ----------------------------------------------------------------------
 
 # Resolve the device before building: finding out there is no phone after a
-# two-minute build is the wrong order.
+# two-minute build is the wrong order. A build-only run needs no device at all.
 function Get-AdbDevices {
     & $adb devices -l | Select-Object -Skip 1 | Where-Object { $_.Trim() } | ForEach-Object {
         $f = $_ -split '\s+'
@@ -105,7 +112,7 @@ function Get-AdbDevices {
     }
 }
 
-$devices = @(Get-AdbDevices)
+$devices = if ($NoInstall) { @() } else { @(Get-AdbDevices) }
 $ready   = @($devices | Where-Object State -eq 'device')
 
 # A phone that is attached but not usable says why, and the reason is always on the
@@ -130,6 +137,8 @@ if ($Serial) {
     }
 } elseif ($ready.Count -eq 1) {
     $Serial = $ready[0].Serial
+} elseif ($NoInstall) {
+    # nothing to resolve
 } elseif ($ready.Count -eq 0) {
     Write-Host ""
     Write-Host "No Android device ready." -ForegroundColor Red
@@ -157,7 +166,7 @@ if ($Serial) {
 if (-not $NoBuild) {
     $tasks = @()
     if ($Clean) { $tasks += 'clean' }
-    $tasks += 'assembleDebug'
+    $tasks += if ($Release) { 'assembleRelease' } else { 'assembleDebug' }
 
     Write-Host "==> gradlew $($tasks -join ' ')" -ForegroundColor Cyan
     Push-Location $androidDir
@@ -171,6 +180,10 @@ if (-not $NoBuild) {
 
 if (-not (Test-Path $apk)) {
     throw "No APK at $apk. Build first (drop -NoBuild)."
+}
+if ($NoInstall) {
+    Write-Host "==> $apk" -ForegroundColor Green
+    exit 0
 }
 if (-not $Serial) { exit 1 }
 

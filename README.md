@@ -15,7 +15,7 @@ Verified against a 12 V / 44 A·h flooded lead-acid battery.
 | [DESIGN.md](DESIGN.md) | why everything is the way it is |
 | [CALIBRATION.md](CALIBRATION.md) | bench procedure: meter readings → firmware constants |
 | [CLI.md](CLI.md) | command and protocol reference, sufficient to write a client |
-| [android/README.md](android/README.md) | the phone app: monitor, configure, console, firmware updates |
+| [android/README.md](android/README.md) | the phone app, **Battery monitor**: monitor, configure, console, firmware updates. The APK is on the `app-v…` GitHub releases |
 | [remote/README.md](remote/README.md) | the touch-screen remote display on the ESP32-2432S028, a second firmware |
 
 ## Milestones
@@ -144,7 +144,7 @@ Pin a different IDF version with `$env:BATMON_IDF_IMAGE` / `BATMON_IDF_IMAGE`.
 | `tools\flash.ps1` | Flash the monitor over USB. `-Remote` flashes the remote display. Auto-detect picks only USB serial ports |
 | `tools\monitor.ps1` | Serial console |
 | `tools\android.ps1` | Build the Android app, install it on a USB-attached phone and launch it. `-Logcat` follows its log |
-| `tools\release.ps1` | Bump, build, verify, tag and publish a monitor release. `-Remote` does the same for the remote display |
+| `tools\release.ps1` | Bump, build, verify, tag and publish a monitor release. `-Remote` does the same for the remote display, `-App` for the Android app's APK |
 
 ### Option B — local ESP-IDF
 
