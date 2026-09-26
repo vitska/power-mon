@@ -4,7 +4,7 @@
  * Layout, landscape 320 x 240:
  *
  *   +--------------------------------------------------------+  0
- *   | batmon-DCFA                              LIVE  (o)     |  header: tap -> Devices
+ *   | batmon-DCFA                              LIVE  (o)     |  header: tap -> Settings
  *   +----------------------------+---------------------------+ 22
  *   | STATE OF CHARGE            |  12.432 V                 |
  *   |  72.4 %                    |  -0.0089 A                |
@@ -38,7 +38,7 @@
 #include "link.h"
 #include "touch.h"
 
-typedef enum { SCR_MAIN, SCR_DEVICES, SCR_PASSKEY } screen_t;
+typedef enum { SCR_MAIN, SCR_SETTINGS, SCR_DEVICES, SCR_NUMPAD, SCR_CONFIRM, SCR_PASSKEY } screen_t;
 
 #define STALE_US (5LL * 1000000) /* no record for this long: the numbers are old */
 
@@ -443,6 +443,277 @@ static void passkey_tap(int tx, int ty)
     }
 }
 
+/* --- settings: board choice and calibration ------------------------------------------ */
+
+/*
+ * Calibration, as the phone app offers it (CLI.md §6): the two zero points, then the
+ * two known values from a meter. Every action goes through a confirmation that states
+ * its physical precondition -- the firmware cannot check any of them, and a zero point
+ * taken with current flowing poisons the offset for good.
+ */
+typedef enum { ACT_ZERO_I, ACT_ZERO_V, ACT_TOP_I, ACT_TOP_V } action_t;
+
+typedef struct {
+    const char *title;    /* settings row */
+    const char *sub;      /* settings row, second line */
+    const char *confirm;  /* confirmation heading; %s is the entered value, if any */
+    const char *body;     /* the precondition, in words */
+    const char *unit;     /* "A" / "V" for the known-value actions, NULL otherwise */
+    int         timeout_ms;
+} action_def_t;
+
+/* Timeouts follow CLI.md's samples x per-sample x 2 + 2 s, as the phone app does. */
+static const action_def_t ACTIONS[] = {
+    [ACT_ZERO_I] = {"ZERO CURRENT", "load disconnected, ~35 s",
+                    "Zero the current?",
+                    "THE LOAD MUST BE DISCONNECTED. With any current flowing this "
+                    "poisons the offset permanently, and the firmware cannot tell. "
+                    "Averages 256 samples, about 35 seconds.",
+                    NULL, 75000},
+    [ACT_ZERO_V] = {"ZERO VOLTAGE", "VBUS tied to ground, ~70 s",
+                    "Zero the voltage?",
+                    "VBUS must be TIED TO GROUND, not just disconnected: a floating "
+                    "input reads a real voltage and the board refuses it. Averages "
+                    "256 samples, about 70 seconds.",
+                    NULL, 142000},
+    [ACT_TOP_I]  = {"MEASURED CURRENT", "type what your meter reads",
+                    "Set current gain from %s A?",
+                    "The meter and the board must measure the same current in the "
+                    "same direction; a sign disagreement is refused. At least 10 mA. "
+                    "Averages 64 samples, about 17 seconds.",
+                    "A", 37000},
+    [ACT_TOP_V]  = {"MEASURED VOLTAGE", "at rest, from your meter",
+                    "Set voltage gain from %s V?",
+                    "Take the meter reading with NO LOAD: under load the harness drop "
+                    "makes the solved gain wrong. At least 0.5 V. About 17 seconds.",
+                    "V", 37000},
+};
+
+#define SET_ROW_Y(i) (26 + (i) * 36)
+#define SET_ROW_H    34
+#define SET_ROWS     5 /* the board, then the four actions */
+
+static action_t s_action;
+static char     s_entry[12];
+static char     s_command[48];
+
+static void settings_status(const link_model_t *m, bool force)
+{
+    static char last[2][56];
+    link_cmd_t  c;
+    link_command_status(&c);
+    char l0[56] = "", l1[56] = "";
+
+    if (c.busy) {
+        const int el = (int)((esp_timer_get_time() - c.started_us) / 1000000);
+        snprintf(l0, sizeof(l0), "running '%.30s'  %d s", c.cmd, el);
+        snprintf(l1, sizeof(l1), "keep everything still until it answers");
+    } else if (c.done) {
+        if (!c.answered) {
+            snprintf(l0, sizeof(l0), "'%.30s': no answer", c.cmd);
+            snprintf(l1, sizeof(l1), "timed out, or the link dropped");
+        } else {
+            snprintf(l0, sizeof(l0), "'%.30s': %s", c.cmd, c.exit == 0 ? "done" : "REFUSED");
+            /* The last line that says something: the refusal reason or "Saved". */
+            for (int i = 2; i >= 0; i--) {
+                if (c.reply[i][0]) {
+                    snprintf(l1, sizeof(l1), "%.52s", c.reply[i]);
+                    break;
+                }
+            }
+        }
+    } else if (m->state != LINK_READY) {
+        snprintf(l0, sizeof(l0), "not connected: calibration is unavailable");
+    }
+    if (!force && strcmp(l0, last[0]) == 0 && strcmp(l1, last[1]) == 0) {
+        return;
+    }
+    snprintf(last[0], sizeof(last[0]), "%s", l0);
+    snprintf(last[1], sizeof(last[1]), "%s", l1);
+    const uint16_t col = c.done && (!c.answered || c.exit != 0) ? C_ORANGE : C_GREY;
+    lcd_text_field(4, 212, 316, l0, 1, c.busy ? C_YELLOW : col, C_BLACK);
+    lcd_text_field(4, 226, 316, l1, 1, col, C_BLACK);
+}
+
+static void settings_row(int i, const char *title, const char *sub, bool enabled)
+{
+    const int      y  = SET_ROW_Y(i);
+    const uint16_t fg = enabled ? C_WHITE : C_GREY;
+    lcd_fill(0, y, LCD_W, SET_ROW_H, C_PANEL);
+    lcd_text(8, y + 3, title, 2, fg, C_PANEL);
+    lcd_text(8, y + 22, sub, 1, C_GREY, C_PANEL);
+    lcd_text(300, y + 9, ">", 2, C_GREY, C_PANEL);
+}
+
+static void settings_draw(const link_model_t *m, bool force)
+{
+    static bool ready_last;
+    static char name_last[24];
+    const bool  ready = m->state == LINK_READY;
+    if (force || ready != ready_last || strcmp(name_last, m->name) != 0) {
+        if (force) {
+            lcd_fill(0, 0, LCD_W, LCD_H, C_BLACK);
+            lcd_fill(0, 0, LCD_W, 22, C_HEADER);
+            lcd_text(6, 3, "SETTINGS", 2, C_WHITE, C_HEADER);
+            button(240, 0, 80, 22, "BACK", 2, C_HEADER, C_WHITE);
+        }
+        char board[40];
+        snprintf(board, sizeof(board), "BOARD %s", m->name[0] ? m->name : "(none)");
+        settings_row(0, board, "connect to a different board", true);
+        for (int a = 0; a < 4; a++) {
+            settings_row(a + 1, ACTIONS[a].title, ACTIONS[a].sub, ready);
+        }
+        ready_last = ready;
+        snprintf(name_last, sizeof(name_last), "%s", m->name);
+    }
+    settings_status(m, force);
+}
+
+/* --- the number keypad, for meter readings ----------------------------------------- */
+
+static const char *NKEYS[16] = {"7", "8", "9", "DEL", "4", "5", "6", "-",
+                                "1", "2", "3", ".", "BACK", "0", "USE", "OK"};
+#define NK_X(c) (4 + (c) * 79)
+#define NK_Y(r) (76 + (r) * 41)
+#define NK_W    76
+#define NK_H    38
+
+static void numpad_entry(void)
+{
+    char shown[24];
+    snprintf(shown, sizeof(shown), "%s %s", s_entry[0] ? s_entry : "_", ACTIONS[s_action].unit);
+    lcd_fill(0, 44, LCD_W, 28, C_BLACK);
+    lcd_text((LCD_W - lcd_text_w(shown, 3)) / 2, 46, shown, 3, C_WHITE, C_BLACK);
+}
+
+static void numpad_live(const link_model_t *m)
+{
+    static char last[32];
+    char b[32];
+    const bool amps = s_action == ACT_TOP_I;
+    if (m->have_fast) snprintf(b, sizeof(b), "board reads %.4f %s", amps ? m->amps : m->volts,
+                               amps ? "A" : "V");
+    else              snprintf(b, sizeof(b), "board reads --");
+    if (strcmp(b, last) == 0) return;
+    snprintf(last, sizeof(last), "%s", b);
+    lcd_text_field(6, 24, 300, b, 1, C_GREY, C_BLACK);
+}
+
+static void numpad_enter(const link_model_t *m)
+{
+    memset(s_entry, 0, sizeof(s_entry));
+    lcd_fill(0, 0, LCD_W, LCD_H, C_BLACK);
+    char title[40];
+    snprintf(title, sizeof(title), "%s (%s)", ACTIONS[s_action].title, ACTIONS[s_action].unit);
+    lcd_text(6, 6, title, 2, C_WHITE, C_BLACK);
+    for (int k = 0; k < 16; k++) {
+        const bool digit = NKEYS[k][0] >= '0' && NKEYS[k][0] <= '9' && !NKEYS[k][1];
+        const uint16_t bg = k == 15 ? RGB(30, 90, 40) : k == 12 ? RGB(90, 30, 30) : C_PANEL;
+        button(NK_X(k % 4), NK_Y(k / 4), NK_W, NK_H, NKEYS[k], digit ? 3 : 2, bg, C_WHITE);
+    }
+    numpad_entry();
+    numpad_live(m);
+}
+
+static void confirm_enter(void);
+
+/* Returns true when the keypad is done (OK or BACK). */
+static bool numpad_tap(int tx, int ty, const link_model_t *m)
+{
+    for (int k = 0; k < 16; k++) {
+        if (!hit(tx, ty, NK_X(k % 4), NK_Y(k / 4), NK_W, NK_H)) continue;
+        const size_t n   = strlen(s_entry);
+        const char  *key = NKEYS[k];
+        if (strcmp(key, "DEL") == 0) {
+            if (n) s_entry[n - 1] = '\0';
+        } else if (strcmp(key, "-") == 0) {
+            /* A sign toggle rather than a character: it can only ever lead. */
+            if (s_entry[0] == '-') memmove(s_entry, s_entry + 1, n);
+            else if (n < sizeof(s_entry) - 1) { memmove(s_entry + 1, s_entry, n + 1); s_entry[0] = '-'; }
+        } else if (strcmp(key, ".") == 0) {
+            if (!strchr(s_entry, '.') && n < sizeof(s_entry) - 1) s_entry[n] = '.';
+        } else if (strcmp(key, "USE") == 0) {
+            /* The board's own reading, as a starting point to type over. */
+            if (m->have_fast) {
+                snprintf(s_entry, sizeof(s_entry), s_action == ACT_TOP_I ? "%.4f" : "%.3f",
+                         s_action == ACT_TOP_I ? m->amps : m->volts);
+            }
+        } else if (strcmp(key, "BACK") == 0) {
+            return true;
+        } else if (strcmp(key, "OK") == 0) {
+            char *end = NULL;
+            const double v = strtod(s_entry, &end);
+            if (s_entry[0] && end && *end == '\0') {
+                snprintf(s_command, sizeof(s_command), "cal top %s %ld",
+                         s_action == ACT_TOP_I ? "i" : "v", lround(v * 1e6));
+                confirm_enter();
+            }
+            return false;
+        } else if (n < sizeof(s_entry) - 1) {
+            s_entry[n] = key[0];
+        }
+        numpad_entry();
+        return false;
+    }
+    return false;
+}
+
+/* --- the confirmation ---------------------------------------------------------------- */
+
+static bool s_confirming;
+
+/* Word-wraps `text` into lines of at most `cols` characters, drawing each. */
+static int draw_wrapped(int x, int y, int cols, const char *text, uint16_t fg)
+{
+    char line[64];
+    const char *p = text;
+    while (*p) {
+        int take = (int)strlen(p);
+        if (take > cols) {
+            take = cols;
+            while (take > 0 && p[take] != ' ') take--;
+            if (take == 0) take = cols;
+        }
+        snprintf(line, sizeof(line), "%.*s", take, p);
+        lcd_text(x, y, line, 1, fg, C_BLACK);
+        y += 12;
+        p += take;
+        while (*p == ' ') p++;
+    }
+    return y;
+}
+
+static void confirm_enter(void)
+{
+    s_confirming = true;
+    const action_def_t *a = &ACTIONS[s_action];
+    lcd_fill(0, 0, LCD_W, LCD_H, C_BLACK);
+    char title[48];
+    snprintf(title, sizeof(title), a->confirm, s_entry);
+    lcd_text(6, 8, title, 2, C_YELLOW, C_BLACK);
+    int y = draw_wrapped(6, 36, 51, a->body, C_WHITE);
+    char cmd[64];
+    snprintf(cmd, sizeof(cmd), "sends: %s", s_command);
+    lcd_text(6, y + 8, cmd, 1, C_GREY, C_BLACK);
+    button(10, 196, 140, 40, "CANCEL", 2, RGB(90, 30, 30), C_WHITE);
+    button(170, 196, 140, 40, "RUN", 2, RGB(30, 90, 40), C_WHITE);
+}
+
+/* Returns true when the confirmation is finished, either way. */
+static bool confirm_tap(int tx, int ty)
+{
+    if (hit(tx, ty, 10, 196, 140, 40)) {
+        s_confirming = false;
+        return true;
+    }
+    if (hit(tx, ty, 170, 196, 140, 40)) {
+        link_command(s_command, ACTIONS[s_action].timeout_ms);
+        s_confirming = false;
+        return true;
+    }
+    return false;
+}
+
 /* --- the loop ---------------------------------------------------------------------- */
 
 static void go(screen_t scr)
@@ -504,7 +775,7 @@ void ui_run(void)
         switch (s_screen) {
         case SCR_MAIN:
             if (tap && ty < 22) {
-                go(SCR_DEVICES);
+                go(SCR_SETTINGS);
                 break;
             }
             if (tap && ty >= 150) {
@@ -519,7 +790,7 @@ void ui_run(void)
         case SCR_DEVICES:
             if (tap) {
                 if (hit(tx, ty, 240, 0, 80, 22)) {
-                    go(SCR_MAIN);
+                    go(SCR_SETTINGS);
                     break;
                 }
                 if (hit(tx, ty, 4, 206, 150, 32)) {
@@ -548,6 +819,63 @@ void ui_run(void)
                 devices_draw(s_full);
                 s_full    = false;
                 next_list = now + 1000000;
+            }
+            break;
+
+        case SCR_SETTINGS:
+            if (tap) {
+                if (hit(tx, ty, 240, 0, 80, 22)) {
+                    go(SCR_MAIN);
+                    break;
+                }
+                for (int i = 0; i < SET_ROWS; i++) {
+                    if (!hit(tx, ty, 0, SET_ROW_Y(i), LCD_W, SET_ROW_H)) continue;
+                    if (i == 0) {
+                        go(SCR_DEVICES);
+                    } else if (m.state == LINK_READY) {
+                        link_cmd_t c;
+                        link_command_status(&c);
+                        if (c.busy) break; /* one calibration at a time */
+                        s_action   = (action_t)(i - 1);
+                        memset(s_entry, 0, sizeof(s_entry));
+                        if (s_action == ACT_ZERO_I || s_action == ACT_ZERO_V) {
+                            snprintf(s_command, sizeof(s_command), "cal zero %s",
+                                     s_action == ACT_ZERO_I ? "i" : "v");
+                            go(SCR_CONFIRM);
+                        } else {
+                            go(SCR_NUMPAD);
+                        }
+                    }
+                    break;
+                }
+                if (s_screen != SCR_SETTINGS) break;
+            }
+            settings_draw(&m, s_full);
+            s_full = false;
+            break;
+
+        case SCR_NUMPAD:
+            if (s_full) {
+                numpad_enter(&m);
+                s_full = false;
+            }
+            numpad_live(&m);
+            if (tap) {
+                if (numpad_tap(tx, ty, &m)) {
+                    go(SCR_SETTINGS);
+                } else if (s_confirming) {
+                    s_screen = SCR_CONFIRM; /* confirm_enter() has already drawn it */
+                }
+            }
+            break;
+
+        case SCR_CONFIRM:
+            if (s_full) {
+                confirm_enter();
+                s_full = false;
+            }
+            if (tap && confirm_tap(tx, ty)) {
+                go(SCR_SETTINGS);
             }
             break;
 

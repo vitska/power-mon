@@ -71,6 +71,25 @@ void link_select(const link_found_t *d);
 /** Forget the remembered board and every bond; drop the link. */
 void link_forget(void);
 
+/* --- console commands from the UI (calibration) ------------------------------------ */
+
+typedef struct {
+    bool    busy;         /* sent, waiting for its terminator */
+    bool    done;         /* finished; the fields below describe it */
+    bool    answered;     /* false: timed out or the link dropped */
+    int     exit;         /* the command's exit status; 0 is success */
+    char    cmd[48];
+    int64_t started_us;
+    int     timeout_ms;
+    char    reply[3][56]; /* the last lines of output, oldest first, "" if unused */
+} link_cmd_t;
+
+/** Queues one console command, run after anything already in flight. False when the
+ *  link is not ready or another UI command has not finished. */
+bool link_command(const char *cmd, int timeout_ms);
+
+void link_command_status(link_cmd_t *out);
+
 /** While pairing: true, with the board's name in `who`. */
 bool link_passkey_wanted(char *who, size_t n);
 void link_passkey_submit(uint32_t passkey);

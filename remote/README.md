@@ -12,7 +12,7 @@ repository root: different chip, different BLE role, its own `version.txt`.
 current, power, the mode (CHARGING / DISCHARGING / IDLE / FULL / EMPTY) with the gauge's
 own state and the battery chemistry under it, and the time to empty or to full. Below, a
 graph of SoC over the last 1, 6 or 24 hours. **Tap the graph** to change the span, and
-**tap the header** for the board picker.
+**tap the header** for Settings.
 
 - The time estimate uses a one-minute moving average of the current, so a load switching
   on and off doesn't make it jump by days.
@@ -22,9 +22,31 @@ graph of SoC over the last 1, 6 or 24 hours. **Tap the graph** to change the spa
   - Currents under 5 mA read as idle, and anything past 99 days as `>99d`.
 - Values turn grey when no telemetry has arrived for 5 seconds.
 
+**Settings** (tap the header). Five rows:
+
+- **Board**: opens Devices, to connect to a different monitor.
+- **Zero current**: `cal zero i`. The load must be disconnected. About 35 s.
+- **Zero voltage**: `cal zero v`. VBUS must be tied to ground, not just disconnected.
+  About 70 s.
+- **Measured current**: type what your meter reads, and the board solves the current gain
+  (`cal top i`). At least 10 mA, measured in the same direction as the board. About 17 s.
+- **Measured voltage**: the same for voltage (`cal top v`). Take the reading at rest, with
+  no load. About 17 s.
+
+The measured values use a keypad with a decimal point and a sign toggle. **USE** fills in
+the board's own live reading as a starting point to type over. Every calibration goes
+through a confirmation screen that states its precondition, because the firmware cannot
+check any of them, and a zero point taken with current flowing ruins the offset.
+
+At the bottom, the Settings screen shows the running command with its elapsed time, then
+the board's answer. A refusal is shown verbatim (for example "too noisy -- current was
+flowing"), since it names the physical cause. Calibration results are saved on the board
+automatically. The board sends a command's output only once it has finished, so there is
+no live progress, just the elapsed time against the expected duration.
+
 **Devices.** The boards in range, strongest first, with signal strength and which one is
 saved and connected. Tap one to switch to it; it is remembered. **FORGET** (tap twice)
-drops the saved board and every pairing bond.
+drops the saved board and every pairing bond. **BACK** returns to Settings.
 
 **Pairing keypad.** Appears by itself when the board asks for pairing: type the six digits
 the board shows on its OLED.
@@ -34,7 +56,7 @@ the board shows on its OLED.
 The remote is a BLE central speaking the monitor's console protocol (CLI.md), like the
 app. It subscribes, then sends `ver`, `config` and `stream csv`, and parses the `f` and `c`
 records. It re-reads `config` every five minutes, because capacity is learned over time. It
-never changes a setting on the board.
+changes nothing on the board except the calibration you run from Settings.
 
 - **Which board.** On first boot it takes the first `batmon-*` it finds and remembers it.
   After that, switching is explicit (Devices). A dropped link is re-established by scanning

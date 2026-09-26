@@ -87,6 +87,11 @@ static struct {
     bool     want_passkey;
     uint16_t pk_conn;
 
+    /* A command from the UI, and what came of it. */
+    bool       user_want;
+    bool       user_active; /* capture this response into user_res */
+    link_cmd_t user_res;
+
     link_model_t model;
     link_found_t found[MAX_FOUND];
     int64_t      found_seen[MAX_FOUND];
@@ -220,6 +225,20 @@ static void on_line(char *line)
     if (line[0] == '#') return;
     if (!s.pending) return; /* greeting and anything unsolicited */
 
+    if (s.user_active) {
+        /* A UI command: keep its exit status and its last few lines, verbatim. The
+         * refusals name a physical cause, and that is what the user needs to read. */
+        lock();
+        if (strncmp(line, "exit ", 5) == 0) {
+            s.user_res.exit = atoi(line + 5);
+        } else if (line[0] && strncmp(line, "> ", 2) != 0) {
+            memmove(s.user_res.reply[0], s.user_res.reply[1], sizeof(s.user_res.reply[0]) * 2);
+            snprintf(s.user_res.reply[2], sizeof(s.user_res.reply[2]), "%s", line);
+        }
+        unlock();
+        return;
+    }
+
     /* A command's response: `ver` (key value) and `config` (key=value). */
     char *eq = strchr(line, '=');
     lock();
@@ -329,6 +348,30 @@ static void link_task(void *arg)
                     peer_save();
                 }
             }
+        } else if (s.user_want) {
+            s.user_want = false;
+            lock();
+            s.user_res.busy       = true;
+            s.user_res.done       = false;
+            s.user_res.exit       = -1;
+            s.user_res.started_us = esp_timer_get_time();
+            memset(s.user_res.reply, 0, sizeof(s.user_res.reply));
+            char cmd[48];
+            snprintf(cmd, sizeof(cmd), "%s", s.user_res.cmd);
+            const int timeout = s.user_res.timeout_ms;
+            unlock();
+
+            s.user_active = true;
+            const bool got = run(cmd, timeout);
+            s.user_active = false;
+
+            lock();
+            s.user_res.busy     = false;
+            s.user_res.done     = true;
+            s.user_res.answered = got && s.conn != BLE_HS_CONN_HANDLE_NONE;
+            unlock();
+            ESP_LOGI(TAG, "%s -> %s, exit %d", cmd, got ? "answered" : "no answer",
+                     s.user_res.exit);
         } else if (esp_timer_get_time() - last_config > 300LL * 1000000) {
             /* Capacity is learned over time; re-read it now and then. */
             run("config", 5000);
@@ -738,6 +781,28 @@ void link_forget(void)
     }
     ble_store_clear();
     note("forgotten; pick a board");
+}
+
+bool link_command(const char *cmd, int timeout_ms)
+{
+    lock();
+    const bool ok = s.model.state == LINK_READY && !s.user_want && !s.user_res.busy;
+    if (ok) {
+        snprintf(s.user_res.cmd, sizeof(s.user_res.cmd), "%s", cmd);
+        s.user_res.timeout_ms = timeout_ms;
+        s.user_res.done       = false;
+        s.user_want           = true;
+    }
+    unlock();
+    if (ok) xEventGroupSetBits(s.ev, EV_KICK);
+    return ok;
+}
+
+void link_command_status(link_cmd_t *out)
+{
+    lock();
+    *out = s.user_res;
+    unlock();
 }
 
 bool link_passkey_wanted(char *who, size_t n)
