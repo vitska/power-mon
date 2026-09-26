@@ -96,6 +96,32 @@ fun ConfigureScreen(vm: MonitorViewModel) {
 
     val guarded: (Confirmation) -> Unit = { confirm = it }
 
+    /*
+     * Calibration answers are shown where the calibration is, not only in "Last
+     * response" at the top of the screen: the device's refusals name the physical
+     * cause ("sign mismatch", "must both exceed 10000 uA"), and a refusal nobody sees
+     * reads as a button that does nothing.
+     */
+    var calResult by remember { mutableStateOf<String?>(null) }
+    var calBusy by remember { mutableStateOf(false) }
+    val calSet: (String) -> Unit = { cmd ->
+        calBusy = true
+        calResult = "running " + cmd + " -- the board is averaging, up to ~40 s"
+        vm.launchCommandWith(cmd) { r ->
+            calBusy = false
+            val text = if (r == null) "no reply -- timed out"
+            else (if (r.ok) "done: " else "REFUSED (exit " + r.exit + "): ") +
+                r.lines.filter { it.isNotBlank() && !it.startsWith(".") }
+                    .takeLast(4).joinToString("\n")
+            calResult = text
+            last = text
+            vm.launchRefreshConfig()
+        }
+        Unit
+    }
+    /* A value the board is certain to refuse, explained before anything is sent. */
+    var calProblem by remember { mutableStateOf<CalProblem?>(null) }
+
     LaunchedEffect(link) {
         if (link == Link.Ready && !cfg.supported) vm.refreshConfig()
     }
@@ -227,16 +253,49 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             MicroField(
                 "Measured current now", "A", "1.959",
                 prefill = t.amps?.let { String.format("%.4f", it) },
+                signed = true,
             ) { v ->
-                guarded(
-                    Confirmation(
-                        "Set the current gain from " + v + " A?",
-                        "The meter and the device must be measuring the same current in " +
-                            "the same direction — a disagreement on sign is rejected " +
-                            "rather than absorbed. Averages 64 samples, about 17 s.",
-                        "cal top i " + Micro.amps(v),
+                val live = t.amps
+                val confirmIt = { value: Double ->
+                    guarded(
+                        Confirmation(
+                            "Set the current gain from " + value + " A?",
+                            "The meter and the device must be measuring the same current " +
+                                "in the same direction — a disagreement on sign is rejected " +
+                                "rather than absorbed. Averages 64 samples, about 17 s.",
+                            "cal top i " + Micro.amps(value),
+                        )
                     )
-                )
+                }
+                when {
+                    // The firmware's floor (CLI.md: "must both exceed 10000 uA").
+                    Math.abs(v) < 0.010 || (live != null && Math.abs(live) < 0.010) ->
+                        calProblem = CalProblem(
+                            "Not enough current to calibrate",
+                            "Both your meter reading and the board's own must exceed 10 mA" +
+                                (live?.let { " — the board measures " +
+                                    String.format("%.4f", it) + " A now" } ?: "") +
+                                ". At lower currents the offset dominates the ratio and the " +
+                                "solved gain would be meaningless. Apply a steady load, " +
+                                "ideally half to most of the working maximum, and try again.",
+                            null,
+                        )
+                    // The firmware's sign check, explained with the way through.
+                    live != null && (v < 0) != (live < 0) ->
+                        calProblem = CalProblem(
+                            "Sign disagrees with the board",
+                            "You entered " + v + " A; the board measures " +
+                                String.format("%.4f", live) + " A, the other direction. " +
+                                "It refuses a disagreement rather than absorbing it.\n\n" +
+                                "The gain depends only on the magnitude, so to calibrate " +
+                                "now use the meter's value with the board's sign. " +
+                                "Positive means charging on this board: if that is not what " +
+                                "the current is really doing, the direction is a wiring or " +
+                                "'sense sign' question to settle separately.",
+                            -v,
+                        ) { value -> confirmIt(value) }
+                    else -> confirmIt(v)
+                }
             }
             MicroField(
                 "Measured voltage AT REST", "V", "12.44",
@@ -265,6 +324,18 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                         "cal vpath " + Micro.volts(v),
                     )
                 )
+            }
+
+            calResult?.let { res ->
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    res,
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (res.startsWith("REFUSED") || res.startsWith("no reply"))
+                        MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                )
+                if (calBusy) Text("command in flight...", style = MaterialTheme.typography.labelMedium)
             }
 
             Spacer(Modifier.height(12.dp))
@@ -560,13 +631,39 @@ fun ConfigureScreen(vm: MonitorViewModel) {
         Spacer(Modifier.height(24.dp))
     }
 
+    calProblem?.let { pb ->
+        AlertDialog(
+            onDismissRequest = { calProblem = null },
+            title = { Text(pb.title) },
+            text = { Text(pb.body) },
+            confirmButton = {
+                if (pb.alternative != null) {
+                    Button(onClick = {
+                        calProblem = null
+                        pb.onAlternative?.invoke(pb.alternative)
+                    }) { Text("Use " + pb.alternative + " A") }
+                } else {
+                    TextButton(onClick = { calProblem = null }) { Text("OK") }
+                }
+            },
+            dismissButton = {
+                if (pb.alternative != null) {
+                    TextButton(onClick = { calProblem = null }) { Text("Cancel") }
+                }
+            },
+        )
+    }
+
     confirm?.let { c ->
         AlertDialog(
             onDismissRequest = { confirm = null },
             title = { Text(c.title) },
             text = { Text(c.body) },
             confirmButton = {
-                Button(onClick = { confirm = null; set(c.command) }) { Text("Run") }
+                Button(onClick = {
+                    confirm = null
+                    if (c.command.startsWith("cal ")) calSet(c.command) else set(c.command)
+                }) { Text("Run") }
             },
             dismissButton = {
                 TextButton(onClick = { confirm = null }) { Text("Cancel") }
@@ -576,6 +673,14 @@ fun ConfigureScreen(vm: MonitorViewModel) {
 }
 
 private data class Confirmation(val title: String, val body: String, val command: String)
+
+/** A value the board would refuse, and, where there is one, the value that would work. */
+private class CalProblem(
+    val title: String,
+    val body: String,
+    val alternative: Double?,
+    val onAlternative: ((Double) -> Unit)? = null,
+)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -656,6 +761,7 @@ private fun MicroField(
     hint: String,
     current: String? = null,
     prefill: String? = null,
+    signed: Boolean = false,
     onSet: (Double) -> Unit,
 ) {
     var text by remember { mutableStateOf("") }
@@ -671,6 +777,13 @@ private fun MicroField(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 modifier = Modifier.weight(1f),
             )
+            if (signed) {
+                // Many numeric keypads have no minus key, and a discharge current is
+                // negative: a sign toggle that works whatever the keyboard offers.
+                TextButton(onClick = {
+                    text = if (text.startsWith("-")) text.drop(1) else "-" + text
+                }) { Text("±") }
+            }
             Spacer(Modifier.width(8.dp))
             Button(onClick = { v?.let(onSet) }, enabled = v != null) { Text("Set") }
         }
