@@ -163,7 +163,11 @@ class BatmonClient(private val context: Context, private val scope: CoroutineSco
                 if (!name.startsWith(Nus.NAME_PREFIX)) return
                 note(Discovered(dev.address, name, result.rssi))
                 val wanted = dev.address.equals(this@BatmonClient.autoConnectTo, true)
-                if (wanted || this@BatmonClient.connectFirstFound) {
+                // "The first board found" means a monitor: a remote display in update
+                // mode is only ever connected to on purpose.
+                val first = this@BatmonClient.connectFirstFound &&
+                    !name.startsWith(Nus.REMOTE_PREFIX)
+                if (wanted || first) {
                     this@BatmonClient.autoConnectTo = null
                     this@BatmonClient.connectFirstFound = false
                     connect(dev.address)

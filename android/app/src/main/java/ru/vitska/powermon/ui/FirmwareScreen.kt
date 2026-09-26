@@ -30,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import ru.vitska.powermon.ble.FirmwareReleases
+import ru.vitska.powermon.ble.FirmwareTarget
 import ru.vitska.powermon.ble.FwVersion
 import ru.vitska.powermon.ble.Link
 import ru.vitska.powermon.model.MonitorViewModel
@@ -51,7 +52,9 @@ fun FirmwareScreen(vm: MonitorViewModel) {
     var confirmFlash by remember { mutableStateOf<String?>(null) }
     var pickedFile by remember { mutableStateOf<ByteArray?>(null) }
 
-    LaunchedEffect(Unit) { if (!fw.checked && !fw.checking) vm.checkLatest() }
+    // Keyed on the target: connecting to a remote display after a monitor (or back)
+    // needs the other release series.
+    LaunchedEffect(fw.target, fw.checked) { if (!fw.checked && !fw.checking) vm.checkLatest() }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
             uri: Uri? ->
@@ -85,7 +88,7 @@ fun FirmwareScreen(vm: MonitorViewModel) {
             Section("Done") { Text(it) }
         }
 
-        Section("On the board") {
+        Section(if (fw.target == FirmwareTarget.REMOTE) "On the remote display" else "On the board") {
             KV("firmware", fw.ota?.version ?: shake.firmware.ifEmpty { "—" })
             fw.ota?.let { o ->
                 KV("slot", o.running ?: "—")
@@ -131,7 +134,7 @@ fun FirmwareScreen(vm: MonitorViewModel) {
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
-                fw.checked -> Text("No release with ${FirmwareReleases.ASSET} is published yet.")
+                fw.checked -> Text("No release with ${fw.target.asset} is published yet.")
                 else -> Text("Not checked.")
             }
             Spacer(Modifier.height(8.dp))

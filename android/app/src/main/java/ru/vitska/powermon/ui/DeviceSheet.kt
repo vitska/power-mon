@@ -101,6 +101,11 @@ fun DeviceSheet(vm: MonitorViewModel, onDismiss: () -> Unit) {
                             if (signal != null) {
                                 Text(signal, style = MaterialTheme.typography.labelSmall)
                             }
+                            if (d.isRemote) {
+                                Text("remote display — firmware update",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.tertiary)
+                            }
                             if (d.known) {
                                 Text("saved", style = MaterialTheme.typography.labelSmall)
                             }

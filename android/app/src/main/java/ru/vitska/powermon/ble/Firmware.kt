@@ -38,6 +38,30 @@ data class FwVersion(val major: Int, val minor: Int, val patch: Int, val pre: St
 }
 
 /**
+ * Which of the two firmwares a device runs, and so which image and release series fit
+ * it. The monitor is an ESP32-C6; the remote display (remote/) a classic ESP32. Each
+ * checks an image against its own project name as well, so sending the wrong one is
+ * refused twice -- here, before any byte goes, and on the device.
+ */
+enum class FirmwareTarget(
+    val label: String,
+    val project: String,
+    val chipId: Int,
+    val chipName: String,
+    val tagPrefix: String,
+    val asset: String,
+) {
+    MONITOR("battery monitor", "bat-monitor", 13, "ESP32-C6", "v", "bat-monitor.bin"),
+    REMOTE("remote display", "batmon-remote", 0, "ESP32", "remote-v", "batmon-remote.bin");
+
+    companion object {
+        /** A remote display in update mode advertises as batmon-remote-XXXX. */
+        fun forDeviceName(name: String?): FirmwareTarget =
+            if (name?.startsWith(Nus.REMOTE_PREFIX) == true) REMOTE else MONITOR
+    }
+}
+
+/**
  * A firmware image, checked before a single byte goes to the device.
  *
  * ESP-IDF images carry their own identity at fixed offsets: a 24-byte image header whose
@@ -58,24 +82,26 @@ class FirmwareImage private constructor(
     }
 
     companion object {
-        const val PROJECT = "bat-monitor"
         private const val IMAGE_MAGIC = 0xE9
-        private const val CHIP_ID_ESP32C6 = 13
         private const val DESC_OFFSET = 32
         private const val DESC_MAGIC = 0xABCD5432L
 
         /** Returns the image, or throws with a sentence saying what is wrong with it. */
-        fun parse(bytes: ByteArray): FirmwareImage {
+        fun parse(bytes: ByteArray, target: FirmwareTarget): FirmwareImage {
             require(bytes.size > DESC_OFFSET + 112) { "too short to be a firmware image" }
             require((bytes[0].toInt() and 0xFF) == IMAGE_MAGIC) {
                 "not an ESP32 app image (a merged or bootloader .bin will not work here)"
             }
             val chip = u16(bytes, 12)
-            require(chip == CHIP_ID_ESP32C6) { "built for chip id $chip, not an ESP32-C6" }
+            require(chip == target.chipId) {
+                "built for chip id $chip, not the ${target.label}'s ${target.chipName}"
+            }
             require(u32(bytes, DESC_OFFSET) == DESC_MAGIC) { "no app descriptor in the image" }
             val version = cstr(bytes, DESC_OFFSET + 16, 32)
             val project = cstr(bytes, DESC_OFFSET + 48, 32)
-            require(project == PROJECT) { "image is '$project', not $PROJECT" }
+            require(project == target.project) {
+                "image is '$project', not ${target.project} -- the ${target.label} needs ${target.asset}"
+            }
             return FirmwareImage(bytes, version, project)
         }
 
@@ -93,28 +119,41 @@ class FirmwareImage private constructor(
 }
 
 /** A published firmware release: where it is and what it claims to be. */
-data class Release(val tag: String, val name: String, val assetUrl: String, val size: Long) {
-    val version: FwVersion? get() = FwVersion.parse(tag)
+data class Release(
+    val tag: String,
+    val name: String,
+    val assetUrl: String,
+    val size: Long,
+    val target: FirmwareTarget,
+) {
+    val version: FwVersion? get() = FwVersion.parse(tag.removePrefix(target.tagPrefix))
 }
 
 /**
- * Releases live on GitHub, as README.md "Versioning" describes: a `vX.Y.Z` tag with the
- * app image attached as `bat-monitor.bin`. Blocking calls -- run them off the main thread.
+ * Releases live on GitHub, as README.md "Versioning" describes, in two series: the
+ * monitor's `vX.Y.Z` with `bat-monitor.bin`, and the remote display's `remote-vX.Y.Z`
+ * with `batmon-remote.bin`. Only monitor releases are ever GitHub's "latest", so this
+ * lists recent releases and takes the newest of the wanted series rather than asking
+ * for "latest". Blocking calls -- run them off the main thread.
  */
 object FirmwareReleases {
     const val REPO = "vitska/power-mon"
-    const val ASSET = "bat-monitor.bin"
 
-    /** The newest non-draft, non-prerelease release that has the image, or null. */
-    fun latest(): Release? {
-        val c = open("https://api.github.com/repos/$REPO/releases/latest")
+    /** The newest published release of `target`'s series that has its image, or null. */
+    fun latest(target: FirmwareTarget): Release? {
+        val c = open("https://api.github.com/repos/$REPO/releases?per_page=30")
         c.setRequestProperty("Accept", "application/vnd.github+json")
         return try {
-            when (c.responseCode) {
-                200 -> parse(JSONObject(c.inputStream.bufferedReader().readText()))
-                404 -> null // no release published yet
-                else -> throw java.io.IOException("GitHub answered HTTP ${c.responseCode}")
+            if (c.responseCode != 200) {
+                throw java.io.IOException("GitHub answered HTTP ${c.responseCode}")
             }
+            val list = org.json.JSONArray(c.inputStream.bufferedReader().readText())
+            (0 until list.length())
+                .map { list.getJSONObject(it) }
+                .filter { !it.optBoolean("draft") && !it.optBoolean("prerelease") }
+                .mapNotNull { parse(it, target) }
+                // The API sorts by creation date; the version number is what counts.
+                .maxWithOrNull(compareBy(nullsFirst()) { it.version })
         } finally {
             c.disconnect()
         }
@@ -131,16 +170,23 @@ object FirmwareReleases {
         }
     }
 
-    private fun parse(j: JSONObject): Release? {
+    private fun parse(j: JSONObject, target: FirmwareTarget): Release? {
+        val tag = j.optString("tag_name")
+        // "v1.2.3" is a monitor tag and "remote-v1.2.3" a remote one; requiring a digit
+        // straight after the prefix keeps the two series from matching each other.
+        if (!tag.startsWith(target.tagPrefix) ||
+            tag.getOrNull(target.tagPrefix.length)?.isDigit() != true
+        ) return null
         val assets = j.optJSONArray("assets") ?: return null
         for (i in 0 until assets.length()) {
             val a = assets.getJSONObject(i)
-            if (a.optString("name") == ASSET) {
+            if (a.optString("name") == target.asset) {
                 return Release(
-                    tag = j.optString("tag_name"),
+                    tag = tag,
                     name = j.optString("name"),
                     assetUrl = a.getString("browser_download_url"),
                     size = a.optLong("size"),
+                    target = target,
                 )
             }
         }

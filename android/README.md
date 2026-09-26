@@ -166,6 +166,15 @@ reinstalling or going back is possible but behind a dialog. A local
 is sent: ESP-IDF images carry their chip ID and app descriptor (version, project name) at
 fixed offsets, so a wrong file is refused on the phone, not discovered on the board.
 
+**Remote displays too.** A remote display in its Firmware update screen appears in the
+device list as `batmon-remote-XXXX`, labelled as such, and is never connected to
+automatically. Connected to one, the Firmware tab looks in the remote's release series
+(`remote-vX.Y.Z`, `batmon-remote.bin`) rather than the monitor's. It checks an image for
+the classic ESP32 and the `batmon-remote` project, and the update runs exactly as for a
+monitor. The other tabs say that a remote has nothing to show or configure. Releases are
+found by listing them, not by asking for GitHub's "latest", which only ever points at the
+monitor series.
+
 The transfer is CLI.md §6: `ota begin` with size and SHA-256, the image in acknowledged
 writes to the OTA characteristic, each prefixed with its offset, then `ota end` and
 `reboot`. The app then finds the board again by address, and once the handshake succeeds

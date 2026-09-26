@@ -16,6 +16,9 @@ object Nus {
     val OTA: UUID = UUID.fromString("6E400004-B5A3-F393-E0A9-E50E24DCCA9E")  // write
 
     const val NAME_PREFIX = "batmon"
+    /** A remote display (remote/) in firmware-update mode. It shares the prefix, so
+     *  test this first: it is a device to update, not a monitor to watch. */
+    const val REMOTE_PREFIX = "batmon-remote"
     const val EOT = 0x04.toByte()
 
     /** Protocol this client was written against; `ver` reports the device's. */

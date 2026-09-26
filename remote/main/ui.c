@@ -36,9 +36,12 @@
 #include "history.h"
 #include "lcd.h"
 #include "link.h"
+#include "ota.h"
+#include "rcon.h"
 #include "touch.h"
 
-typedef enum { SCR_MAIN, SCR_SETTINGS, SCR_DEVICES, SCR_NUMPAD, SCR_CONFIRM, SCR_PASSKEY } screen_t;
+typedef enum { SCR_MAIN, SCR_SETTINGS, SCR_DEVICES, SCR_NUMPAD, SCR_CONFIRM, SCR_UPDATE,
+               SCR_PASSKEY } screen_t;
 
 #define STALE_US (5LL * 1000000) /* no record for this long: the numbers are old */
 
@@ -489,9 +492,10 @@ static const action_def_t ACTIONS[] = {
                     "V", 37000},
 };
 
-#define SET_ROW_Y(i) (26 + (i) * 36)
-#define SET_ROW_H    34
-#define SET_ROWS     5 /* the board, then the four actions */
+#define SET_ROW_Y(i) (24 + (i) * 31)
+#define SET_ROW_H    29
+#define SET_ROWS     6 /* the board, the four calibration actions, firmware update */
+#define ROW_UPDATE   5
 
 static action_t s_action;
 static char     s_entry[12];
@@ -540,9 +544,9 @@ static void settings_row(int i, const char *title, const char *sub, bool enabled
     const int      y  = SET_ROW_Y(i);
     const uint16_t fg = enabled ? C_WHITE : C_GREY;
     lcd_fill(0, y, LCD_W, SET_ROW_H, C_PANEL);
-    lcd_text(8, y + 3, title, 2, fg, C_PANEL);
-    lcd_text(8, y + 22, sub, 1, C_GREY, C_PANEL);
-    lcd_text(300, y + 9, ">", 2, C_GREY, C_PANEL);
+    lcd_text(8, y + 2, title, 2, fg, C_PANEL);
+    lcd_text(8, y + 20, sub, 1, C_GREY, C_PANEL);
+    lcd_text(300, y + 7, ">", 2, C_GREY, C_PANEL);
 }
 
 static void settings_draw(const link_model_t *m, bool force)
@@ -563,6 +567,7 @@ static void settings_draw(const link_model_t *m, bool force)
         for (int a = 0; a < 4; a++) {
             settings_row(a + 1, ACTIONS[a].title, ACTIONS[a].sub, ready);
         }
+        settings_row(ROW_UPDATE, "FIRMWARE UPDATE", "update this display from the phone app", true);
         ready_last = ready;
         snprintf(name_last, sizeof(name_last), "%s", m->name);
     }
@@ -714,12 +719,117 @@ static bool confirm_tap(int tx, int ty)
     return false;
 }
 
+/* --- firmware update of the remote itself --------------------------------------------- */
+
+/*
+ * While this screen is open the remote advertises as batmon-remote-XXXX and the phone
+ * app can update it exactly as it updates the monitor (rcon.c). Leaving the screen
+ * stops advertising, so a remote is never open to a new image by accident. A freshly
+ * updated remote boots straight into this screen: the app has to be able to find it
+ * again to confirm the new image, and so does the person holding it.
+ */
+static void update_draw(bool force)
+{
+    static field_t f_ver, f_link, f_i1, f_i2, f_prog, f_p1, f_p2;
+    static int     bar_last = -2;
+    static bool    btn_last;
+    ota_status_t   o;
+    rcon_status_t  r;
+    ota_get_status(&o);
+    rcon_status(&r);
+    char b[64];
+
+    if (force) {
+        lcd_fill(0, 0, LCD_W, LCD_H, C_BLACK);
+        lcd_fill(0, 0, LCD_W, 22, C_HEADER);
+        lcd_text(6, 3, "FIRMWARE UPDATE", 2, C_WHITE, C_HEADER);
+        button(240, 0, 80, 22, "BACK", 2, C_HEADER, C_WHITE);
+        bar_last = -2;
+        btn_last = !o.pending;
+    }
+
+    snprintf(b, sizeof(b), "%s on %s", o.version, o.running);
+    field(&f_ver, 6, 30, 308, 2, C_WHITE, C_BLACK, b);
+
+    if (r.connected)        snprintf(b, sizeof(b), "phone connected");
+    else if (r.advertising) snprintf(b, sizeof(b), "visible as %s", r.name);
+    else                    snprintf(b, sizeof(b), "starting...");
+    field(&f_link, 6, 54, 308, 1, r.connected ? C_GREEN : C_CYAN, C_BLACK, b);
+
+    field(&f_i1, 6, 70, 308, 1, C_GREY, C_BLACK, "In the power-mon app: Bluetooth button, pick");
+    snprintf(b, sizeof(b), "%s, then Firmware -> Update.", r.name);
+    field(&f_i2, 6, 82, 308, 1, C_GREY, C_BLACK, b);
+
+    /* Progress, from the OTA session itself rather than from anything the app says. */
+    int bar = -1;
+    if (o.phase == OTA_RECEIVING && o.size) {
+        bar = (int)((uint64_t)o.received * 306 / o.size);
+        snprintf(b, sizeof(b), "receiving %lu of %lu KB", (unsigned long)(o.received / 1024),
+                 (unsigned long)(o.size / 1024));
+    } else if (strcmp(o.boot, o.running) != 0) {
+        snprintf(b, sizeof(b), "new image written -- restarting into it");
+    } else {
+        snprintf(b, sizeof(b), "waiting for the app");
+    }
+    field(&f_prog, 6, 104, 308, 1, bar >= 0 ? C_YELLOW : C_GREY, C_BLACK, b);
+    if (bar != bar_last) {
+        lcd_fill(6, 116, 308, 14, bar >= 0 ? C_GREY : C_BLACK);
+        if (bar >= 0) {
+            lcd_fill(7, 117, 306, 12, C_BLACK);
+            if (bar > 0) lcd_fill(7, 117, bar, 12, C_GREEN);
+        }
+        bar_last = bar;
+    }
+
+    if (o.pending) {
+        field(&f_p1, 6, 146, 308, 2, C_YELLOW, C_BLACK, "ON PROBATION");
+        if (o.probation_left_s >= 0) {
+            snprintf(b, sizeof(b), "Rolls back in %d min %02d s unless kept.",
+                     o.probation_left_s / 60, o.probation_left_s % 60);
+        } else {
+            snprintf(b, sizeof(b), "Rolls back at the next reset unless kept.");
+        }
+        field(&f_p2, 6, 168, 308, 1, C_WHITE, C_BLACK, b);
+    } else {
+        snprintf(b, sizeof(b), "previous image: %s", o.spare_version[0] ? o.spare_version : "none");
+        field(&f_p1, 6, 146, 308, 2, C_GREY, C_BLACK, "");
+        field(&f_p2, 6, 168, 308, 1, C_GREY, C_BLACK, b);
+    }
+    if (force || btn_last != o.pending) {
+        if (o.pending) {
+            button(10, 196, 140, 40, "KEEP", 2, RGB(30, 90, 40), C_WHITE);
+            button(170, 196, 140, 40, "ROLL BACK", 2, o.can_rollback ? RGB(90, 30, 30) : C_DIM,
+                   C_WHITE);
+        } else {
+            lcd_fill(0, 196, LCD_W, 44, C_BLACK);
+        }
+        btn_last = o.pending;
+    }
+}
+
+/* Returns true when the screen should be left. */
+static bool update_tap(int tx, int ty)
+{
+    if (hit(tx, ty, 240, 0, 80, 22)) return true;
+    ota_status_t o;
+    ota_get_status(&o);
+    if (o.pending && hit(tx, ty, 10, 196, 140, 40)) {
+        ota_confirm();
+    } else if (o.pending && o.can_rollback && hit(tx, ty, 170, 196, 140, 40)) {
+        ota_rollback();
+    }
+    return false;
+}
+
 /* --- the loop ---------------------------------------------------------------------- */
 
 static void go(screen_t scr)
 {
     if (s_screen == SCR_DEVICES && scr != SCR_DEVICES) link_browse(false);
     if (scr == SCR_DEVICES) link_browse(true);
+    /* Visible to the phone app only while the update screen is open. */
+    if (s_screen == SCR_UPDATE && scr != SCR_UPDATE) rcon_advertise(false);
+    if (scr == SCR_UPDATE) rcon_advertise(true);
     s_screen = scr;
     s_full   = true;
 }
@@ -732,6 +842,14 @@ void ui_run(void)
 
     s_screen = SCR_MAIN;
     s_full   = true;
+
+    /* A new image on probation: open the update screen, so the app can find the remote
+     * to confirm it and the person holding it can see what is going on. */
+    ota_status_t boot;
+    ota_get_status(&boot);
+    if (boot.pending) {
+        go(SCR_UPDATE);
+    }
 
     for (;;) {
         link_get(&m);
@@ -832,6 +950,8 @@ void ui_run(void)
                     if (!hit(tx, ty, 0, SET_ROW_Y(i), LCD_W, SET_ROW_H)) continue;
                     if (i == 0) {
                         go(SCR_DEVICES);
+                    } else if (i == ROW_UPDATE) {
+                        go(SCR_UPDATE);
                     } else if (m.state == LINK_READY) {
                         link_cmd_t c;
                         link_command_status(&c);
@@ -878,6 +998,20 @@ void ui_run(void)
                 go(SCR_SETTINGS);
             }
             break;
+
+        case SCR_UPDATE: {
+            static int64_t next_update_draw;
+            if (tap && update_tap(tx, ty)) {
+                go(SCR_SETTINGS);
+                break;
+            }
+            if (s_full || now >= next_update_draw) {
+                update_draw(s_full);
+                s_full           = false;
+                next_update_draw = now + 250 * 1000;
+            }
+            break;
+        }
 
         case SCR_PASSKEY:
             if (s_full) {

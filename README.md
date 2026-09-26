@@ -64,6 +64,8 @@ Verified against a 12 V / 44 A·h flooded lead-acid battery.
   - A Bluetooth icon flashes on each packet, with the packet rate beside it.
   - Its Settings screen switches boards and runs the calibration points.
   - It pairs with the monitor on its own keypad.
+  - It updates its own firmware over BLE from the phone app, with the same rollback as
+    the monitor.
 - **Firmware updates over BLE**: the phone app checks GitHub for a newer release and
   flashes it. A new image runs on probation and rolls back on its own unless confirmed.
 

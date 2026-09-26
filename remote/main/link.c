@@ -34,6 +34,7 @@
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "nvs.h"
+#include "rcon.h"
 
 /* Declared by NimBLE's store module but not exported in a public header. */
 void ble_store_config_init(void);
@@ -512,6 +513,11 @@ static void on_adv(const struct ble_gap_disc_desc *d)
     if (name[0] && strncmp(name, NAME_PREFIX, strlen(NAME_PREFIX)) != 0) {
         return;
     }
+    /* Another remote display in update mode advertises as batmon-remote-XXXX: it is
+     * not a monitor, and connecting to it would find no telemetry. */
+    if (strncmp(name, "batmon-remote", 13) == 0) {
+        return;
+    }
     if (!name[0]) {
         bool known = false;
         lock();
@@ -657,6 +663,7 @@ static void on_sync(void)
     ble_hs_util_ensure_addr(0);
     ble_hs_id_infer_auto(0, &s.own_addr_type);
     start_scan();
+    rcon_on_sync();
 }
 
 static void on_reset(int reason)
@@ -693,8 +700,9 @@ void link_start(void)
     ble_hs_cfg.sm_our_key_dist   = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
     ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
 
-    /* No GAP/GATT server services: the remote is a pure central, and with the
-     * peripheral role compiled out NimBLE does not build them. */
+    /* The remote is also a peripheral, for its own firmware updates (rcon.c).
+     * Services can only be added before the host starts. */
+    rcon_register();
     ble_store_config_init();
 
     xTaskCreate(link_task, "link", 4096, NULL, 5, NULL);

@@ -37,6 +37,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import ru.vitska.powermon.ble.ConfigState
 import ru.vitska.powermon.ble.Chemistries
+import ru.vitska.powermon.ble.FirmwareTarget
 import ru.vitska.powermon.ble.Link
 import ru.vitska.powermon.ble.Micro
 import ru.vitska.powermon.model.MonitorViewModel
@@ -105,6 +106,11 @@ fun ConfigureScreen(vm: MonitorViewModel) {
     ) {
         if (link != Link.Ready) {
             Warn("Not connected. Nothing on this screen can be read or set until a board is.")
+        } else if (FirmwareTarget.forDeviceName(vm.deviceName.collectAsState().value) ==
+            FirmwareTarget.REMOTE
+        ) {
+            Warn("This is a remote display: it has nothing to configure from here. Use the " +
+                "Firmware tab to update it, and its own Settings screen for the rest.")
         } else if (!cfg.supported) {
             // Degrade honestly rather than showing values we would have to guess at.
             Warn(

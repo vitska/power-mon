@@ -15,6 +15,7 @@
 
 #include "lcd.h"
 #include "link.h"
+#include "ota.h"
 #include "touch.h"
 #include "ui.h"
 
@@ -34,6 +35,9 @@ void app_main(void)
         err = nvs_flash_init();
     }
     ESP_ERROR_CHECK(err);
+
+    /* Before anything that might hang: a new image's probation clock starts here. */
+    ota_init();
 
     lcd_init();
     touch_init();

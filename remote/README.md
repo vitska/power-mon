@@ -106,6 +106,34 @@ shows every 30 seconds:
 I (31402) ui: batmon-DCFA live: 71.5 % 12.424 V -0.0091 A (avg -0.0091) RESTING, cap 44000 mAh, flooded 6S
 ```
 
+## Firmware update over BLE
+
+The remote updates from the phone app the same way the monitor does. Settings →
+**FIRMWARE UPDATE** opens a screen that makes the remote visible as `batmon-remote-XXXX`.
+In the app:
+1. Tap the Bluetooth button and pick `batmon-remote-XXXX`. It is labelled "remote display —
+   firmware update", and the app never connects to one on its own.
+2. On the Firmware tab, tap **Update to remote-vX.Y.Z**, or flash a local
+   `remote/build/batmon-remote.bin`.
+
+The remote shows the transfer's progress itself. It restarts into the new image, reopens
+this screen, and the app reconnects and confirms it.
+
+- **Visible only on that screen.** Leaving it stops advertising, so the remote is not in
+  every device list and takes no firmware from anyone nearby the rest of the time. A
+  phone already connected stays connected.
+- **Probation and rollback.** A new image boots on probation, straight into the update
+  screen, so the app can find it again. It is kept when the app confirms it or when you
+  tap **KEEP**. **ROLL BACK** returns to the previous image. So does a reset before
+  either, and so does ten minutes without a confirmation.
+- **Same protocol as the monitor.** The remote serves the monitor's Nordic UART service,
+  framing, OTA characteristic and `ver` / `ota ...` / `reboot` commands (CLI.md §6). It
+  also runs the monitor's own `ota.c`, which checks an image against this firmware's
+  project name, so a monitor image is refused here, and a remote image there.
+- **The first time needs USB.** Remote firmware 0.1.0 had one app slot. `flash.ps1 -Remote`
+  once installs the two-slot partition table and the rollback bootloader. The remembered
+  board and pairing bonds survive it.
+
 ## Versions and releases
 
 `remote/version.txt` is the remote's version, separate from the monitor's. It shows on
@@ -117,10 +145,9 @@ the boot splash and in the serial log. A release is tagged `remote-vX.Y.Z`, with
 .	oolselease.ps1 -Remote -Bump minor           # commit, tag, push, publish
 ```
 
-Remote releases are never marked "latest" on GitHub. That spot belongs to the monitor
-firmware, which the phone app looks up there. To install a released image, download
-`batmon-remote.bin` and flash it at 0x10000 over the existing bootloader and partition
-table, or build the tag and run `.	oolslash.ps1 -Remote`.
+Remote releases are never marked "latest" on GitHub; that spot belongs to the monitor
+firmware. The phone app finds the newest release of whichever series fits the connected
+device, and installs it over BLE as described above.
 
 ## Board wiring (fixed on the PCB)
 
@@ -138,3 +165,5 @@ table, or build the tag and run `.	oolslash.ps1 -Remote`.
 | `main/lcd.c` | Panel init and drawing (rectangles, 5×7 text scaled, strip-rendered bitmaps). No framebuffer: 150 KB is too much of the ESP32's RAM beside the BLE stack |
 | `main/touch.c` | XPT2046: pressure check, median of five conversions, taps on the press edge |
 | `main/history.c` | 24 h of SoC, one point a minute |
+| `main/rcon.c` | The peripheral side: advertising in update mode, the small console (`ver`, `ota`, `reboot`) and the OTA characteristic |
+| `../main/ota.c` | The OTA session and probation, shared with the monitor |

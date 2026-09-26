@@ -758,3 +758,9 @@ another:
 - **The remote display**, [`remote/`](remote/README.md), a BLE central on an
   ESP32-2432S028. It sends `ver`, `config` and `stream csv`, parses `f` and `c`, and runs
   calibration. It pairs by passkey entry when the board is in `bonded` mode.
+
+The remote display also *serves* a subset of this protocol, for its own firmware updates.
+While its update screen is open it advertises as `batmon-remote-XXXX` and answers `ver`
+(with `device remote`), the `ota` commands, `reboot` and `help` on the same service, with
+the same framing and OTA characteristic. Everything else answers `exit -2`. A client
+tells the two apart by the name prefix, or by `device remote` in `ver`.

@@ -26,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.vitska.powermon.ble.Chemistries
+import ru.vitska.powermon.ble.FirmwareTarget
 import ru.vitska.powermon.ble.Link
 import ru.vitska.powermon.model.MonitorViewModel
 
@@ -69,6 +70,14 @@ fun MonitorScreen(vm: MonitorViewModel, onPickDevice: () -> Unit = {}) {
             }
         }
 
+        if (FirmwareTarget.forDeviceName(vm.deviceName.collectAsState().value) ==
+            FirmwareTarget.REMOTE && link == Link.Ready
+        ) {
+            Warn(
+                "This is a batmon remote display, not a monitor: it has no telemetry of " +
+                    "its own. Only the Firmware tab applies to it."
+            )
+        }
         if (shake.mismatch) {
             // CLI.md: refuse to drive a protocol you do not know rather than guess.
             Warn(

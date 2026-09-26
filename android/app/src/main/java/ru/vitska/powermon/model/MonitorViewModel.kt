@@ -21,6 +21,7 @@ import ru.vitska.powermon.ble.ConfigState
 import ru.vitska.powermon.ble.DeviceStore
 import ru.vitska.powermon.ble.FirmwareImage
 import ru.vitska.powermon.ble.FirmwareReleases
+import ru.vitska.powermon.ble.FirmwareTarget
 import ru.vitska.powermon.ble.GATT_NOT_STARTED
 import ru.vitska.powermon.ble.GATT_TIMEOUT
 import ru.vitska.powermon.ble.OtaStatus
@@ -65,6 +66,9 @@ data class FirmwareState(
     val ota: OtaStatus? = null,
     /** The board answered `ota` with "unknown command": it predates BLE updates. */
     val unsupported: Boolean = false,
+    /** Which firmware the connected device runs: monitor or remote display. */
+    val target: FirmwareTarget = FirmwareTarget.MONITOR,
+    /** The newest release of [target]'s series. */
     val latest: Release? = null,
     val checking: Boolean = false,
     /** True once a check has completed, so "no release" can be told from "not asked". */
@@ -85,7 +89,10 @@ data class DeviceEntry(
     val rssi: Int?,
     val known: Boolean,
     val connected: Boolean,
-)
+) {
+    /** A remote display in update mode, not a monitor. */
+    val isRemote: Boolean get() = name.startsWith(ru.vitska.powermon.ble.Nus.REMOTE_PREFIX)
+}
 
 class MonitorViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -272,6 +279,18 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
             store.last = addr
             knownRevision.value += 1
         }
+        val target = FirmwareTarget.forDeviceName(client.deviceName.value)
+        if (target != _fw.value.target) {
+            // Another series: the release found for the previous device does not apply.
+            _fw.value = _fw.value.copy(target = target, latest = null, checked = false)
+        }
+        if (target == FirmwareTarget.REMOTE) {
+            // A remote display serves only `ver`, `ota` and `reboot`: no settings to
+            // read and no telemetry to start.
+            refreshOta()
+            settleUpdate()
+            return@launch
+        }
         refreshConfig()
         refreshOta()
         settleUpdate()
@@ -305,7 +324,8 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
     /** Asks GitHub for the newest release. Off the main thread; errors land in [firmware]. */
     fun checkLatest() = viewModelScope.launch {
         _fw.value = _fw.value.copy(checking = true, error = null)
-        val result = runCatching { withContext(Dispatchers.IO) { FirmwareReleases.latest() } }
+        val target = _fw.value.target
+        val result = runCatching { withContext(Dispatchers.IO) { FirmwareReleases.latest(target) } }
         _fw.value = _fw.value.copy(
             checking = false,
             checked = result.isSuccess,
@@ -318,12 +338,12 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
         val rel = _fw.value.latest ?: return
         startUpdate("downloading ${rel.tag}") {
             val bytes = withContext(Dispatchers.IO) { FirmwareReleases.download(rel) }
-            FirmwareImage.parse(bytes)
+            FirmwareImage.parse(bytes, _fw.value.target)
         }
     }
 
     fun updateFromFile(bytes: ByteArray) = startUpdate("checking the file") {
-        FirmwareImage.parse(bytes)
+        FirmwareImage.parse(bytes, _fw.value.target)
     }
 
     fun cancelUpdate() {
