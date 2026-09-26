@@ -191,7 +191,9 @@ try {
                 Select-Object -First 1
         if (-not $aapt) { Fail "No aapt in the SDK's build-tools; cannot verify the APK." }
         $badging = (& $aapt dump badging $bin) -join "`n"
-        if ($badging -notmatch "package: name='ru\.vitska\.powermon'.*versionName='([^']+)'") {
+        # " versionName=" with its leading space: the same line also carries
+        # platformBuildVersionName, which a looser pattern matches instead.
+        if ($badging -notmatch "package: name='ru\.vitska\.powermon'[^\n]*? versionName='([^']+)'") {
             Fail "Cannot read the package and version out of $bin."
         }
         if ($Matches[1] -ne $version) {
