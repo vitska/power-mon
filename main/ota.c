@@ -120,6 +120,39 @@ static esp_timer_handle_t make_timer(esp_timer_cb_t cb, const char *name)
     return t;
 }
 
+/* --- what the spare slot holds -------------------------------------------------- */
+
+/*
+ * THE MAPPING IS SHARED AND UNLOCKED. Every ESP-IDF call that reads an image out of
+ * flash -- the spare slot's description, whether rollback is possible, esp_ota_end()'s
+ * validation -- goes through bootloader_mmap(), which has exactly one slot and no lock.
+ * Two tasks in there at once and the second fails with "tried to bootloader_mmap
+ * twice". The remote display's update screen polls ota_get_status() four times a
+ * second from its UI task, and that used to ask both questions every time -- so the
+ * validation at the end of an update collided with a redraw and failed, on an image
+ * that was perfectly good.
+ *
+ * So the answers are worked out here, only when they can change (boot, and the start
+ * and end of a session), always under the session lock or before any other task runs,
+ * and ota_get_status() hands out the cached copy. Nothing outside the session touches
+ * the mapping any more.
+ */
+static struct {
+    char spare_version[32];
+    bool can_rollback;
+} s_cache;
+
+static void refresh_cache(void)
+{
+    s_cache.spare_version[0] = '\0';
+    const esp_partition_t *spare = esp_ota_get_next_update_partition(NULL);
+    esp_app_desc_t         d;
+    if (spare && esp_ota_get_partition_description(spare, &d) == ESP_OK) {
+        snprintf(s_cache.spare_version, sizeof(s_cache.spare_version), "%.31s", d.version);
+    }
+    s_cache.can_rollback = esp_ota_check_rollback_is_possible();
+}
+
 /* --- boot ---------------------------------------------------------------------- */
 
 void ota_init(void)
@@ -142,6 +175,7 @@ void ota_init(void)
         ESP_LOGW(TAG, "new image on probation: 'ota confirm' within %d s, or it rolls back",
                  OTA_PROBATION_S);
     }
+    refresh_cache(); /* before any other task can be polling status */
 }
 
 /* --- session ------------------------------------------------------------------- */
@@ -189,6 +223,7 @@ esp_err_t ota_begin(uint32_t size, const uint8_t sha256[32])
         s.phase = OTA_RECEIVING;
         ESP_LOGI(TAG, "receiving %lu bytes into %s", (unsigned long)size, part->label);
     }
+    refresh_cache(); /* the spare slot has just been erased */
     xSemaphoreGive(s.lock);
     return err;
 }
@@ -284,7 +319,7 @@ esp_err_t ota_finish(char *why, size_t why_len)
         goto out;
     }
 
-    /* A valid ESP32-C6 image is not necessarily THIS firmware. Something else would
+    /* A valid image for this chip is not necessarily THIS firmware. Something else would
      * boot, pass nothing on to the next update, and need a cable to undo. */
     esp_app_desc_t desc;
     err = esp_ota_get_partition_description(s.part, &desc);
@@ -312,6 +347,7 @@ esp_err_t ota_finish(char *why, size_t why_len)
 out:
     s.received = 0;
     s.size     = 0;
+    refresh_cache();
     xSemaphoreGive(s.lock);
     return err;
 }
@@ -319,7 +355,9 @@ out:
 void ota_abort(void)
 {
     xSemaphoreTake(s.lock, portMAX_DELAY);
+    const bool was_receiving = s.phase == OTA_RECEIVING;
     abort_locked();
+    if (was_receiving) refresh_cache(); /* a half-written slot holds no image */
     xSemaphoreGive(s.lock);
 }
 
@@ -338,7 +376,7 @@ esp_err_t ota_confirm(void)
 
 esp_err_t ota_rollback(void)
 {
-    if (!esp_ota_check_rollback_is_possible()) {
+    if (!s_cache.can_rollback) {
         return ESP_ERR_NOT_FOUND;
     }
     /* Deferred like a reboot, so the reply announcing it still goes out. */
@@ -376,16 +414,13 @@ void ota_get_status(ota_status_t *out)
         const int64_t left = s.probation_deadline_us - esp_timer_get_time();
         out->probation_left_s = left > 0 ? (int)(left / 1000000) : 0;
     }
-    out->can_rollback = esp_ota_check_rollback_is_possible();
+    out->can_rollback = s_cache.can_rollback; /* cached: see refresh_cache() */
 
     label(out->boot, sizeof(out->boot), esp_ota_get_boot_partition());
 
     const esp_partition_t *spare = esp_ota_get_next_update_partition(NULL);
     label(out->spare, sizeof(out->spare), spare);
-    esp_app_desc_t d;
-    if (spare && s.phase == OTA_IDLE && esp_ota_get_partition_description(spare, &d) == ESP_OK) {
-        snprintf(out->spare_version, sizeof(out->spare_version), "%.31s", d.version);
-    }
+    snprintf(out->spare_version, sizeof(out->spare_version), "%s", s_cache.spare_version);
 
     out->phase    = s.phase;
     out->received = s.received;
