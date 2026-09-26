@@ -77,7 +77,13 @@ fun DeviceSheet(vm: MonitorViewModel, onDismiss: () -> Unit) {
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .clickable(enabled = !d.connected) { vm.connectTo(d.address, d.name); onDismiss() }
+                        // Every row closes the sheet and ends the scan. The connected board used to be
+                        // disabled, so tapping it -- the obvious thing to do -- left the sheet open
+                        // and the scan running, which looked exactly like a board refusing to connect.
+                        .clickable {
+                            if (!d.connected && !d.connecting) vm.connectTo(d.address, d.name)
+                            onDismiss()
+                        }
                         .padding(vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -90,8 +96,11 @@ fun DeviceSheet(vm: MonitorViewModel, onDismiss: () -> Unit) {
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             if (d.connected) {
-                                Text("connected", style = MaterialTheme.typography.labelSmall,
+                                Text("connected — tap to close", style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.primary)
+                            } else if (d.connecting) {
+                                Text("connecting…", style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.tertiary)
                             }
                             // A signal reading only exists while scanning. A saved board
                             // without one can still be tapped: the client dials it and

@@ -124,6 +124,7 @@ data class DeviceEntry(
     val rssi: Int?,
     val known: Boolean,
     val connected: Boolean,
+    val connecting: Boolean = false,
 ) {
     /** A remote display in update mode, not a monitor. */
     val isRemote: Boolean get() = name.startsWith(ru.vitska.powermon.ble.Nus.REMOTE_PREFIX)
@@ -194,7 +195,8 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
                 client.found,
                 knownRevision,
                 client.deviceAddress,
-            ) { found, _, current ->
+                client.link,
+            ) { found, _, current, link ->
                 val known = store.known()
                 val seen = found.associateBy { it.address.uppercase() }
                 val all = (known.keys.map { it.uppercase() } + seen.keys).distinct()
@@ -207,10 +209,14 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
                             ?: addr,
                         rssi = hit?.rssi,
                         known = known.keys.any { it.uppercase() == addr },
-                        connected = current?.uppercase() == addr,
+                        // The address being dialled is not a connection: only a usable
+                        // link is. A board still being retried says "connecting".
+                        connected = current?.uppercase() == addr && link == Link.Ready,
+                        connecting = current?.uppercase() == addr && link != Link.Ready &&
+                            link != Link.Idle && link != Link.Failed,
                     )
                 }.sortedWith(
-                    compareByDescending<DeviceEntry> { it.connected }
+                    compareByDescending<DeviceEntry> { it.connected || it.connecting }
                         .thenByDescending { it.rssi != null }
                         .thenByDescending { it.rssi ?: Int.MIN_VALUE }
                         .thenBy { it.name }
