@@ -26,6 +26,7 @@
 
 #include "ota.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -37,6 +38,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "mbedtls/sha256.h"
+#include "sdkconfig.h"
 
 static const char *TAG = "ota";
 
@@ -56,6 +58,34 @@ static struct {
     esp_timer_handle_t reboot;
     esp_timer_handle_t rollback;
 } s;
+
+/* --- the reason an image was refused ------------------------------------------- */
+
+static char           s_log_cause[80];
+static vprintf_like_t s_log_prev;
+
+/* Forwards everything to the real log, and keeps the text of the last esp_image line:
+ * that is where image validation says what was wrong. */
+static int capture_log(const char *fmt, va_list ap)
+{
+    va_list copy;
+    va_copy(copy, ap);
+    char line[160];
+    vsnprintf(line, sizeof(line), fmt, copy);
+    va_end(copy);
+    const char *tag = strstr(line, "esp_image: ");
+    if (tag) {
+        snprintf(s_log_cause, sizeof(s_log_cause), "%s", tag + 11);
+        /* Drop the trailing newline and colour reset, if any. */
+        for (char *p = s_log_cause; *p; p++) {
+            if (*p == '\n' || *p == '\r' || *p == '\033') {
+                *p = '\0';
+                break;
+            }
+        }
+    }
+    return s_log_prev ? s_log_prev(fmt, ap) : vprintf(fmt, ap);
+}
 
 /* --- timers -------------------------------------------------------------------- */
 
@@ -234,13 +264,23 @@ esp_err_t ota_finish(char *why, size_t why_len)
     }
 
     /* Checks the image's own structure, checksum and appended hash, and that it was
-     * built for this chip. Frees the handle whatever the outcome. */
+     * built for this chip. Frees the handle whatever the outcome. It returns only
+     * "validation failed"; the reason goes to the log, so the log is captured for the
+     * duration and its last esp_image line handed back -- a phone showing the cause
+     * beats one showing a code that needs a USB cable to explain. */
+    s_log_cause[0] = '\0';
+    const vprintf_like_t prev = esp_log_set_vprintf(capture_log);
+    s_log_prev = prev;
     err = esp_ota_end(s.handle);
+    esp_log_set_vprintf(prev);
     if (err != ESP_OK) {
-        snprintf(why, why_len, "%s",
-                 err == ESP_ERR_OTA_VALIDATE_FAILED
-                     ? "not a valid firmware image for an ESP32-C6"
-                     : esp_err_to_name(err));
+        if (err == ESP_ERR_OTA_VALIDATE_FAILED) {
+            snprintf(why, why_len, "image failed validation on this %s%s%.60s",
+                     CONFIG_IDF_TARGET, s_log_cause[0] ? ": " : "", s_log_cause);
+        } else {
+            snprintf(why, why_len, "%s", esp_err_to_name(err));
+        }
+        ESP_LOGE(TAG, "esp_ota_end: %s (%s)", esp_err_to_name(err), s_log_cause);
         goto out;
     }
 
