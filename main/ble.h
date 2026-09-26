@@ -89,6 +89,15 @@ void ble_write(const char *data, size_t n);
  *  the client that asked, not to everyone watching. */
 void ble_write_conn(uint16_t conn, const char *data, size_t n);
 
+/** Like ble_write_conn(), but waits for the stack to free buffers rather than dropping
+ *  what does not fit, giving up only when the link makes no progress for seconds. For
+ *  command replies, whose tail carries the terminator. It blocks, so never call it from
+ *  the NimBLE host task -- that is the task that frees the buffers. */
+void ble_reply_conn(uint16_t conn, const char *data, size_t n);
+
+/** Largest notification payload this connection takes right now: ATT_MTU - 3. */
+size_t ble_payload_max(uint16_t conn);
+
 /** Resolved advertised name, for the console to print. */
 const char *ble_name(void);
 

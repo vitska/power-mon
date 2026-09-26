@@ -509,7 +509,14 @@ static void host_task(void *param)
 
 /* --- output -------------------------------------------------------------------- */
 
-static void notify_one(uint16_t conn, const char *data, size_t n)
+/* How long a reply may wait for the stack to free buffers before the rest is given up.
+ * Measured from the last notification that went out, not from the start: a long reply
+ * over a 20-byte MTU legitimately takes seconds, and only a link making no progress at
+ * all is a reason to stop. */
+#define REPLY_STALL_MS 3000
+#define REPLY_RETRY_MS 5
+
+size_t ble_payload_max(uint16_t conn)
 {
     /* ATT_MTU includes the 3-byte notification header. Re-read it per call and per
      * connection: centrals negotiate upward a moment after connecting, and they do not
@@ -518,25 +525,46 @@ static void notify_one(uint16_t conn, const char *data, size_t n)
     if (mtu < 23) {
         mtu = 23;
     }
-    const size_t chunk = mtu - 3;
+    return mtu - 3;
+}
 
-    size_t off = 0;
+/*
+ * `wait` decides what running out of mbufs means. Telemetry and anything sent from the
+ * host task must not wait: the host task is what frees the buffers, and a stale record
+ * is replaced by the next one anyway. A command reply is different -- losing its tail
+ * loses the `exit` line and the 0x04 terminator, so the client cannot tell the reply
+ * ended and times out on a command that ran fine. The pool holds a couple of dozen
+ * buffers and drains only a few per connection event, so a reply of more than a few
+ * notifications outruns it every time. Replies therefore wait for it to drain.
+ */
+static void notify_one(uint16_t conn, const char *data, size_t n, bool wait)
+{
+    const size_t chunk = ble_payload_max(conn);
+
+    size_t     off   = 0;
+    TickType_t since = xTaskGetTickCount();
     while (off < n) {
         const size_t take = (n - off) > chunk ? chunk : (n - off);
 
+        /* ble_gatts_notify_custom() consumes the mbuf on failure as well as success,
+         * so a retry needs a fresh one. */
         struct os_mbuf *om = ble_hs_mbuf_from_flat(&data[off], (uint16_t)take);
-        if (!om) {
-            /* Out of mbufs: this central is not draining. Drop the rest rather than
-             * spin -- console output is not worth stalling a task for. */
+        int rc = om ? ble_gatts_notify_custom(conn, s_ble.tx_val_handle, om)
+                    : BLE_HS_ENOMEM;
+        if (rc == 0) {
+            s_ble.stats.tx_bytes += take;
+            off  += take;
+            since = xTaskGetTickCount();
+            continue;
+        }
+
+        const bool stalled = (xTaskGetTickCount() - since) >= pdMS_TO_TICKS(REPLY_STALL_MS);
+        if (rc != BLE_HS_ENOMEM || !wait || stalled || !slot_by_handle(conn)) {
+            /* Not a full pool, or not worth waiting for, or the central went away. */
             s_ble.stats.dropped += (n - off);
             return;
         }
-        if (ble_gatts_notify_custom(conn, s_ble.tx_val_handle, om) != 0) {
-            s_ble.stats.dropped += (n - off);
-            return;
-        }
-        s_ble.stats.tx_bytes += take;
-        off += take;
+        vTaskDelay(pdMS_TO_TICKS(REPLY_RETRY_MS) + 1); /* +1: 5 ms is 0 ticks at 100 Hz */
     }
 }
 
@@ -553,7 +581,20 @@ void ble_write_conn(uint16_t conn, const char *data, size_t n)
         s_ble.stats.dropped += n;
         return;
     }
-    notify_one(conn, data, n);
+    notify_one(conn, data, n, false);
+}
+
+void ble_reply_conn(uint16_t conn, const char *data, size_t n)
+{
+    if (!data || n == 0) {
+        return;
+    }
+    const conn_slot_t *s = slot_by_handle(conn);
+    if (!s || !s->subscribed) {
+        s_ble.stats.dropped += n;
+        return;
+    }
+    notify_one(conn, data, n, true);
 }
 
 void ble_write(const char *data, size_t n)
@@ -571,7 +612,7 @@ void ble_write(const char *data, size_t n)
     for (int i = 0; i < BLE_MAX_CONNS; i++) {
         if (s_ble.conns[i].handle != BLE_HS_CONN_HANDLE_NONE &&
             s_ble.conns[i].subscribed) {
-            notify_one(s_ble.conns[i].handle, data, n);
+            notify_one(s_ble.conns[i].handle, data, n, false);
         }
     }
 }

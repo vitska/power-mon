@@ -316,8 +316,16 @@ static void stream_emit(const char *line)
      * bare LF locally would leave the two wires subtly different after all. */
     printf("%s\r\n", line);
 #if CONFIG_BATMON_BLE_ENABLE
-    ble_write(line, 0);
-    ble_write("\r\n", 2);
+    /* One notification, not two: a command reply landing between the record and its
+     * CRLF would splice them in the client's byte stream. */
+    char buf[192];
+    const int n = snprintf(buf, sizeof(buf), "%s\r\n", line);
+    if (n > 0 && (size_t)n < sizeof(buf)) {
+        ble_write(buf, (size_t)n);
+    } else {
+        ble_write(line, 0);
+        ble_write("\r\n", 2);
+    }
 #endif
 }
 

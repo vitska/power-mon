@@ -264,25 +264,92 @@ void cli_usb_start(void)
 
 static const char *BLE_TAG = "cli.ble";
 
-/* Output buffering, LF->CRLF translation, framing and the exit status all live in
- * console_io.c now, shared with the local console. What is left here is the sink. */
+/* LF->CRLF translation, framing and the exit status live in cli_exec_line() above,
+ * shared with the local console. What is left here is the sink. */
 
 /*
  * Unicast: the reply belongs to the client that asked. With several centrals attached, a
- * broadcast reply would drop one client's `help` output into another's data feed. The
- * connection handle rides through cli_exec_line()'s opaque user pointer.
+ * broadcast reply would drop one client's `help` output into another's data feed.
+ *
+ * COALESCED, AND CUT AT LINE ENDS. cli_exec_line() hands the sink every line and every
+ * CRLF as separate calls. Passed straight through, each became its own notification:
+ * `config` is ~65 lines, so ~130 notifications, which exhausts NimBLE's buffer pool
+ * several times over -- the tail, terminator included, was dropped, and the app
+ * reported the command as missing. Packing into MTU-sized notifications makes the same
+ * reply four or five of them.
+ *
+ * Cutting at a line end matters too. The sampler task broadcasts telemetry at the same
+ * time, and the client parses one byte stream, so a record landing between a line and
+ * its CRLF splices the two. A notification that carries only whole lines cannot be
+ * split by one. (Below an MTU that fits a line there is no avoiding a split.)
  */
+#define REPLY_BUF 509 /* ATT_MTU 512, NimBLE's preferred MTU, less the 3-byte header */
+
+typedef struct {
+    uint16_t conn;
+    size_t   cap; /* this connection's payload limit, at most REPLY_BUF */
+    size_t   len;
+    char     buf[REPLY_BUF];
+} reply_t;
+
+/* Sends everything up to and including the last line end, keeping any partial line;
+ * with no line end in the buffer at all, or with `all`, sends everything. */
+static void reply_flush(reply_t *r, bool all)
+{
+    size_t cut = r->len;
+    if (!all) {
+        while (cut > 0 && r->buf[cut - 1] != '\n') {
+            cut--;
+        }
+        if (cut == 0) {
+            cut = r->len;
+        }
+    }
+    if (cut == 0) {
+        return;
+    }
+    ble_reply_conn(r->conn, r->buf, cut);
+    memmove(r->buf, r->buf + cut, r->len - cut);
+    r->len -= cut;
+}
+
 static void ble_sink(void *user, const char *data, size_t len)
 {
-    ble_write_conn((uint16_t)(uintptr_t)user, data, len);
+    reply_t *r = user;
+    while (len > 0) {
+        if (r->len + len > r->cap) {
+            reply_flush(r, false);
+        }
+        size_t take = r->cap - r->len;
+        if (take > len) {
+            take = len;
+        }
+        memcpy(r->buf + r->len, data, take);
+        r->len += take;
+        data   += take;
+        len    -= take;
+        if (r->len == r->cap) {
+            reply_flush(r, false);
+        }
+    }
 }
 
 static void on_line(const char *line, uint16_t conn, void *user)
 {
     (void)user;
+    /* Static rather than on the stack: 0.5 KB, and only the one worker task runs
+     * commands, one at a time. */
+    static reply_t r;
+    r.conn = conn;
+    r.len  = 0;
+    r.cap  = ble_payload_max(conn);
+    if (r.cap > sizeof(r.buf)) {
+        r.cap = sizeof(r.buf);
+    }
     /* remote = true: `mon` refuses rather than repainting into a link that cannot
      * carry the keypress that would stop it. */
-    cli_exec_line(line, ble_sink, (void *)(uintptr_t)conn, true);
+    cli_exec_line(line, ble_sink, &r, true);
+    reply_flush(&r, true);
 }
 
 /*
