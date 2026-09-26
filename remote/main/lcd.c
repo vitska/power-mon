@@ -39,11 +39,12 @@ static const char *TAG = "lcd";
 #define MADCTL_BASE 0x68 /* MX | MV | BGR: landscape on the 2USB board */
 #define INVERT      1
 #else
-/* MX | MV | BGR: landscape, verified on the board. With MV (row/column exchange) set,
- * MX flips the picture vertically and MY horizontally -- the reverse of what the names
- * suggest, which is how 0x28 (upside down) became 0xE8 (mirrored left-right) before
- * landing here. Touch is mapped for the picture the right way up and does not follow. */
-#define MADCTL_BASE 0x68
+/* MX | MV, RGB order: landscape, verified on the board. With MV (row/column exchange)
+ * set, MX flips the picture vertically and MY horizontally -- the reverse of what the
+ * names suggest, which is how 0x28 (upside down) became 0xE8 (mirrored left-right)
+ * before landing here. The BGR bit (0x08) is off: with it, red and blue swapped and
+ * orange showed as blue. Touch is mapped for the picture the right way up. */
+#define MADCTL_BASE 0x60
 #define INVERT      0
 #endif
 
@@ -210,6 +211,11 @@ void lcd_text(int x, int y, const char *s, int scale, uint16_t fg, uint16_t bg)
     for (; *s; s++, x += gw) {
         if (x >= LCD_W) {
             break;
+        }
+        if (x < 0) {
+            /* Off the left edge: skip the glyph. A negative window start is not
+             * clipped by the panel -- it wraps, and draws somewhere else entirely. */
+            continue;
         }
         const unsigned char ch = (unsigned char)*s;
         const bool known = ch >= FONT_FIRST_CH && ch <= FONT_LAST_CH;

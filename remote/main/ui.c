@@ -197,7 +197,7 @@ static void draw_graph(void)
         }
         lcd_blit(GX, GY + y0, GW, h, buf);
     }
-    const char *msg = !h.supported ? "the monitor keeps no history before firmware 0.9.0"
+    const char *msg = !h.supported ? "monitor firmware too old for history (< 0.9.0)"
                     : h.count == 0 ? "no history yet -- a point every 10 minutes"
                                    : NULL;
     if (msg) {
