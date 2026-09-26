@@ -230,7 +230,11 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
     fun resumeLastOrScan() {
         if (client.link.value == Link.Ready) return
         knownRevision.value += 1
-        val last = store.last
+        // Phones on app 0.4.0 or 0.5.0 may have saved a remote display as "last". It is
+        // not a board to monitor: fall back to finding one.
+        val last = store.last?.takeIf {
+            FirmwareTarget.forDeviceName(store.known()[it]) == FirmwareTarget.MONITOR
+        }
         if (last != null) {
             appendConsole("connecting to ${store.known()[last] ?: last}...")
             client.connect(last)
@@ -317,7 +321,11 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
         // to, whereas one that failed at discovery is not.
         client.deviceAddress.value?.let { addr ->
             store.remember(addr, client.deviceName.value ?: addr)
-            store.last = addr
+            // A remote display is visited to update it and is invisible the rest of the
+            // time: made "last", it would be what every later launch waits for.
+            if (FirmwareTarget.forDeviceName(client.deviceName.value) == FirmwareTarget.MONITOR) {
+                store.last = addr
+            }
             knownRevision.value += 1
         }
         val target = FirmwareTarget.forDeviceName(client.deviceName.value)

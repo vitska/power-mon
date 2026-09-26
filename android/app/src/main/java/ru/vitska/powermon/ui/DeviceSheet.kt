@@ -97,7 +97,8 @@ fun DeviceSheet(vm: MonitorViewModel, onDismiss: () -> Unit) {
                             // without one can still be tapped: the client dials it and
                             // keeps trying until it answers.
                             val signal = d.rssi?.let { "$it dBm" }
-                                ?: if (scanning) "not seen yet" else null
+                                ?: if (d.isRemote) "open FIRMWARE UPDATE on the remote to reach it"
+                                else if (scanning) "not seen yet" else null
                             if (signal != null) {
                                 Text(signal, style = MaterialTheme.typography.labelSmall)
                             }

@@ -30,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ru.vitska.powermon.ble.Link
+import ru.vitska.powermon.ble.Nus
 import ru.vitska.powermon.model.MonitorViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -67,7 +68,12 @@ fun AppRoot(canScan: Boolean, vm: MonitorViewModel = viewModel()) {
                             when (link) {
                                 Link.Idle -> if (scanning) "scanning" else "not connected"
                                 Link.Scanning -> "scanning for batmon boards"
-                                Link.Connecting -> "connecting — retrying until the board answers"
+                                // A remote display answers only while its update screen
+                                // is open; say so, or the retrying looks like a fault.
+                                Link.Connecting ->
+                                    if (name?.startsWith(Nus.REMOTE_PREFIX) == true)
+                                        "waiting — open Settings › FIRMWARE UPDATE on the remote"
+                                    else "connecting — retrying until the board answers"
                                 Link.Discovering -> "discovering services"
                                 Link.Ready -> "ready"
                                 Link.Failed -> "failed"
