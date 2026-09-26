@@ -1917,6 +1917,11 @@ static int cmd_soc(int argc, char **argv)
         printf("discharge yields MORE capacity. Learn depth is 100..1000 permille.\n");
         return 1;
     }
+    /* fg_set_config() only changes the running gauge: config.c owns persistence of
+     * every setting, and without this the help text's promise ("stored in flash and
+     * survives a reboot") was false -- a `soc v0` was quietly back to its old value
+     * after the next reset. */
+    cal_autosave();
     soc_show();
     return 0;
 }
