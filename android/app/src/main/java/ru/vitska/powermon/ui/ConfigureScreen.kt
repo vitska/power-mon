@@ -258,32 +258,18 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             ) { v ->
                 // The command solves the shunt resistance from this reading (firmware
                 // `cal top i`): the resistance is whatever the measured current says.
-                val cmdFor = { value: Double -> "cal top i " + Micro.amps(value) }
-                val confirmIt = { value: Double ->
-                    guarded(
-                        Confirmation(
-                            "Solve the shunt resistance from " + value + " A?",
-                            "The board reads the raw shunt voltage on both sensors, uses " +
-                                "the one that sees the current, and sets resistance, " +
-                                "direction and sensor so it reads " + value + " A. Nothing " +
-                                "set before matters. Keep the current steady; the more " +
-                                "current, the more exact. About 20 s.",
-                            cmdFor(value),
-                        )
+                // No pre-check here — whatever value is entered is sent as-is.
+                guarded(
+                    Confirmation(
+                        "Solve the shunt resistance from " + v + " A?",
+                        "The board reads the raw shunt voltage on both sensors, uses " +
+                            "the one that sees the current, and sets resistance, " +
+                            "direction and sensor so it reads " + v + " A. Nothing " +
+                            "set before matters. Keep the current steady; the more " +
+                            "current, the more exact. About 20 s.",
+                        "cal top i " + Micro.amps(v),
                     )
-                }
-                when {
-                    // Too little to solve from, whatever the shunt (firmware: 10 mA).
-                    Math.abs(v) < 0.010 ->
-                        calProblem = CalProblem(
-                            "Not enough current",
-                            "The reference must be at least 10 mA — and the more current " +
-                                "flows, the more exactly the resistance can be solved. " +
-                                "Apply a steady load or charge current and try again.",
-                            null,
-                        )
-                    else -> confirmIt(v)
-                }
+                )
             }
             MicroField(
                 "Measured voltage AT REST", "V", "12.44",

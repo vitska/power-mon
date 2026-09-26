@@ -185,26 +185,9 @@ esp_err_t run_zero_calibration(app_ctx_t *ctx, uint32_t n_samples,
         return err;
     }
 
-    /*
-     * Expected noise: the shunt LSB is 10 uV, so one count is 10 uV / R. Anything
-     * much beyond a few counts means current was flowing -- the load was not really
-     * disconnected -- and calibrating on it would bake a real current into the offset
-     * permanently. Refuse rather than guess.
-     */
-    const int32_t lsb_ua =
-        (int32_t)((10LL * 1000000LL) / (int64_t)ina219_get_shunt_uohm(dev));
-    const int32_t noise_limit = 5 * lsb_ua;
-
-    if (stddev > noise_limit) {
-        ESP_LOGW(TAG,
-                 "calibration rejected: stddev %ld uA exceeds %ld uA -- is the load "
-                 "really disconnected?",
-                 (long)stddev, (long)noise_limit);
-        ina219_set_offset_ua(dev, saved_off);
-        sensor_lock_give(ctx);
-        return ESP_ERR_INVALID_STATE;
-    }
-
+    /* No validation: the measured mean is baked in as the offset regardless of
+     * spread. A noisy sample (current actually flowing) is on the person running
+     * this, not something the firmware second-guesses. */
     ina219_set_offset_ua(dev, mean);
     sensor_lock_give(ctx);
     return ESP_OK;
@@ -282,16 +265,8 @@ esp_err_t run_zero_voltage_calibration(app_ctx_t *ctx, uint32_t n_samples,
 
     ina219_set_vbus_gain_ppm(dev, saved_gain);
 
-    /* 0.5 V is ~125 bus counts: far more than any credible offset, and far less than
-     * any pack someone might have left connected. */
-    if (mean > 500000 || mean < -500000) {
-        ESP_LOGW(TAG, "zero-voltage rejected: %ld uV is a real voltage, not an offset",
-                 (long)mean);
-        ina219_set_vbus_offset_uv(dev, saved_off);
-        sensor_lock_give(ctx);
-        return ESP_ERR_INVALID_STATE;
-    }
-
+    /* No validation: the measured mean is baked in as the offset regardless of
+     * magnitude, whether or not VBUS was actually at ground. */
     ina219_set_vbus_offset_uv(dev, mean);
     sensor_lock_give(ctx);
     return ESP_OK;

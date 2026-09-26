@@ -782,10 +782,6 @@ static int cmd_zero(int argc, char **argv)
     printf("  measured offset : %s A\n", FMT_A(b1, offset));
     printf("  stddev          : %s A\n", FMT_A(b2, stddev));
 
-    if (err == ESP_ERR_INVALID_STATE) {
-        printf("REJECTED: too noisy -- current was flowing. Offset unchanged.\n");
-        return 1;
-    }
     if (err != ESP_OK) {
         printf("FAILED: %s. Offset unchanged.\n", esp_err_to_name(err));
         return 1;
@@ -1268,66 +1264,27 @@ static esp_err_t curve_average(uint32_t n, int64_t *sum_i_ua, int64_t *sum_v_uv,
 static bool curve_solve_gain(int64_t measured, int64_t reference, int64_t floor_abs,
                              uint32_t old_ppm, uint32_t *new_ppm, const char *unit)
 {
+    (void)floor_abs;
+    (void)unit;
     char b1[24], b2[24];
     const int64_t am = measured < 0 ? -measured : measured;
     const int64_t ar = reference < 0 ? -reference : reference;
 
-    if (ar < floor_abs || am < floor_abs) {
-        /* %ld, not %lld: CONFIG_NEWLIB_NANO_FORMAT drops %ll entirely and prints
-         * the literal letters instead of the number (see fixed_fmt.h). Both values
-         * here are bounded well inside 32 bits. */
-        printf("reference and reading must both exceed %ld %s: at low levels the\n",
-               (long)floor_abs, unit);
-        printf("ratio is dominated by offset error, and 'zero' is the right tool.\n");
-        return false;
-    }
-    if ((measured < 0) != (reference < 0)) {
-        printf("sign mismatch: reading and reference disagree on direction. Fix the\n");
-        printf("sense leads or use 'sense sign invert' before trimming gain.\n");
+    /* No validation: the entered reference is trusted as-is, at whatever magnitude
+     * and sign it was given. Only a literal zero reading is refused, since a ratio
+     * against it is not a number. */
+    if (am == 0) {
+        printf("measured value is exactly zero -- no ratio to solve a gain from.\n");
         return false;
     }
 
     const int64_t want = ((int64_t)old_ppm * ar) / am;
-    if (want < 900000 || want > 1100000) {
-        printf("solved gain %ld ppm is outside +/-10%%.\n", (long)want);
-        printf("That is not a gain error. Check the shunt resistance (current) or\n");
-        printf("the divider ratio (voltage) -- trimming gain would only hide it.\n");
-        return false;
-    }
-
     printf("measured %s, reference %s -> gain %lu ppm\n",
            fixed_fmt(b1, sizeof(b1), measured, 1000000, 4),
            fixed_fmt(b2, sizeof(b2), reference, 1000000, 4),
            (unsigned long)want);
     *new_ppm = (uint32_t)want;
     return true;
-}
-
-/*
- * A saturated shunt reading is a range limit, not a measurement, so the ratio a gain
- * solve would compute is meaningless -- and the generic "check the shunt resistance"
- * advice actively misleads, because the resistance is usually right and the SENSE
- * WIRING is not. Diagnose it separately and say what to measure.
- */
-static void explain_saturation(ina219_handle_t cd)
-{
-    const uint32_t r    = ina219_get_shunt_uohm(cd);
-    const int64_t  fs   = ina219_pga_fullscale_uv(ina219_get_pga_max(cd));
-    char           b1[24], b2[24];
-
-    printf("the shunt channel is SATURATED at the %s ceiling.\n",
-           ina219_pga_str(ina219_get_pga_max(cd)));
-    printf("That reading is the range limit (%s mV = %s A), not a measurement, so\n",
-           FMT_MV(b1, fs), FMT_A(b2, (fs * 1000000LL) / (int64_t)r));
-    printf("no gain can be solved from it. Nothing changed.\n");
-    printf("\n");
-    printf("Measure VIN+ to VIN- AT THE INA219 PINS. It must equal the drop across\n");
-    printf("the shunt and nothing else. If it reads volts rather than millivolts,\n");
-    printf("the sense pair is not across the shunt -- a VIN- tied to system ground\n");
-    printf("instead of the shunt's far side does exactly this, and so does a\n");
-    printf("floating sense lead.\n");
-    printf("Cross-check with 'read': if 'idle offset' is also at full scale, the\n");
-    printf("fault is common to both sensors, so it is the topology and not one lead.\n");
 }
 
 static int cmd_curve(int argc, char **argv)
@@ -1455,10 +1412,7 @@ static int cmd_curve(int argc, char **argv)
             printf("read failed: %s\n", esp_err_to_name(err));
             return 1;
         }
-        if (is_i && sat) {
-            explain_saturation(cd);
-            return 1;
-        }
+        (void)sat;
 
         uint32_t want = 0;
         bool     ok;
@@ -2244,8 +2198,8 @@ static int cal_shunt(int argc, char **argv)
         n = (uint32_t)ns;
     }
     const int64_t aref = ref < 0 ? -(int64_t)ref : ref;
-    if (aref < 10000) {
-        printf("the known current must be at least 10000 uA (10 mA)\n");
+    if (aref == 0) {
+        printf("the known current is exactly zero -- nothing to divide by.\n");
         return 1;
     }
 
@@ -2289,24 +2243,17 @@ static int cal_shunt(int argc, char **argv)
     printf("  positive-pole sensor: %ld uV%s\n", (long)v_p, got_p ? (sat_p ? " SATURATED" : "") : " (absent)");
     printf("  negative-pole sensor: %ld uV%s\n", (long)v_n, got_n ? (sat_n ? " SATURATED" : "") : " (absent)");
 
-    /* The sensor that sees the current. */
+    /* No validation: whichever sensor sees the larger magnitude is used, whatever
+     * that magnitude is. Only "neither sensor exists" stops it -- nothing to read. */
     const bool use_neg = got_n && (!got_p || a_n >= a_p);
     ina219_handle_t cd  = use_neg ? neg : pos;
     const int64_t   v   = use_neg ? v_n : v_p;
-    const int64_t   av  = use_neg ? a_n : a_p;
-    if (!cd || av < CAL_SHUNT_MIN_UV) {
-        printf("neither sensor sees a voltage for this current (%ld uV at most; at\n",
-               (long)(a_p > a_n ? a_p : a_n));
-        printf("least %d uV is needed). The current is not flowing through a shunt\n",
-               CAL_SHUNT_MIN_UV);
-        printf("either INA219 is wired across -- nothing to calibrate from.\n");
+    if (!cd) {
+        printf("no sensor answered -- nothing to calibrate from.\n");
         return 1;
     }
-    if (use_neg ? sat_n : sat_p) {
-        printf("that sensor is at its range limit: the shunt voltage exceeds what the\n");
-        printf("INA219 can measure (320 mV, about 100 mV on the negative side).\n");
-        return 1;
-    }
+    (void)sat_p;
+    (void)sat_n;
 
     /* A zero point on this same chip: keep it as a voltage (offset * R, before the
      * sign), take it out of the reading, carry it to the new resistance. */
@@ -2315,20 +2262,10 @@ static int cal_shunt(int argc, char **argv)
     const int64_t v_off    = same_dev ? ((int64_t)ina219_get_offset_ua(cd) * r_old) / 1000000 : 0;
     const int64_t vc       = v - v_off;
     const int64_t avc      = vc < 0 ? -vc : vc;
-    if (avc < CAL_SHUNT_MIN_UV) {
-        printf("after the zero offset only %ld uV is left -- too little to solve from\n",
-               (long)vc);
-        return 1;
-    }
 
-    /* R in uOhm = V[uV] / I[uA] * 1e6. */
+    /* R in uOhm = V[uV] / I[uA] * 1e6. No range check: whatever this works out to is
+     * set, and the driver's own floor (ina219_set_shunt_uohm) is the only backstop. */
     const int64_t r_new = (avc * 1000000LL) / aref;
-    if (r_new < 150 || r_new > 1000000) {
-        printf("that works out to %ld uOhm, outside the 150..1000000 uOhm this board can\n",
-               (long)r_new);
-        printf("use. Check the known current and the units (micro-amps).\n");
-        return 1;
-    }
 
     /* Mode first: it decides which device the rest applies to. */
     const sensors_mode_t want_mode = use_neg ? SENSORS_MODE_N : SENSORS_MODE_P;
@@ -2415,12 +2352,9 @@ static int cmd_cal(int argc, char **argv)
         const esp_err_t err = curve_average(64, &si, &sv, &got, &sat);
         config()->stream_enabled = was_streaming;
 
+        (void)sat;
         if (err != ESP_OK || got == 0) {
             printf("read failed: %s\n", esp_err_to_name(err));
-            return 1;
-        }
-        if (sat) {
-            explain_saturation(cd);
             return 1;
         }
 
@@ -2428,14 +2362,11 @@ static int cmd_cal(int argc, char **argv)
         const int64_t v_meas = sv / (int64_t)got;
         char b1[24], b2[24], b3[24];
 
-        /* Below half an amp the drop is a few millivolts and the solved resistance is
-         * mostly quantisation. Refuse rather than store noise. */
-        const int64_t ai = i_ua < 0 ? -i_ua : i_ua;
-        if (ai < 500000) {
-            printf("only %s A flowing. The drop being measured scales with current,\n",
-                   FMT_A(b1, (int32_t)i_ua));
-            printf("so below 0.5 A this solves mostly quantisation noise. Apply a\n");
-            printf("real load and retry.\n");
+        /* No validation: whatever current is flowing and whatever the entered
+         * reference is, the value is solved and stored as-is. Zero current alone
+         * cannot be divided by. */
+        if (i_ua == 0) {
+            printf("no current flowing -- nothing to divide by.\n");
             return 1;
         }
 
@@ -2446,21 +2377,6 @@ static int cmd_cal(int argc, char **argv)
 
         printf("measured %s V at %s A, true %s V\n", FMT_V(b1, (uint32_t)v_meas),
                FMT_A(b2, (int32_t)i_ua), FMT_V(b3, (uint32_t)ref_uv));
-
-        if (r < 0) {
-            printf("that solves a NEGATIVE resistance (%ld uOhm), which is not\n",
-                   (long)r);
-            printf("physical. Either the reference and the reading are swapped, or\n");
-            printf("the current sign is inverted -- check 'sense sign'.\n");
-            return 1;
-        }
-        if (r > 1000000) {
-            printf("solved %ld uOhm (%s Ohm), which is implausible for a harness.\n",
-                   (long)r, fixed_fmt(b1, sizeof(b1), r, 1000000, 3));
-            printf("Suspect the voltage gain is already absorbing this drop: run\n");
-            printf("'cal reset v' and calibrate voltage AT REST first.\n");
-            return 1;
-        }
 
         ESP_ERROR_CHECK(sensors_set_r_vpath_uohm(s_ctx->sensors, (uint32_t)r));
         printf("vpath %ld uOhm -- %s V of correction at this current\n", (long)r,
@@ -2572,11 +2488,6 @@ static int cmd_cal(int argc, char **argv)
 
             printf("  offset  %s A\n", FMT_A(b1, off));
             printf("  stddev  %s A\n", FMT_A(b2, sd));
-            if (err == ESP_ERR_INVALID_STATE) {
-                printf("REJECTED: too noisy -- current was flowing. Nothing changed.\n");
-                printf("That rejection is the check working; find the load.\n");
-                return 1;
-            }
             if (err != ESP_OK) {
                 printf("FAILED: %s. Nothing changed.\n", esp_err_to_name(err));
                 return 1;
@@ -2600,17 +2511,6 @@ static int cmd_cal(int argc, char **argv)
 
             printf("  offset  %s V\n", FMT_V(b1, off));
             printf("  spread  %s V\n", FMT_V(b2, (int32_t)spread));
-            if (err == ESP_ERR_INVALID_STATE) {
-                printf("REJECTED: that is a real voltage, not an offset. Nothing\n");
-                printf("changed.\n");
-                printf("If it reads near 3.3 V with nothing connected, the grounds\n");
-                printf("are not tied together -- an ungrounded VBUS drifts to the\n");
-                printf("rail. A good tell is the two sensors disagreeing: run\n");
-                printf("'read' and compare 'pack voltage' against 'load voltage'.\n");
-                printf("Identically wired sensors that differ mean a wiring fault,\n");
-                printf("not a calibration problem.\n");
-                return 1;
-            }
             if (err != ESP_OK) {
                 printf("FAILED: %s. Nothing changed.\n", esp_err_to_name(err));
                 return 1;
@@ -2678,21 +2578,7 @@ static int cmd_cal(int argc, char **argv)
         printf("read failed: %s\n", esp_err_to_name(err));
         return 1;
     }
-    if (chan_i && sat) {
-        explain_saturation(cd);
-        return 1;
-    }
-    if (chan_v && sat &&
-        ina219_get_vbus_comp(vd) != INA219_VBUS_COMP_NONE) {
-        /* With buscomp on, the bus reading is corrected by the shunt drop -- so a
-         * saturated shunt corrupts the voltage point too. Without it, the bus
-         * channel is independent and the point is still good. */
-        printf("the shunt channel is saturated AND buscomp is on, so the bus\n");
-        printf("reading is being corrected by a bogus shunt drop. Fix the sense\n");
-        printf("wiring first, or 'sense vbuscomp none' if there is no low-side\n");
-        printf("reference to correct. Nothing changed.\n");
-        return 1;
-    }
+    (void)sat; /* no validation: the reading is used as-is, range limit or not */
 
     uint32_t want = 0;
     bool     ok;
