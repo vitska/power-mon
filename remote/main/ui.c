@@ -94,6 +94,43 @@ static void fmt_duration(char *out, size_t n, float hours)
     }
 }
 
+/* --- the Bluetooth activity icon ---------------------------------------------------- */
+
+/* The Bluetooth rune, 8 x 13. Drawn one pixel wider to the right than the pattern, so
+ * the strokes are two pixels thick at the header's small size. */
+static const char *const BT_RUNE[13] = {
+    "...#....",
+    "...##...",
+    "...#.#..",
+    "#..#..#.",
+    ".#.#.#..",
+    "..###...",
+    "...#....",
+    "..###...",
+    ".#.#.#..",
+    "#..#..#.",
+    "...#.#..",
+    "...##...",
+    "...#....",
+};
+#define BT_X 299
+#define BT_Y 4
+#define BT_W 10
+#define BT_H 13
+
+static void bt_icon(uint16_t color)
+{
+    static uint16_t px[BT_W * BT_H];
+    for (int y = 0; y < BT_H; y++) {
+        for (int x = 0; x < BT_W; x++) {
+            const bool on = (x < 8 && BT_RUNE[y][x] == '#') ||
+                            (x > 0 && x - 1 < 8 && BT_RUNE[y][x - 1] == '#');
+            px[y * BT_W + x] = on ? color : C_HEADER;
+        }
+    }
+    lcd_blit(BT_X, BT_Y, BT_W, BT_H, px);
+}
+
 /* --- the dashboard ----------------------------------------------------------------- */
 
 #define GX 4
@@ -166,7 +203,11 @@ static void main_draw(const link_model_t *m)
         f_glabel;
     static int     bar_last = -2;
     static uint16_t bar_col;
-    static uint16_t dot_last = 1;
+    static uint16_t icon_last = 1;
+    static uint32_t seen_rx, seen_tx, rate_base;
+    static int64_t  flash_until, rate_t;
+    static uint16_t flash_col;
+    static int      rate;
 
     const int64_t now  = esp_timer_get_time();
     const bool    live = m->state == LINK_READY && m->have_fast &&
@@ -182,13 +223,38 @@ static void main_draw(const link_model_t *m)
     case LINK_CONNECTING: st = "CONNECTING"; sc = C_YELLOW; break;
     case LINK_SETUP:      st = "SETUP";      sc = C_YELLOW; break;
     case LINK_PAIRING:    st = "PAIRING";    sc = C_ORANGE; break;
-    default:              st = live ? (m->secure ? "LIVE+PAIRED" : "LIVE") : "NO DATA";
+    default:              st = live ? (m->secure ? "PAIRED" : "LIVE") : "NO DATA";
                           sc = live ? C_GREEN : C_ORANGE;   break;
     }
-    field(&f_status, 222, 8, 72, 1, sc, C_HEADER, st);
-    if (s_full || dot_last != sc) {
-        lcd_fill(300, 5, 12, 12, sc);
-        dot_last = sc;
+
+    /* Packets per second, so a stalled stream shows as a number, not just as values
+     * that stop changing -- a quiet battery looks exactly like a dead link otherwise. */
+    if (now - rate_t >= 1000000) {
+        rate      = (int)(m->rx_packets - rate_base);
+        rate_base = m->rx_packets;
+        rate_t    = now;
+    }
+    char status[24];
+    if (m->state == LINK_READY) snprintf(status, sizeof(status), "%s %d/s", st, rate);
+    else                        snprintf(status, sizeof(status), "%s", st);
+    field(&f_status, 222, 8, 74, 1, sc, C_HEADER, status);
+
+    /* The icon: the link state's colour, flashing white for every notification that
+     * arrives and yellow for every command sent. At 10 Hz telemetry it flickers
+     * steadily; when it stops, so has the data. */
+    if (m->tx_packets != seen_tx) {
+        seen_tx     = m->tx_packets;
+        flash_col   = C_YELLOW;
+        flash_until = now + 150 * 1000;
+    } else if (m->rx_packets != seen_rx && now >= flash_until) {
+        flash_col   = C_WHITE;
+        flash_until = now + 60 * 1000;
+    }
+    seen_rx = m->rx_packets;
+    const uint16_t ic = now < flash_until ? flash_col : sc;
+    if (s_full || icon_last != ic) {
+        bt_icon(ic);
+        icon_last = ic;
     }
 
     /* State of charge. */

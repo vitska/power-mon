@@ -290,6 +290,9 @@ static bool run(const char *cmd, int timeout_ms)
         s.pending = false;
         return false;
     }
+    lock();
+    s.model.tx_packets++;
+    unlock();
     const EventBits_t b =
         xEventGroupWaitBits(s.ev, EV_EOT, pdTRUE, pdFALSE, pdMS_TO_TICKS(timeout_ms));
     s.pending = false;
@@ -548,6 +551,9 @@ static int gap_event(struct ble_gap_event *e, void *arg)
 
     case BLE_GAP_EVENT_NOTIFY_RX:
         if (e->notify_rx.attr_handle == s.tx_handle) {
+            lock();
+            s.model.rx_packets++;
+            unlock();
             uint8_t        buf[520];
             const uint16_t n = OS_MBUF_PKTLEN(e->notify_rx.om);
             const uint16_t take = n < sizeof(buf) ? n : sizeof(buf);

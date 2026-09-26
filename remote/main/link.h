@@ -41,6 +41,8 @@ typedef struct {
     int      cells;
     int64_t  last_data_us;     /* esp_timer time of the last telemetry record */
     char     note[48];         /* the latest thing worth telling the user */
+    uint32_t rx_packets;       /* notifications received, ever: for the activity light */
+    uint32_t tx_packets;       /* commands written, ever */
 } link_model_t;
 
 typedef struct {
