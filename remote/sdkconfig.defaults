@@ -1,0 +1,36 @@
+# batmon-remote on the ESP32-2432S028 ("Cheap Yellow Display").
+
+CONFIG_IDF_TARGET="esp32"
+
+# 4 MB flash on every CYD seen so far. One large app slot: NimBLE central plus the
+# UI is ~1 MB, over the 1 MB default single-app partition.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# The CYD's USB goes to a CH340 on UART0.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# --- BLE: NimBLE central only -----------------------------------------------------
+# The remote scans for and connects to one monitor. It never advertises, so the
+# peripheral and broadcaster roles are compiled out; so is Classic BT, which on the
+# original ESP32 costs ~30 KB of RAM even unused.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+# Match the monitor's preferred MTU, so a `config` reply is a handful of notifications.
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=512
+# Pairing with a monitor in `ble pair bonded` mode: LE Secure Connections, passkey
+# typed on the touch screen, bond kept in NVS so it happens once.
+CONFIG_BT_NIMBLE_SECURITY_ENABLE=y
+CONFIG_BT_NIMBLE_SM_SC=y
+CONFIG_BT_NIMBLE_SM_LEGACY=y
+CONFIG_BT_NIMBLE_NVS_PERSIST=y
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y

@@ -15,6 +15,7 @@ Three documents, three jobs:
 | [DESIGN.md](DESIGN.md) | why everything is the way it is |
 | [CALIBRATION.md](CALIBRATION.md) | bench procedure: meter readings → firmware constants |
 | [CLI.md](CLI.md) | command and protocol reference, sufficient to write a client |
+| [remote/](remote/README.md) | a touch-screen remote display on the ESP32-2432S028, a second firmware |
 
 ## Milestones
 
@@ -46,6 +47,9 @@ Three documents, three jobs:
   centrals at once**, with LE Secure Connections passkey pairing.
 - **Live monitoring**: a repainting dashboard (`mon`), and grouped telemetry at three
   independent rates to both transports.
+- **Remote display** (`remote/`): an ESP32-2432S028 touch screen that connects over BLE
+  and shows SoC, voltage, current, mode, time to empty/full and an SoC graph, with
+  passkey pairing on its keypad.
 - **Firmware updates over BLE**: the phone app checks GitHub for a newer release and
   flashes it. A new image runs on probation and rolls back on its own unless confirmed.
 

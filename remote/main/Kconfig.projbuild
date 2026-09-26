@@ -1,0 +1,49 @@
+menu "batmon remote display"
+
+    choice REMOTE_PANEL
+        prompt "Display controller"
+        default REMOTE_PANEL_ILI9341
+        help
+            The ESP32-2432S028 ships in two variants. The original, with a single
+            micro-USB port, has an ILI9341. The later "2USB" board, with USB-C next
+            to the micro-USB, has an ST7789 that needs colour inversion and a
+            different memory-access order. Wrong choice: mirrored or negative image.
+
+        config REMOTE_PANEL_ILI9341
+            bool "ILI9341 (single micro-USB board)"
+        config REMOTE_PANEL_ST7789
+            bool "ST7789 (USB-C + micro-USB board)"
+    endchoice
+
+    config REMOTE_ROTATE_180
+        bool "Rotate the picture 180 degrees"
+        default n
+        help
+            Landscape either way; this flips which edge is the top. Touch follows.
+
+    config REMOTE_BACKLIGHT_GPIO
+        int "Backlight GPIO"
+        default 21
+
+    menu "Touch calibration (XPT2046)"
+        config REMOTE_TOUCH_X_MIN
+            int "Raw X at the left edge"
+            default 200
+        config REMOTE_TOUCH_X_MAX
+            int "Raw X at the right edge"
+            default 3700
+        config REMOTE_TOUCH_Y_MIN
+            int "Raw Y at the top edge"
+            default 240
+        config REMOTE_TOUCH_Y_MAX
+            int "Raw Y at the bottom edge"
+            default 3800
+        config REMOTE_TOUCH_SWAP_XY
+            bool "Swap X and Y"
+            default n
+        config REMOTE_TOUCH_LOG
+            bool "Log every touch, raw and mapped (for calibrating)"
+            default n
+    endmenu
+
+endmenu

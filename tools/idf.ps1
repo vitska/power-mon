@@ -112,10 +112,17 @@ if ($code -ne 0) {
 }
 
 if ($IdfArgs -contains 'build') {
-    $bin = Join-Path $proj 'build\bat-monitor.bin'
-    if (Test-Path $bin) {
-        $kb = [math]::Round((Get-Item $bin).Length / 1KB)
-        Write-Host "==> build\bat-monitor.bin  ($kb KB)" -ForegroundColor Green
-        Write-Host "==> flash with:  .\tools\flash.ps1 -Port COM5" -ForegroundColor Green
+    # Report the project that was actually built: the monitor at the root, or the
+    # remote display with --project-dir remote (or -C remote).
+    $i = [array]::IndexOf($IdfArgs, '--project-dir')
+    if ($i -lt 0) { $i = [array]::IndexOf($IdfArgs, '-C') }
+    $remote = $i -ge 0 -and $IdfArgs[$i + 1] -match '^remote'
+    $bin    = if ($remote) { 'remote\build\batmon-remote.bin' } else { 'build\bat-monitor.bin' }
+    $flash  = if ($remote) { '.\tools\flash.ps1 -Remote' } else { '.\tools\flash.ps1' }
+    $path   = Join-Path $proj $bin
+    if (Test-Path $path) {
+        $kb = [math]::Round((Get-Item $path).Length / 1KB)
+        Write-Host "==> $bin  ($kb KB)" -ForegroundColor Green
+        Write-Host "==> flash with:  $flash" -ForegroundColor Green
     }
 }

@@ -20,6 +20,8 @@
     offsets here means the partition layout can change without touching this file.
 
 .EXAMPLE
+    .\tools\flash.ps1 -Remote              # the ESP32-2432S028 remote display (remote/)
+.EXAMPLE
     .\tools\flash.ps1                       # auto-detect the port
     .\tools\flash.ps1 -Port COM5
     .\tools\flash.ps1 -Port COM5 -Baud 921600
@@ -31,17 +33,22 @@ param(
     [string]$Port  = $env:BATMON_PORT,
     [int]   $Baud  = 460800,
     [switch]$Erase,
-    [switch]$Monitor
+    [switch]$Monitor,
+    # The remote display firmware in remote/: a classic ESP32 behind a CH340, not the
+    # monitor's ESP32-C6.
+    [switch]$Remote
 )
 
 $ErrorActionPreference = 'Stop'
 
 $proj     = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$buildDir = Join-Path $proj 'build'
+$buildDir = if ($Remote) { Join-Path $proj 'remote\build' } else { Join-Path $proj 'build' }
+$chip     = if ($Remote) { 'esp32' } else { 'esp32c6' }
+$buildCmd = if ($Remote) { '.\tools\idf.ps1 --project-dir remote build' } else { '.\tools\idf.ps1 build' }
 $argsFile = Join-Path $buildDir 'flash_project_args'
 
 if (-not (Test-Path $argsFile)) {
-    throw "No $argsFile. Build first:  .\tools\idf.ps1 build"
+    throw "No $argsFile. Build first:  $buildCmd"
 }
 
 # flash_project_args is written at CMake *configure* time, so its existence proves
@@ -62,7 +69,7 @@ if ($missing.Count -gt 0) {
     Write-Host "The build is incomplete -- $($missing.Count) of $($images.Count) images named in flash_project_args are missing:" -ForegroundColor Red
     $missing | ForEach-Object { Write-Host "    build/$_" -ForegroundColor Red }
     Write-Host ""
-    Write-Host "Build first:  .\tools\idf.ps1 build"
+    Write-Host "Build first:  $buildCmd"
     Write-Host "If a build is running right now, wait for it: the images appear one by one" -ForegroundColor DarkGray
     Write-Host "as the build proceeds, and bat-monitor.bin is the last one written." -ForegroundColor DarkGray
     exit 1
@@ -117,7 +124,13 @@ if (-not $Port) {
         exit 1
     }
     # Prefer the C6's built-in USB-Serial-JTAG bridge: Espressif's VID, or its name.
-    $pick = $cands | Where-Object { $_.Espressif -or $_.Name -match 'JTAG|Espressif' } | Select-Object -First 1
+    # The monitor's C6 has Espressif's own USB; the remote's CYD has a CH340 (on some
+    # batches a CP210x). Prefer whichever this flash is for.
+    $pick = if ($Remote) {
+        $cands | Where-Object { $_.Name -match 'CH34|CP210|USB-SERIAL' } | Select-Object -First 1
+    } else {
+        $cands | Where-Object { $_.Espressif -or $_.Name -match 'JTAG|Espressif' } | Select-Object -First 1
+    }
     if (-not $pick) { $pick = $cands[0] }
     $Port = $pick.Port
     Write-Host "==> auto-detected $Port  ($($pick.Name))" -ForegroundColor Yellow
@@ -162,14 +175,14 @@ Push-Location $buildDir
 try {
     if ($Erase) {
         Write-Host "==> erasing flash on $Port" -ForegroundColor Yellow
-        & python -m esptool --chip esp32c6 -p $Port $cmdErase
+        & python -m esptool --chip $chip -p $Port $cmdErase
         if ($LASTEXITCODE -ne 0) { throw "$cmdErase failed" }
     }
 
     Write-Host "==> flashing $Port at $Baud" -ForegroundColor Cyan
     # "@flash_project_args" must stay quoted. Unquoted, PowerShell reads a leading
     # @ as splatting syntax and the argument never reaches esptool.
-    $etArgs = @('-m', 'esptool', '--chip', 'esp32c6', '-p', $Port, '-b', "$Baud",
+    $etArgs = @('-m', 'esptool', '--chip', $chip, '-p', $Port, '-b', "$Baud",
                 $cmdWrite, '@flash_project_args')
     Write-Verbose ("python " + ($etArgs -join ' '))
     & python $etArgs
