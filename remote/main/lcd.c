@@ -39,10 +39,11 @@ static const char *TAG = "lcd";
 #define MADCTL_BASE 0x68 /* MX | MV | BGR: landscape on the 2USB board */
 #define INVERT      1
 #else
-/* MX | MY | MV | BGR: landscape, USB at the left. 0x28 (MV | BGR, what TFT_eSPI calls
- * rotation 1) came out mirrored in both axes on real hardware. Touch is mapped for the
- * picture the right way up, so it does not follow this. */
-#define MADCTL_BASE 0xE8
+/* MX | MV | BGR: landscape, verified on the board. With MV (row/column exchange) set,
+ * MX flips the picture vertically and MY horizontally -- the reverse of what the names
+ * suggest, which is how 0x28 (upside down) became 0xE8 (mirrored left-right) before
+ * landing here. Touch is mapped for the picture the right way up and does not follow. */
+#define MADCTL_BASE 0x68
 #define INVERT      0
 #endif
 
