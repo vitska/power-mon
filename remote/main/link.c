@@ -19,6 +19,7 @@
 
 #include "link.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -93,6 +94,14 @@ static struct {
     bool       user_active; /* capture this response into user_res */
     link_cmd_t user_res;
 
+    /* SoC history: filled while a `hist` reply is parsed, published when it ends. */
+    uint16_t    hist_tmp[LINK_HIST_MAX];
+    int         hist_tmp_n;
+    bool        hist_tmp_seen;
+    uint32_t    hist_tmp_interval, hist_tmp_age;
+    link_hist_t hist;
+    int64_t     hist_fetched_us;
+
     link_model_t model;
     link_found_t found[MAX_FOUND];
     int64_t      found_seen[MAX_FOUND];
@@ -157,6 +166,10 @@ static void reset_link_model(void)
     s.model.secure    = false;
     s.model.firmware[0] = '\0';
     s.model.chem[0]     = '\0';
+    s.model.have_env    = false;
+    s.hist.count        = 0;     /* another board: its history, not the last one's */
+    s.hist.supported    = false;
+    s.hist.seq++;
     s.model.cells       = 0;
     s.model.capacity_mah = 0;
     unlock();
@@ -221,8 +234,20 @@ static void on_line(char *line)
         unlock();
         return;
     }
-    /* Other records (d, e) and headers: skip, as CLI.md asks of any client. */
-    if ((line[0] == 'd' || line[0] == 'e') && line[1] == ',') return;
+    if (line[0] == 'e' && line[1] == ',') {
+        /* e,ms,temp_c,humid_pct,press_hpa -- fields are EMPTY, not zero, when the
+         * sensor lacks them (CLI.md §5), so an empty one must not read as 0. */
+        if (split(line, f, 10) < 5) return;
+        lock();
+        s.model.temp_c    = f[2][0] ? strtof(f[2], NULL) : NAN;
+        s.model.humid_pct = f[3][0] ? strtof(f[3], NULL) : NAN;
+        s.model.press_hpa = f[4][0] ? strtof(f[4], NULL) : NAN;
+        s.model.have_env  = f[2][0] || f[3][0] || f[4][0];
+        unlock();
+        return;
+    }
+    /* Other records (d) and headers: skip, as CLI.md asks of any client. */
+    if (line[0] == 'd' && line[1] == ',') return;
     if (line[0] == '#') return;
     if (!s.pending) return; /* greeting and anything unsolicited */
 
@@ -246,7 +271,20 @@ static void on_line(char *line)
     if (eq) {
         *eq = '\0';
         const char *k = line, *v = eq + 1;
-        if (strcmp(k, "soc.cap_uah") == 0) {
+        if (strcmp(k, "soc") == 0) {
+            /* `hist`: comma-separated permille, `-` for a gap, split over lines. */
+            char *save = NULL;
+            for (char *t = strtok_r((char *)v, ",", &save); t && s.hist_tmp_n < LINK_HIST_MAX;
+                 t = strtok_r(NULL, ",", &save)) {
+                s.hist_tmp[s.hist_tmp_n++] = (t[0] == '-') ? LINK_HIST_NONE : (uint16_t)atoi(t);
+            }
+        } else if (strcmp(k, "points") == 0) {
+            s.hist_tmp_seen = true;
+        } else if (strcmp(k, "interval_s") == 0) {
+            s.hist_tmp_interval = strtoul(v, NULL, 10);
+        } else if (strcmp(k, "age_s") == 0) {
+            s.hist_tmp_age = strtoul(v, NULL, 10);
+        } else if (strcmp(k, "soc.cap_uah") == 0) {
             s.cap_design_mah = strtoul(v, NULL, 10) / 1000;
         } else if (strcmp(k, "soc.learned_uah") == 0) {
             s.cap_learned_mah = strtoul(v, NULL, 10) / 1000;
@@ -296,6 +334,35 @@ static int on_write(uint16_t conn, const struct ble_gatt_error *err, struct ble_
     return 0;
 }
 
+/* Fetches `hist` and publishes it. Runs on the link task only. */
+static bool run(const char *cmd, int timeout_ms);
+
+static void fetch_history(void)
+{
+    s.hist_tmp_n        = 0;
+    s.hist_tmp_seen     = false;
+    s.hist_tmp_interval = 600;
+    s.hist_tmp_age      = 0;
+    const bool got = run("hist", 4000);
+    lock();
+    if (got) {
+        /* No `points=` in the answer: a monitor from before 0.9.0, which says
+         * "unknown command". */
+        s.hist.supported = s.hist_tmp_seen;
+        if (s.hist_tmp_seen) {
+            const bool changed = s.hist.count != s.hist_tmp_n ||
+                                 memcmp(s.hist.pts, s.hist_tmp, s.hist_tmp_n * 2) != 0;
+            memcpy(s.hist.pts, s.hist_tmp, s.hist_tmp_n * 2);
+            s.hist.count      = s.hist_tmp_n;
+            s.hist.interval_s = s.hist_tmp_interval;
+            s.hist.age_s      = s.hist_tmp_age;
+            s.hist_fetched_us = esp_timer_get_time();
+            if (changed) s.hist.seq++;
+        }
+    }
+    unlock();
+}
+
 /* One command, waiting for its terminator. Runs on the link task only. */
 static bool run(const char *cmd, int timeout_ms)
 {
@@ -337,6 +404,7 @@ static void link_task(void *arg)
             if (run("ver", 3000) && s.model.protocol != 0) {
                 run("config", 5000);
                 run("stream csv", 3000);
+                fetch_history();
                 s.need_handshake = false;
                 last_config      = esp_timer_get_time();
                 set_state(LINK_READY);
@@ -377,6 +445,10 @@ static void link_task(void *arg)
             /* Capacity is learned over time; re-read it now and then. */
             run("config", 5000);
             last_config = esp_timer_get_time();
+        } else if (s.hist.supported &&
+                   esp_timer_get_time() - s.hist_fetched_us > 120LL * 1000000) {
+            /* A new point every 10 minutes; checking every 2 costs ~1 KB. */
+            fetch_history();
         }
     }
 }
@@ -789,6 +861,16 @@ void link_forget(void)
     }
     ble_store_clear();
     note("forgotten; pick a board");
+}
+
+void link_history(link_hist_t *out)
+{
+    lock();
+    *out = s.hist;
+    if (s.hist.count) {
+        out->age_s += (uint32_t)((esp_timer_get_time() - s.hist_fetched_us) / 1000000);
+    }
+    unlock();
 }
 
 bool link_command(const char *cmd, int timeout_ms)

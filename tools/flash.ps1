@@ -113,8 +113,13 @@ if (-not $Port) {
     $cands = @($all | Where-Object Usb)
     if ($cands.Count -eq 0) {
         Write-Host ""
-        Write-Host "No USB serial port found. Is the XIAO plugged in? Its native USB-C port" -ForegroundColor Red
-        Write-Host "enumerates as a USB Serial device a second or two after connecting." -ForegroundColor Red
+        if ($Remote) {
+            Write-Host "No USB serial port found. Is the CYD plugged in? Its micro-USB port is a" -ForegroundColor Red
+            Write-Host "CH340, which needs its driver on some Windows installs." -ForegroundColor Red
+        } else {
+            Write-Host "No USB serial port found. Is the XIAO plugged in? Its native USB-C port" -ForegroundColor Red
+            Write-Host "enumerates as a USB Serial device a second or two after connecting." -ForegroundColor Red
+        }
         if ($all.Count -gt 0) {
             Write-Host ""
             Write-Host "Ignored, as they cannot be the board (Bluetooth, serial-over-LAN):" -ForegroundColor DarkGray

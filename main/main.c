@@ -476,6 +476,14 @@ static void sampler_task(void *arg)
             /* The gauge sees every accepted sample and nothing else -- a rejected
              * read must never reach the integrator (DESIGN.md §5.2). */
             fg_update(&s);
+            if (soc_history_due(s.t_us)) {
+                fg_status_t st;
+                fg_get(&st);
+                /* An unseeded gauge has no SoC worth recording: a gap, not a zero. */
+                soc_history_push(s.t_us, st.state == FG_UNKNOWN
+                                             ? SOC_HIST_NONE
+                                             : (uint16_t)st.soc_permille);
+            }
             break;
         case ESP_ERR_NOT_FINISHED:
             values()->err_not_finished++;
@@ -711,6 +719,8 @@ void app_main(void)
          * through a half-configured conversion. A first boot has nothing stored, which
          * is the normal path and not an error.
          */
+        soc_history_init();
+
         const esp_err_t cerr = config_load();
         if (cerr == ESP_OK) {
             ESP_LOGI(TAG, "settings restored from NVS ('config' to review)");

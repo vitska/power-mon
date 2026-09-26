@@ -3,7 +3,6 @@ idf_component_register(
                 "lcd.c"
                 "touch.c"
                 "link.c"
-                "history.c"
                 "ui.c"
                 "rcon.c"
                 # The OTA core is the monitor's, shared: chip-neutral, and it checks an

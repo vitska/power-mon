@@ -12,9 +12,10 @@
  *   | TIME TO EMPTY              |  DISCHARGING              |
  *   |  3d 04h                    |  RESTING  FLOODED 6S      |
  *   +----------------------------+---------------------------+ 148
- *   | SOC HISTORY  6 h                               100      |
+ *   | SOC 48 h              24.1C 46.2% 1003.5hPa      100      |
  *   |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~    50      |  tap: 1 h / 6 h / 24 h
- *   |                                                  0      |
+ *   |                                                  0      |  graph: the monitor's own
+ *                                                                history (`hist`)
  *   +--------------------------------------------------------+ 240
  *
  * Every field is redrawn only when the text it shows changes, which is what lets a
@@ -33,7 +34,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "history.h"
 #include "lcd.h"
 #include "link.h"
 #include "ota.h"
@@ -47,7 +47,7 @@ typedef enum { SCR_MAIN, SCR_SETTINGS, SCR_DEVICES, SCR_NUMPAD, SCR_CONFIRM, SCR
 
 static screen_t s_screen;
 static bool     s_full;              /* redraw everything on the next pass */
-static int      s_span_min = 360;    /* graph span: 60, 360 or 1440 minutes */
+static int      s_span_h = 48;       /* graph span: 12, 24 or 48 hours */
 
 /* --- small widgets --------------------------------------------------------------- */
 
@@ -141,23 +141,40 @@ static void bt_icon(uint16_t color)
 #define GW 284
 #define GH 74
 
+/*
+ * The monitor's own history (`hist`): a point every 10 minutes for 48 hours, fetched
+ * on connect and every two minutes. The graph's right edge is "now"; each point sits
+ * where its age puts it, so a span shows exactly that many hours whatever the ring
+ * holds, and minutes the monitor did not record stay empty.
+ */
 static void draw_graph(void)
 {
-    static uint16_t pts[HISTORY_POINTS];
-    static int16_t  ycol[GW];
-    history_get(pts, s_span_min);
+    static link_hist_t h;
+    static int16_t     ycol[GW];
+    link_history(&h);
 
-    /* One column per pixel: the newest valid point that falls in it. With fewer
-     * minutes than pixels (the 1 h span) a point spans several columns. */
-    for (int c = 0; c < GW; c++) {
-        const int i0 = c * s_span_min / GW;
-        int       i1 = (c + 1) * s_span_min / GW;
-        if (i1 <= i0) i1 = i0 + 1;
-        uint16_t v = HISTORY_NONE;
-        for (int i = i0; i < i1; i++) {
-            if (pts[i] != HISTORY_NONE) v = pts[i];
+    const int64_t span_s = (int64_t)s_span_h * 3600;
+    for (int c = 0; c < GW; c++) ycol[c] = -1;
+    for (int i = 0; i < h.count; i++) {
+        if (h.pts[i] == LINK_HIST_NONE) continue;
+        /* Age of point i: the newest is age_s old, each earlier one interval older. */
+        const int64_t age = (int64_t)h.age_s + (int64_t)(h.count - 1 - i) * h.interval_s;
+        if (age > span_s) continue;
+        const int c = GW - 1 - (int)(age * (GW - 1) / span_s);
+        ycol[c] = (int16_t)(GH - 1 - (int)h.pts[i] * (GH - 1) / 1000);
+    }
+    /* Neighbouring points are one interval apart, which on the 12 h span is ~4 px:
+     * interpolate between them so it draws a line, not a row of dots. Anything
+     * further apart is a real gap in the data and stays one. */
+    const int join = (int)((int64_t)h.interval_s * (GW - 1) / span_s) + 1;
+    for (int c = 0, last = -1; c < GW; c++) {
+        if (ycol[c] < 0) continue;
+        if (last >= 0 && c - last > 1 && c - last <= join) {
+            for (int k = last + 1; k < c; k++) {
+                ycol[k] = (int16_t)(ycol[last] + (ycol[c] - ycol[last]) * (k - last) / (c - last));
+            }
         }
-        ycol[c] = (v == HISTORY_NONE) ? -1 : (int16_t)(GH - 1 - (int)v * (GH - 1) / 1000);
+        last = c;
     }
 
     const uint16_t bg = C_PANEL, grid = C_DIM, line = C_GREEN, fill = RGB(20, 70, 35);
@@ -180,8 +197,10 @@ static void draw_graph(void)
         }
         lcd_blit(GX, GY + y0, GW, h, buf);
     }
-    if (history_count() == 0) {
-        const char *msg = "no data yet";
+    const char *msg = !h.supported ? "the monitor keeps no history before firmware 0.9.0"
+                    : h.count == 0 ? "no history yet -- a point every 10 minutes"
+                                   : NULL;
+    if (msg) {
         lcd_text(GX + (GW - lcd_text_w(msg, 1)) / 2, GY + GH / 2 - 4, msg, 1, C_GREY, bg);
     }
 }
@@ -330,13 +349,33 @@ static void main_draw(const link_model_t *m)
     snprintf(sub, sizeof(sub), "%s%s", live && m->have_calc ? m->mode : "", chem);
     field(&f_sub, 178, 126, 140, 1, C_GREY, C_BLACK, sub);
 
-    /* Graph label, or why there is nothing to show. */
+    /* Graph label, or why there is nothing to show; the environment on the right. */
+    static field_t f_env;
     if (m->state == LINK_READY) {
-        snprintf(b, sizeof(b), "SOC HISTORY  %s", s_span_min == 60 ? "1 h" :
-                                                  s_span_min == 360 ? "6 h" : "24 h");
-        field(&f_glabel, 4, 152, 312, 1, C_GREY, C_BLACK, b);
+        snprintf(b, sizeof(b), "SOC %d h", s_span_h);
+        field(&f_glabel, 4, 152, 96, 1, C_GREY, C_BLACK, b);
+        char env[48] = "", part[16];
+        if (m->have_env) {
+            if (!isnan(m->temp_c)) {
+                snprintf(part, sizeof(part), "%.1fC ", m->temp_c);
+                strcat(env, part);
+            }
+            if (!isnan(m->humid_pct)) {
+                snprintf(part, sizeof(part), "%.1f%% ", m->humid_pct);
+                strcat(env, part);
+            }
+            if (!isnan(m->press_hpa)) {
+                snprintf(part, sizeof(part), "%.1fhPa", m->press_hpa);
+                strcat(env, part);
+            }
+        }
+        /* Right-aligned in a fixed field, so a shorter reading erases a longer one. */
+        char right[32];
+        snprintf(right, sizeof(right), "%27.27s", env);
+        field(&f_env, 154, 152, 162, 1, C_CYAN, C_BLACK, right);
     } else {
         field(&f_glabel, 4, 152, 312, 1, C_YELLOW, C_BLACK, m->note);
+        f_env.text[0] = '\x01'; /* force a redraw once the label shrinks back */
     }
 }
 
@@ -837,8 +876,7 @@ static void go(screen_t scr)
 void ui_run(void)
 {
     link_model_t m;
-    int64_t      next_minute = 0, next_list = 0;
-    bool         recording   = false;
+    int64_t      next_list = 0;
 
     s_screen = SCR_MAIN;
     s_full   = true;
@@ -864,17 +902,21 @@ void ui_run(void)
             go(SCR_MAIN);
         }
 
-        /* History: a point a minute from the first data onward, a gap while down. */
         const bool fresh = m.state == LINK_READY && m.have_calc &&
                            now - m.last_data_us < STALE_US;
-        if (!recording && fresh) {
-            recording   = true;
-            next_minute = now; /* the first point straight away */
-        }
-        if (recording && now >= next_minute) {
-            history_push(fresh ? (uint16_t)lroundf(m.soc_pct * 10.0f) : HISTORY_NONE);
-            next_minute += 60LL * 1000000;
-            if (s_screen == SCR_MAIN && !s_full) draw_graph();
+
+        /* Redraw the graph when a fetch brought something new, and once a minute
+         * anyway: its right edge is "now", so the points move left as time passes. */
+        static uint32_t hist_seq_drawn;
+        static int64_t  next_graph;
+        if (s_screen == SCR_MAIN && !s_full) {
+            static link_hist_t hh;
+            link_history(&hh);
+            if (hh.seq != hist_seq_drawn || now >= next_graph) {
+                hist_seq_drawn = hh.seq;
+                next_graph     = now + 60LL * 1000000;
+                draw_graph();
+            }
         }
 
         /* What the dashboard shows, on the serial log every 30 s: the one way to
@@ -882,9 +924,15 @@ void ui_run(void)
         static int64_t next_log;
         if (now >= next_log) {
             next_log = now + 30LL * 1000000;
+            link_hist_t lh;
+            link_history(&lh);
             ESP_LOGI("ui", "%s %s: %.1f %% %.3f V %.4f A (avg %.4f) %s, cap %lu mAh, %s %dS",
                      m.name, fresh ? "live" : "no data", m.soc_pct, m.volts, m.amps,
                      m.amps_avg, m.mode, (unsigned long)m.capacity_mah, m.chem, m.cells);
+            ESP_LOGI("ui", "env %s: %.2f C %.1f %% %.2f hPa; history %s, %d points, newest %lu s old",
+                     m.have_env ? "yes" : "no", m.temp_c, m.humid_pct, m.press_hpa,
+                     lh.supported ? "supported" : "unsupported", lh.count,
+                     (unsigned long)lh.age_s);
         }
 
         int tx, ty;
@@ -897,7 +945,7 @@ void ui_run(void)
                 break;
             }
             if (tap && ty >= 150) {
-                s_span_min = s_span_min == 60 ? 360 : s_span_min == 360 ? 1440 : 60;
+                s_span_h = s_span_h == 48 ? 12 : s_span_h == 12 ? 24 : 48;
                 s_full = true; /* graph and its label */
             }
             if (s_full) main_enter();

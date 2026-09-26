@@ -60,6 +60,41 @@ data class Handshake(
     val mismatch: Boolean = false,
 )
 
+/**
+ * The monitor's SoC history (`hist`, CLI.md §6): permille per point, null for a gap,
+ * oldest first. The newest point was [ageS] old when fetched at [fetchedAtMs].
+ */
+data class SocHistory(
+    val supported: Boolean,
+    val points: List<Int?> = emptyList(),
+    val intervalS: Int = 600,
+    val ageS: Long = 0,
+    val fetchedAtMs: Long = 0,
+) {
+    /** The newest point's age now, not at the fetch. */
+    fun ageNowS(): Long = ageS + (System.currentTimeMillis() - fetchedAtMs) / 1000
+
+    companion object {
+        fun parse(lines: List<String>): SocHistory {
+            val pts = mutableListOf<Int?>()
+            var interval = 600
+            var age = 0L
+            for (l in lines) {
+                val i = l.indexOf('=')
+                if (i <= 0) continue
+                val k = l.substring(0, i)
+                val v = l.substring(i + 1)
+                when (k) {
+                    "interval_s" -> interval = v.toIntOrNull() ?: 600
+                    "age_s" -> age = v.toLongOrNull() ?: 0
+                    "soc" -> v.split(',').forEach { t -> pts.add(t.trim().toIntOrNull()) }
+                }
+            }
+            return SocHistory(true, pts, interval, age, System.currentTimeMillis())
+        }
+    }
+}
+
 /** The Firmware tab: what the board runs, what is published, and any update under way. */
 data class FirmwareState(
     /** From `ota status`; null until read, or on firmware that lacks the command. */
@@ -125,6 +160,11 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _fw = MutableStateFlow(FirmwareState())
     val firmware = _fw.asStateFlow()
+
+    /** The monitor's 48 h SoC history; null until read on this connection. */
+    private val _history = MutableStateFlow<SocHistory?>(null)
+    val history = _history.asStateFlow()
+    private var historyJob: Job? = null
 
     /** Set just before rebooting into a new image: the version it should come back as. */
     private var expectAfterReboot: String? = null
@@ -213,6 +253,7 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
         _tel.value = Telemetry()
         _shake.value = Handshake()
         _config.value = ConfigState.EMPTY
+        _history.value = null
         _fw.value = FirmwareState(latest = _fw.value.latest, checked = _fw.value.checked)
         expectAfterReboot = null
         fastStamps.clear()
@@ -295,6 +336,15 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
         refreshOta()
         settleUpdate()
         run("stream csv")
+        // History on connect, then every two minutes while the link lasts: the monitor
+        // adds a point every ten, and a fetch is about a kilobyte.
+        historyJob?.cancel()
+        historyJob = viewModelScope.launch {
+            while (client.link.value == Link.Ready) {
+                refreshHistory()
+                delay(120_000)
+            }
+        }
     }
 
     /**
@@ -308,6 +358,16 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun launchRefreshConfig() = viewModelScope.launch { refreshConfig() }
+
+    /** Re-reads `hist`, quietly: it is polled, and would flood the console transcript. */
+    suspend fun refreshHistory() {
+        val r = client.send("hist") ?: return
+        _history.value = when {
+            r.ok -> SocHistory.parse(r.lines)
+            r.exit == -2 -> SocHistory(supported = false)
+            else -> _history.value
+        }
+    }
 
     // ------------------------------------------------------------------ firmware
 

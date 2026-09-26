@@ -1231,6 +1231,16 @@ at the next reset unless the app confirms it — and the firmware forces that re
 ten minutes unconfirmed, so an image that boots but has lost its radio cannot strand the
 board.
 
+### 6.2a SoC history
+
+A point every 10 minutes for 48 hours (288 × 2 bytes), in NVS namespace `hist`, rewritten
+at every point. That is one ~600-byte blob write every ten minutes, a small addition to
+the gauge commits below. It is here rather than in the clients because the monitor is
+the device that is always on. Clients graph the same history whenever they connect,
+instead of each recording its own from the moment it happened to be connected. There is
+no clock, so a restored history gets a gap mark at boot rather than a guessed duration
+(CLI.md §6 `hist`).
+
 ### 6.3 Write policy and flash endurance
 
 Commit `fg_state_t` when **any** of:

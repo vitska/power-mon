@@ -10,8 +10,9 @@ repository root: different chip, different BLE role, its own `version.txt`.
 
 **Dashboard.** State of charge (large, green/yellow/red by level, with a bar), voltage,
 current, power, the mode (CHARGING / DISCHARGING / IDLE / FULL / EMPTY) with the gauge's
-own state and the battery chemistry under it, and the time to empty or to full. Below, a
-graph of SoC over the last 1, 6 or 24 hours. **Tap the graph** to change the span, and
+own state and the battery chemistry under it, and the time to empty or to full. Below, the
+monitor's SoC history over the last 12, 24 or 48 hours, with the board's temperature,
+humidity and pressure on the line above it. **Tap the graph** to change the span, and
 **tap the header** for Settings.
 
 - The time estimate uses a one-minute moving average of the current, so a load switching
@@ -78,9 +79,19 @@ changes nothing on the board except the calibration you run from Settings.
 
 ## SoC history
 
-The monitor keeps no history, so the remote records one point a minute from the moment
-data first arrives, 24 hours deep, with gaps where the link was down. It lives in RAM: a
-reboot starts a fresh graph.
+The graph is the monitor's own history (`hist`, CLI.md §6): a point every 10 minutes for
+48 hours, which the monitor keeps in flash.
+- The remote fetches it on connect and every two minutes, so the graph is full as soon as
+  it connects, whether the remote has just booted or not.
+- The right edge is now, and each point sits where its age puts it. Gaps, from reboots or
+  an unseeded gauge, stay gaps.
+- Against a monitor older than 0.9.0, which has no `hist`, the graph says so.
+
+## Environment
+
+The `e` records supply temperature, humidity and pressure. They appear right-aligned
+above the graph, e.g. `24.1C 46.2% 1003.5hPa`. A channel the board's sensor lacks is left
+out (a BMP280 has no humidity), and nothing is shown without a sensor.
 
 ## Build and flash
 
@@ -164,6 +175,5 @@ device, and installs it over BLE as described above.
 | `main/ui.c` | The three screens; every field redraws only when its text changes |
 | `main/lcd.c` | Panel init and drawing (rectangles, 5×7 text scaled, strip-rendered bitmaps). No framebuffer: 150 KB is too much of the ESP32's RAM beside the BLE stack |
 | `main/touch.c` | XPT2046: pressure check, median of five conversions, taps on the press edge |
-| `main/history.c` | 24 h of SoC, one point a minute |
 | `main/rcon.c` | The peripheral side: advertising in update mode, the small console (`ver`, `ota`, `reboot`) and the OTA characteristic |
 | `../main/ota.c` | The OTA session and probation, shared with the monitor |

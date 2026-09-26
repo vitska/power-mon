@@ -40,6 +40,7 @@ fun MonitorScreen(vm: MonitorViewModel, onPickDevice: () -> Unit = {}) {
     val link by vm.link.collectAsState()
     val scanning by vm.scanning.collectAsState()
     val cfg by vm.config.collectAsState()
+    val history by vm.history.collectAsState()
 
     Column(
         Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
@@ -122,6 +123,10 @@ fun MonitorScreen(vm: MonitorViewModel, onPickDevice: () -> Unit = {}) {
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
+        }
+
+        if (link == Link.Ready) {
+            HistoryChart(history)
         }
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {

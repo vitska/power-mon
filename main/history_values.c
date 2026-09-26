@@ -91,3 +91,129 @@ int32_t stats_mean_uv(const sample_stats_t *s)
 {
     return s->n_v ? (int32_t)(s->sum_uv / (int64_t)s->n_v) : 0;
 }
+
+/* --- SoC history ------------------------------------------------------------------- */
+
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "nvs.h"
+
+#define HIST_NS "hist"
+
+static struct {
+    uint16_t ring[SOC_HIST_POINTS];
+    uint16_t head;          /* next slot to write */
+    uint16_t count;
+    int64_t  next_due_us;   /* 0 until the first sample sets the schedule */
+    int64_t  last_point_us;
+} s_hist;
+
+/* The sampler writes, the console reads: a spinlock around the copy, never around
+ * the flash write. */
+static portMUX_TYPE s_hist_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static void hist_save(void)
+{
+    static uint16_t copy[SOC_HIST_POINTS];
+    uint16_t head, count;
+    taskENTER_CRITICAL(&s_hist_mux);
+    memcpy(copy, s_hist.ring, sizeof(copy));
+    head  = s_hist.head;
+    count = s_hist.count;
+    taskEXIT_CRITICAL(&s_hist_mux);
+
+    nvs_handle_t h;
+    if (nvs_open(HIST_NS, NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    nvs_set_blob(h, "ring", copy, sizeof(copy));
+    nvs_set_u16(h, "head", head);
+    nvs_set_u16(h, "count", count);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static void hist_append(uint16_t v)
+{
+    taskENTER_CRITICAL(&s_hist_mux);
+    s_hist.ring[s_hist.head] = v;
+    s_hist.head              = (s_hist.head + 1) % SOC_HIST_POINTS;
+    if (s_hist.count < SOC_HIST_POINTS) {
+        s_hist.count++;
+    }
+    taskEXIT_CRITICAL(&s_hist_mux);
+}
+
+void soc_history_init(void)
+{
+    nvs_handle_t h;
+    size_t       len = sizeof(s_hist.ring);
+    uint16_t     head = 0, count = 0;
+    if (nvs_open(HIST_NS, NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_blob(h, "ring", s_hist.ring, &len) == ESP_OK && len == sizeof(s_hist.ring) &&
+            nvs_get_u16(h, "head", &head) == ESP_OK && nvs_get_u16(h, "count", &count) == ESP_OK &&
+            head < SOC_HIST_POINTS && count <= SOC_HIST_POINTS) {
+            s_hist.head  = head;
+            s_hist.count = count;
+        }
+        nvs_close(h);
+    }
+    if (s_hist.count > 0) {
+        /* However long the power was off, it was not measured. */
+        hist_append(SOC_HIST_NONE);
+        s_hist.last_point_us = esp_timer_get_time();
+        ESP_LOGI("hist", "restored %u SoC points (48 h ring), gap marked", s_hist.count);
+    }
+}
+
+bool soc_history_due(int64_t now_us)
+{
+    if (s_hist.next_due_us == 0) {
+        /* The first point a minute after the first sample: long enough for the gauge
+         * to have seeded from voltage or restored its count, short enough that a
+         * fresh board shows something soon. */
+        s_hist.next_due_us = now_us + 60LL * 1000000;
+        return false;
+    }
+    return now_us >= s_hist.next_due_us;
+}
+
+void soc_history_push(int64_t now_us, uint16_t soc_permille)
+{
+    hist_append(soc_permille);
+    s_hist.last_point_us = now_us;
+    /* On schedule from the previous due time, not from now: a late sample must not
+     * make every later point late too. */
+    do {
+        s_hist.next_due_us += (int64_t)SOC_HIST_PERIOD_S * 1000000;
+    } while (s_hist.next_due_us <= now_us);
+    hist_save();
+}
+
+int soc_history_get(uint16_t *out, uint32_t *age_s)
+{
+    taskENTER_CRITICAL(&s_hist_mux);
+    const int n = s_hist.count;
+    for (int i = 0; i < n; i++) {
+        out[i] = s_hist.ring[(s_hist.head - n + i + SOC_HIST_POINTS) % SOC_HIST_POINTS];
+    }
+    const int64_t last = s_hist.last_point_us;
+    taskEXIT_CRITICAL(&s_hist_mux);
+    *age_s = n ? (uint32_t)((esp_timer_get_time() - last) / 1000000) : 0;
+    return n;
+}
+
+void soc_history_clear(void)
+{
+    taskENTER_CRITICAL(&s_hist_mux);
+    s_hist.head  = 0;
+    s_hist.count = 0;
+    taskEXIT_CRITICAL(&s_hist_mux);
+    nvs_handle_t h;
+    if (nvs_open(HIST_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_erase_all(h);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}

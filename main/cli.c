@@ -1931,6 +1931,42 @@ static int cmd_soc(int argc, char **argv)
     return 0;
 }
 
+/* --- SoC history ---------------------------------------------------------------- */
+
+/*
+ * Machine-readable, like `config`: the phone app and the remote display graph it.
+ * Values are SoC in permille, oldest first, 24 to a line so no line outgrows a small
+ * client's line buffer; a client concatenates every `soc=` line in order. `-` is a
+ * gap -- a boot, or a moment the gauge had no SoC -- and must be drawn as a break.
+ * The newest point was taken age_s seconds ago and each earlier one interval_s before
+ * the next, which is all a client without a shared clock needs to place them.
+ */
+static int cmd_hist(int argc, char **argv)
+{
+    if (argc >= 2 && strcmp(argv[1], "clear") == 0) {
+        soc_history_clear();
+        printf("SoC history cleared\n");
+        return 0;
+    }
+    static uint16_t pts[SOC_HIST_POINTS];
+    uint32_t        age = 0;
+    const int       n   = soc_history_get(pts, &age);
+    printf("interval_s=%d\n", SOC_HIST_PERIOD_S);
+    printf("capacity=%d\n", SOC_HIST_POINTS);
+    printf("points=%d\n", n);
+    printf("age_s=%lu\n", (unsigned long)age);
+    for (int i = 0; i < n; i += 24) {
+        printf("soc=");
+        for (int j = i; j < n && j < i + 24; j++) {
+            if (j > i) printf(",");
+            if (pts[j] == SOC_HIST_NONE) printf("-");
+            else                         printf("%u", (unsigned)pts[j]);
+        }
+        printf("\n");
+    }
+    return 0;
+}
+
 /* --- battery chemistry ------------------------------------------------------- */
 
 static void battery_show(void)
@@ -3166,6 +3202,7 @@ void cli_start(app_ctx_t *ctx)
 #if CONFIG_BATMON_BLE_ENABLE
     register_cmd("ble",     "BLE link, pairing and bonds",                  "[pair <open|bonded>|passkey <random|NNNNNN>|bonds|unpair|disconnect]", cmd_ble);
 #endif
+    register_cmd("hist",    "SoC every 10 min for 48 h, for graphs",       "[clear]",        cmd_hist);
     register_cmd("battery", "Battery chemistry and cells: the SoC curve and endpoints", "[list | <chemistry> [cells]]", cmd_battery);
     register_cmd("soc",     "State of charge, endpoints and accumulators",   "[set|full|reset|cap|v0|v100|vfull|rint|taper|rest] [v]", cmd_soc);
     register_cmd("options", "Everything that is set, in one place",         NULL,             cmd_options);

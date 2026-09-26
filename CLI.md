@@ -510,6 +510,37 @@ Refusals a client should expect and surface verbatim — each names a physical c
 - `that is a real voltage, not an offset` — VBUS not at ground
 - `sensor busy -- try again` — another acquisition held the mutex
 
+### SoC history
+
+| Command | Notes |
+|---|---|
+| `hist` | SoC every 10 minutes for the last 48 hours. Machine-readable, like `config` |
+| `hist clear` | Forget it, in RAM and in flash |
+
+```
+> hist
+interval_s=600
+capacity=288
+points=145
+age_s=212
+soc=723,722,722,721,-,698,697,...     # 24 values a line, oldest first
+soc=...
+exit 0
+```
+
+- **Values:** SoC in **permille**. Concatenate every `soc=` line in order.
+- **Gaps:** `-` is a gap: a boot, or a moment the gauge had no SoC. **Draw it as a
+  break**, not a line across it.
+- **Placing points in time:** the newest point was taken `age_s` seconds ago, and each
+  earlier one `interval_s` before the next. That is enough to place them without a shared
+  clock.
+- **Persistence:** the history is written to flash at every point, so an OTA update or a
+  power cycle keeps it. The monitor cannot know how long it was off, so a restored
+  history gets a `-` at boot.
+- **Size:** at most 288 points, about 1.4 KB over BLE. Polling it every couple of minutes
+  is fine.
+- **Firmware:** `hist` needs 0.9.0 or later. Older firmware answers `exit -2`.
+
 ### Battery chemistry
 
 | Command | Notes |

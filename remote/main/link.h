@@ -41,6 +41,11 @@ typedef struct {
     int      cells;
     int64_t  last_data_us;     /* esp_timer time of the last telemetry record */
     char     note[48];         /* the latest thing worth telling the user */
+    /* Environment, from the `e` records; NAN where the board's sensor lacks a channel
+     * (a BMP280 has no humidity) or has no sensor at all. */
+    bool     have_env;
+    float    temp_c, humid_pct, press_hpa;
+
     uint32_t rx_packets;       /* notifications received, ever: for the activity light */
     uint32_t tx_packets;       /* commands written, ever */
 } link_model_t;
@@ -70,6 +75,26 @@ void link_select(const link_found_t *d);
 
 /** Forget the remembered board and every bond; drop the link. */
 void link_forget(void);
+
+/* --- SoC history, from the monitor ------------------------------------------------- */
+
+/*
+ * The monitor keeps SoC every 10 minutes for 48 hours (`hist`, firmware 0.9.0 and
+ * later); the remote fetches it on connect and every two minutes and draws it.
+ */
+#define LINK_HIST_MAX  288
+#define LINK_HIST_NONE 0xFFFF
+
+typedef struct {
+    bool     supported;   /* false: the monitor's firmware has no `hist` */
+    int      count;       /* points in pts[], oldest first */
+    uint32_t interval_s;
+    uint32_t age_s;       /* how long ago the newest point was taken, as of now */
+    uint32_t seq;         /* bumps on every fetch that changed anything */
+    uint16_t pts[LINK_HIST_MAX];
+} link_hist_t;
+
+void link_history(link_hist_t *out);
 
 /* --- console commands from the UI (calibration) ------------------------------------ */
 
