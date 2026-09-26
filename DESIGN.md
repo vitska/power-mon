@@ -989,12 +989,20 @@ Action: `charge_uAs := full_capacity_uAh × 3600`; set `FULL_SEEN`; zero
 capacity learning (D).
 
 **B. Empty detection** — `V ≤ cfg.v_0pct_uV` (§8.6) while `I < −cfg.i_min_load_uA`, held for
-`t_empty_hold` (10 s — short, to catch a genuinely sagging pack). Action:
+`t_empty_hold` (10 s — short, to catch a genuinely sagging pack). A reading below 73 % of
+`v_0pct` (8.4 V on 11.5 V) never qualifies: no 12 V chemistry rests there, so it is an
+absent battery or a disconnected VBUS lead, and a single such sample once latched a
+healthy pack at 0 % and saved it. Action:
 `charge_uAs := 0`; set `EMPTY_SEEN`. Rejected if the discharge current exceeds
 `cfg.i_sag_ignore_uA`, since a heavy transient sag is not an empty pack.
 
-**C. Rest OCV re-sync** — after `t_rest` (default 30 min) below the deadband, terminal
-voltage approximates OCV. Look up `soc_ocv` and blend:
+**C. Rest OCV re-sync** — after `t_rest` (default 10 min) with |I| below the **rest
+current**, terminal voltage approximates OCV. The rest current is C/400 (110 mA on
+44 A·h), deliberately *not* the integration deadband: a monitor powered from its own
+pack draws a steady few to few tens of milliamps forever, and with the deadband as the
+threshold such a pack never rested, so a wrong count was never corrected. At C/400 the
+compensated I·R term is under a millivolt and polarisation a few, a fraction of a percent
+of SoC. Look up `soc_ocv` and blend:
 
 ```
 charge += ocv_blend_gain × (charge_from_ocv − charge)
@@ -1002,7 +1010,13 @@ charge += ocv_blend_gain × (charge_from_ocv − charge)
 
 where `charge_from_ocv` comes from the voltage→SoC mapping of §8.6, i.e. the OCV table
 scaled to the user's `v_0pct_uV` / `v_100pct_uV` endpoints (or a straight line between
-them in `v_curve_mode = 0`). Applied only when the disagreement exceeds 5 %; below that
+them in `v_curve_mode = 0`). The first rest after a boot **replaces** the count instead
+of blending: a count restored from flash has not been checked against the pack in this
+power-up, and blending a stale 0 % toward the truth at 25 % per rest period takes hours.
+
+*As implemented:* the table is five points from the common 25 °C chart for a 12 V
+flooded pack — 0 % 11.50 V, 25 % 11.95 V, 50 % 12.25 V, 75 % 12.45 V, 100 % 12.70 V —
+stored as fractions of the window so `v_0pct`/`v_100pct` stretch it (`soc_from_ocv()`). Applied only when the disagreement exceeds 5 %; below that
 the OCV table is less accurate than the counter. **Gated by chemistry:** for LiFePO₄ the
 OCV curve is famously flat between roughly 20 % and 80 %, so `cfg.ocv_valid_band`
 suppresses re-sync in that region.

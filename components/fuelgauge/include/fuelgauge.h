@@ -10,7 +10,8 @@
  *
  *   v_0pct / v_100pct  — RESTING open-circuit voltage at the ends of the SoC scale.
  *                        These map voltage to SoC. For a 12 V lead-acid that is about
- *                        11.80 V and 12.70 V.
+ *                        11.50 V and 12.70 V, with the curve between them following
+ *                        the resting-OCV chart rather than a straight line.
  *   v_full             — the ABSORPTION voltage that, together with taper current,
  *                        means "charging has finished". About 14.4 V.
  *
@@ -85,7 +86,7 @@ typedef struct {
 #define FG_CONFIG_LEAD_ACID_12V_44AH()                  \
     ((fg_config_t){                                     \
         .design_capacity_uah = 44000000u,               \
-        .v_0pct_uv           = 11800000u, /* resting */ \
+        .v_0pct_uv           = 11500000u, /* resting; curve in soc_from_ocv() */ \
         .v_100pct_uv         = 12700000u, /* resting */ \
         .v_full_uv           = 14400000u, /* 2.40 V/cell, Appendix B */ \
         .r_int_uohm          = 6000u,     /* ~6 mOhm typical for this size */ \
@@ -117,6 +118,7 @@ typedef struct {
     uint32_t   last_learn_uah;      /**< the last raw measurement, before blending */
     int64_t    q_since_full_uas;    /**< effective charge since the last full anchor */
     bool       have_full_anchor;    /**< a learn window is open */
+    uint32_t   rest_current_ua;     /**< below this |i| the pack counts as resting */
     uint32_t   peukert_factor_q16;  /**< the multiplier in use right now, for display */
 } fg_status_t;
 

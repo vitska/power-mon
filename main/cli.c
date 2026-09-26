@@ -1821,9 +1821,10 @@ static void soc_show(void)
     printf("100%% at      %s V (resting OCV)\n", FMT_V(b2, c.v_100pct_uv));
     printf("full at      %s V with charge current below %s A\n",
            FMT_V(b3, c.v_full_uv), FMT_A(b1, c.i_taper_ua));
-    printf("R internal   %lu uOhm   deadband %s A   rest %lu s\n",
-           (unsigned long)c.r_int_uohm, FMT_A(b2, c.i_deadband_ua),
-           (unsigned long)c.t_rest_s);
+    printf("R internal   %lu uOhm   deadband %s A\n",
+           (unsigned long)c.r_int_uohm, FMT_A(b2, c.i_deadband_ua));
+    printf("rest         %lu s below %s A, then SoC re-syncs to resting voltage\n",
+           (unsigned long)c.t_rest_s, FMT_A(b3, st.rest_current_ua));
     printf("rated rate   %s A -- the current the nameplate capacity assumes\n",
            FMT_A(b1, c.i_rated_ua));
     printf("learning     needs %lu.%lu %% depth, blended at %lu %%\n",

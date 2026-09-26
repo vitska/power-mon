@@ -27,6 +27,16 @@ static const char *TAG = "fg";
 #define SAVE_SOC_DELTA_PERMILLE 5
 #define SAVE_INTERVAL_S         300
 
+/* Empty anchor (§5.4 B): the low voltage must HOLD this long. One sample is not an
+ * empty pack -- a loose clamp, a VBUS lead off while wiring, or a sensor glitch reads
+ * 0 V for a moment, and a single-sample anchor latches that as 0 % and saves it. */
+#define EMPTY_HOLD_S 10
+
+/* Below this fraction of v_0pct a reading is not a battery at its endpoint: nothing
+ * with a 12 V chemistry rests at 8.6 V. It is an absent battery or a disconnected
+ * VBUS, and it must not anchor anything. */
+#define EMPTY_FLOOR_Q8 186 /* 0.73 */
+
 static struct {
     fg_config_t cfg;
 
@@ -44,6 +54,7 @@ static struct {
     int64_t  last_t_us;
     int64_t  idle_since_us;  /* 0 = not idle */
     int64_t  full_since_us;  /* 0 = full condition not currently held */
+    int64_t  empty_since_us; /* 0 = empty condition not currently held */
     uint32_t s_since_anchor;
 
     int64_t  q_since_full_uas;  /* unclamped, for capacity learning */
@@ -133,10 +144,28 @@ static uint32_t soc_from_charge(void)
 }
 
 /*
- * Voltage to SoC, linear between the two OCV endpoints. Lead-acid's resting OCV is
- * close enough to linear across this window for a re-anchor; §8.3's v_curve_mode = 1
- * (a scaled OCV table) is the refinement, and it belongs with the table itself.
+ * Voltage to SoC through the SHAPE of the lead-acid resting-OCV curve (§8.6,
+ * v_curve_mode 1), scaled between the configured v_0pct and v_100pct.
+ *
+ * The shape is the common 25 °C chart for a 12 V flooded pack, taken at its range
+ * midpoints: 0 % 11.50 V, 25 % 11.95 V, 50 % 12.25 V, 75 % 12.45 V, 100 % 12.70 V.
+ * It is not a straight line -- the voltage climbs fast through the bottom quarter and
+ * flattens toward full -- and the straight line this replaced read a rested 12.44 V
+ * pack about ten points low.
+ *
+ * Stored as fractions of the window rather than as volts, so v0/v100 still move the
+ * endpoints and the curve stretches with them: a pack whose owner sets a conservative
+ * 0 % keeps the curve's shape rather than getting a table that disagrees with them.
  */
+#define OCV_POINTS 5
+static const uint32_t OCV_SHAPE_Q16[OCV_POINTS] = {
+    0,     /*   0 %  11.50 V */
+    24576, /*  25 %  11.95 V: (11.95 - 11.50) / 1.20 = 0.375 */
+    40960, /*  50 %  12.25 V: 0.625 */
+    51883, /*  75 %  12.45 V: 0.7917 */
+    65536, /* 100 %  12.70 V */
+};
+
 static uint32_t soc_from_ocv(uint32_t ocv_uv)
 {
     if (s_fg.cfg.v_100pct_uv <= s_fg.cfg.v_0pct_uv) {
@@ -149,7 +178,34 @@ static uint32_t soc_from_ocv(uint32_t ocv_uv)
         return 1000;
     }
     const uint64_t span = s_fg.cfg.v_100pct_uv - s_fg.cfg.v_0pct_uv;
-    return (uint32_t)(((uint64_t)(ocv_uv - s_fg.cfg.v_0pct_uv) * 1000) / span);
+    const uint32_t x    = (uint32_t)(((uint64_t)(ocv_uv - s_fg.cfg.v_0pct_uv) << 16) / span);
+
+    for (int i = 0; i < OCV_POINTS - 1; i++) {
+        const uint32_t lo = OCV_SHAPE_Q16[i], hi = OCV_SHAPE_Q16[i + 1];
+        if (x <= hi) {
+            const uint32_t step = 1000 / (OCV_POINTS - 1);
+            return step * (uint32_t)i + (uint32_t)(((uint64_t)(x - lo) * step) / (hi - lo));
+        }
+    }
+    return 1000;
+}
+
+/*
+ * The current below which the pack counts as RESTING, for the OCV re-sync. Not the
+ * integration deadband: that one exists to stop the counter integrating sensor noise
+ * and is a few milliamps. Resting only has to mean "too little current for the
+ * terminal voltage to be far from OCV", and a monitor that lives on the pack -- this
+ * board, a clock, an alarm -- draws a steady few milliamps to a few tens forever. With
+ * the deadband as the threshold, such a pack never rested, never re-synced, and a
+ * wrong count stayed wrong indefinitely.
+ *
+ * C/400: 110 mA on 44 Ah. At that rate the I·R term is well under a millivolt after
+ * compensation, and polarisation is a few millivolts -- a fraction of a percent of SoC.
+ */
+static uint32_t rest_current_ua(void)
+{
+    const uint32_t c400 = s_fg.cfg.design_capacity_uah / 400;
+    return c400 > s_fg.cfg.i_deadband_ua ? c400 : s_fg.cfg.i_deadband_ua;
 }
 
 /*
@@ -364,7 +420,9 @@ void fg_update(const power_sample_t *s)
     }
 
     /* --- idle / rest tracking ------------------------------------------------- */
-    if (in_deadband) {
+    const bool at_rest = s->i_ua > -(int32_t)rest_current_ua() &&
+                         s->i_ua < (int32_t)rest_current_ua();
+    if (at_rest) {
         if (s_fg.idle_since_us == 0) {
             s_fg.idle_since_us = now;
         }
@@ -412,7 +470,18 @@ void fg_update(const power_sample_t *s)
 
     /* --- empty detection: at the endpoint under load (§5.4 B) ----------------- */
     const bool discharging = s->i_ua < -(int32_t)s_fg.cfg.i_deadband_ua;
-    if (s->v_valid && discharging && s_fg.ocv_uv <= s_fg.cfg.v_0pct_uv) {
+    const uint32_t floor_uv =
+        (uint32_t)(((uint64_t)s_fg.cfg.v_0pct_uv * EMPTY_FLOOR_Q8) / 256);
+    const bool empty_now = s->v_valid && discharging && s->v_pack_uv >= floor_uv &&
+                           s_fg.ocv_uv <= s_fg.cfg.v_0pct_uv;
+    if (!empty_now) {
+        s_fg.empty_since_us = 0;
+    } else if (s_fg.empty_since_us == 0) {
+        s_fg.empty_since_us = now;
+    }
+    if (empty_now &&
+        (now - s_fg.empty_since_us) >= (int64_t)EMPTY_HOLD_S * 1000000) {
+        s_fg.empty_since_us = 0;
         /*
          * CAPACITY LEARNING (§5.4). A full anchor followed by an empty anchor brackets
          * a complete discharge, and the effective charge that flowed between them is
@@ -475,7 +544,12 @@ void fg_update(const power_sample_t *s)
 
         const uint32_t ocv_soc = soc_from_ocv(s_fg.ocv_uv);
 
-        if (s_fg.voltage_only || s_fg.state == FG_UNKNOWN) {
+        /* A count carried over from before boot has never been checked against this
+         * pack in this power-up (see fg_init), so the first rest replaces it rather
+         * than nudging it: blending a stale 0 % toward the truth at 25 % per rest
+         * period takes hours to undo. */
+        if (s_fg.voltage_only || s_fg.state == FG_UNKNOWN ||
+            s_fg.s_since_anchor == UINT32_MAX) {
             /* No count worth keeping: take the voltage estimate outright. */
             set_charge_from_soc(ocv_soc);
             s_fg.voltage_only = false;
@@ -522,6 +596,7 @@ void fg_get(fg_status_t *out)
         return;
     }
     out->state             = s_fg.state;
+    out->rest_current_ua   = rest_current_ua();
     out->soc_permille      = soc_from_charge();
     out->charge_uas        = s_fg.charge_uas;
     out->full_capacity_uah = s_fg.full_capacity_uah;
