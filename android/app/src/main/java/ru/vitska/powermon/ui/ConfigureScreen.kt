@@ -244,9 +244,10 @@ fun ConfigureScreen(vm: MonitorViewModel) {
 
             Text("KNOWN VALUES", style = MaterialTheme.typography.labelSmall)
             Text(
-                "Enter what your meter reads and the device solves the gain from it. " +
-                    "Current must exceed 10 mA and voltage 0.5 V, or there is no slope " +
-                    "to solve.",
+                "Enter what your meter reads. For current the board solves the shunt " +
+                    "resistance from it, so the shunt's value need not be known; for " +
+                    "voltage it solves the gain. Current must exceed 10 mA and voltage " +
+                    "0.5 V.",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(8.dp))
@@ -255,45 +256,32 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                 prefill = t.amps?.let { String.format("%.4f", it) },
                 signed = true,
             ) { v ->
-                val live = t.amps
+                // The command solves the shunt resistance from this reading (firmware
+                // `cal top i`): the resistance is whatever the measured current says.
+                val cmdFor = { value: Double -> "cal top i " + Micro.amps(value) }
                 val confirmIt = { value: Double ->
                     guarded(
                         Confirmation(
-                            "Set the current gain from " + value + " A?",
-                            "The meter and the device must be measuring the same current " +
-                                "in the same direction — a disagreement on sign is rejected " +
-                                "rather than absorbed. Averages 64 samples, about 17 s.",
-                            "cal top i " + Micro.amps(value),
+                            "Solve the shunt resistance from " + value + " A?",
+                            "The board reads the raw shunt voltage on both sensors, uses " +
+                                "the one that sees the current, and sets resistance, " +
+                                "direction and sensor so it reads " + value + " A. Nothing " +
+                                "set before matters. Keep the current steady; the more " +
+                                "current, the more exact. About 20 s.",
+                            cmdFor(value),
                         )
                     )
                 }
                 when {
-                    // The firmware's floor (CLI.md: "must both exceed 10000 uA").
-                    Math.abs(v) < 0.010 || (live != null && Math.abs(live) < 0.010) ->
+                    // Too little to solve from, whatever the shunt (firmware: 10 mA).
+                    Math.abs(v) < 0.010 ->
                         calProblem = CalProblem(
-                            "Not enough current to calibrate",
-                            "Both your meter reading and the board's own must exceed 10 mA" +
-                                (live?.let { " — the board measures " +
-                                    String.format("%.4f", it) + " A now" } ?: "") +
-                                ". At lower currents the offset dominates the ratio and the " +
-                                "solved gain would be meaningless. Apply a steady load, " +
-                                "ideally half to most of the working maximum, and try again.",
+                            "Not enough current",
+                            "The reference must be at least 10 mA — and the more current " +
+                                "flows, the more exactly the resistance can be solved. " +
+                                "Apply a steady load or charge current and try again.",
                             null,
                         )
-                    // The firmware's sign check, explained with the way through.
-                    live != null && (v < 0) != (live < 0) ->
-                        calProblem = CalProblem(
-                            "Sign disagrees with the board",
-                            "You entered " + v + " A; the board measures " +
-                                String.format("%.4f", live) + " A, the other direction. " +
-                                "It refuses a disagreement rather than absorbing it.\n\n" +
-                                "The gain depends only on the magnitude, so to calibrate " +
-                                "now use the meter's value with the board's sign. " +
-                                "Positive means charging on this board: if that is not what " +
-                                "the current is really doing, the direction is a wiring or " +
-                                "'sense sign' question to settle separately.",
-                            -v,
-                        ) { value -> confirmIt(value) }
                     else -> confirmIt(v)
                 }
             }
@@ -641,7 +629,7 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                     Button(onClick = {
                         calProblem = null
                         pb.onAlternative?.invoke(pb.alternative)
-                    }) { Text("Use " + pb.alternative + " A") }
+                    }) { Text(pb.action ?: ("Use " + pb.alternative + " A")) }
                 } else {
                     TextButton(onClick = { calProblem = null }) { Text("OK") }
                 }
@@ -679,6 +667,7 @@ private class CalProblem(
     val title: String,
     val body: String,
     val alternative: Double?,
+    val action: String? = null,
     val onAlternative: ((Double) -> Unit)? = null,
 )
 

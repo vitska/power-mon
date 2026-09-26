@@ -448,6 +448,8 @@ ina219_handle_t      sensors_current_dev(sensors_handle_t h)    { return h->cur_
 ina219_handle_t      sensors_voltage_dev(sensors_handle_t h)    { return h->volt_dev; }
 bool                 sensors_have_pos(sensors_handle_t h)       { return h->pos != NULL; }
 bool                 sensors_have_neg(sensors_handle_t h)       { return h->neg != NULL; }
+ina219_handle_t      sensors_pos_dev(sensors_handle_t h)        { return h->pos; }
+ina219_handle_t      sensors_neg_dev(sensors_handle_t h)        { return h->neg; }
 
 void sensors_report(sensors_handle_t h)
 {

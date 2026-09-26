@@ -571,6 +571,20 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
     fun launchCommandWith(cmd: String, then: (Response?) -> Unit) =
         viewModelScope.launch { then(run(cmd)) }
 
+    /** Runs commands in order, stopping at the first that fails or goes unanswered;
+     *  hands back that one, or the last. */
+    fun launchSequence(cmds: List<String>, then: (Response?, String) -> Unit) =
+        viewModelScope.launch {
+            var r: Response? = null
+            var cmd = ""
+            for (c in cmds) {
+                cmd = c
+                r = run(c)
+                if (r == null || !r.ok) break
+            }
+            then(r, cmd)
+        }
+
     private fun appendConsole(line: String) {
         // Bounded: a 10 Hz stream would otherwise turn the transcript into a leak.
         _console.value = (_console.value + line).takeLast(400)

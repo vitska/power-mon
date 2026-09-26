@@ -54,7 +54,10 @@ static const char *TAG = "ina219";
  * this design targets, so the limit costs nothing and removes the failure mode
  * rather than documenting it.
  */
-#define R_SHUNT_MIN_UOHM 1000
+/* 150 uOhm: external shunts go well below 1 mOhm (75 mV / 300 A is 250 uOhm), and the
+ * floor is set by the reading itself -- int32 microamps hold +/-2147 A, which is the
+ * full +/-320 mV range at 150 uOhm. */
+#define R_SHUNT_MIN_UOHM 150
 
 /* Bus LSB is 4 mV. */
 #define BUS_LSB_UV 4000

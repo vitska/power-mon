@@ -156,6 +156,11 @@ ina219_handle_t sensors_current_dev(sensors_handle_t h);
 ina219_handle_t sensors_voltage_dev(sensors_handle_t h);
 
 bool sensors_have_pos(sensors_handle_t h);
+
+/** The device at each pole, whatever its role; NULL if absent. For diagnostics that
+ *  need each sensor's own reading, like the console's `raw`. */
+ina219_handle_t sensors_pos_dev(sensors_handle_t h);
+ina219_handle_t sensors_neg_dev(sensors_handle_t h);
 bool sensors_have_neg(sensors_handle_t h);
 
 /** Harness resistance between the VBUS reference and the battery terminals. */

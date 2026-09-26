@@ -519,9 +519,10 @@ static const action_def_t ACTIONS[] = {
                     "256 samples, about 70 seconds.",
                     NULL, 142000},
     [ACT_TOP_I]  = {"MEASURED CURRENT", "type what your meter reads",
-                    "Set current gain from %s A?",
-                    "The meter and the board must measure the same current in the "
-                    "same direction; a sign disagreement is refused. At least 10 mA. "
+                    "Solve shunt from %s A?",
+                    "The board works out the shunt resistance that makes it read this "
+                    "current -- the shunt's value need not be known. Same direction as "
+                    "the board measures; at least 10 mA, and the more the better. "
                     "Averages 64 samples, about 17 seconds.",
                     "A", 37000},
     [ACT_TOP_V]  = {"MEASURED VOLTAGE", "at rest, from your meter",

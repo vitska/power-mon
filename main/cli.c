@@ -872,9 +872,10 @@ static int cmd_shunt(int argc, char **argv)
 
     if (argc >= 2) {
         const long v = strtol(argv[1], NULL, 10);
-        if (v < 1000 || v > 1000000) {
-            printf("shunt must be 1000..1000000 micro-ohms (below 1 mOhm the\n"
-                   "full-scale current no longer fits the int32 reading)\n");
+        if (v < 150 || v > 1000000) {
+            printf("shunt must be 150..1000000 micro-ohms (below 150 uOhm the\n"
+                   "full-scale current no longer fits the int32 reading). If the\n"
+                   "value is unknown, 'cal shunt <uA>' solves it from a known current.\n");
             return 1;
         }
         ESP_ERROR_CHECK(ina219_set_shunt_uohm(dev, (uint32_t)v));
@@ -1931,6 +1932,84 @@ static int cmd_soc(int argc, char **argv)
     return 0;
 }
 
+/* --- raw per-sensor readings --------------------------------------------------- */
+
+/*
+ * Each INA219 read directly, whatever role it has been given -- the view that answers
+ * "is the current actually going through the shunt this board measures?" without a
+ * meter. Machine-readable, like `config`, for the phone app's Sensors screen.
+ *
+ * Also a wiring check that needs no load: each chip's own bus voltage says which pole
+ * it sits on. The positive-pole sensor sees the pack voltage; the negative-pole one
+ * sits at ground and reads close to zero. The firmware assumes 0x40 is positive and
+ * 0x41 negative, and `poles=` says whether the hardware agrees.
+ */
+#define RAW_SIDE_POS_UV 1000000 /* above 1 V: at the pack's positive side */
+#define RAW_SIDE_GND_UV 300000  /* below 0.3 V: at ground */
+
+static const char *raw_side(uint32_t bus_uv)
+{
+    return bus_uv > RAW_SIDE_POS_UV ? "positive" : bus_uv < RAW_SIDE_GND_UV ? "ground" : "unclear";
+}
+
+static bool raw_one(const char *key, ina219_handle_t d, uint32_t *bus_uv)
+{
+    if (!d) {
+        printf("%s.present=0\n", key);
+        return false;
+    }
+    ina219_sample_t smp;
+    const esp_err_t err = ina219_read_blocking(d, &smp);
+    printf("%s.present=1\n", key);
+    const bool cur  = d == sensors_current_dev(s_ctx->sensors);
+    const bool volt = d == sensors_voltage_dev(s_ctx->sensors);
+    printf("%s.role=%s\n", key, cur && volt ? "current+voltage" : cur ? "current"
+                                 : volt ? "voltage" : "idle");
+    if (err != ESP_OK) {
+        printf("%s.error=%s\n", key, esp_err_to_name(err));
+        return false;
+    }
+    printf("%s.bus_uv=%lu\n", key, (unsigned long)smp.v_uv);
+    printf("%s.side=%s\n", key, raw_side(smp.v_uv));
+    printf("%s.shunt_uv=%ld\n", key, (long)smp.v_shunt_uv);
+    /* Through this chip's own conversion: its shunt value, trims and sign. For the
+     * idle chip that is nominal scaling -- the point is whether it sees current. */
+    printf("%s.current_ua=%ld\n", key, (long)smp.i_ua);
+    printf("%s.pga=%d\n", key, 1 << (int)smp.pga);
+    printf("%s.range_uv=%ld\n", key, (long)ina219_pga_fullscale_uv(smp.pga));
+    printf("%s.sat=%d\n", key, smp.saturated ? 1 : 0);
+    *bus_uv = smp.v_uv;
+    return true;
+}
+
+static int cmd_raw(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    if (no_sensors()) {
+        return 1;
+    }
+    if (!sensor_lock_take(s_ctx, 2000)) {
+        printf("sensor busy -- try again\n");
+        return 1;
+    }
+    uint32_t  pos_bus = 0, neg_bus = 0;
+    const bool pos_ok = raw_one("pos", sensors_pos_dev(s_ctx->sensors), &pos_bus);
+    const bool neg_ok = raw_one("neg", sensors_neg_dev(s_ctx->sensors), &neg_bus);
+    sensor_lock_give(s_ctx);
+
+    printf("shunt.loc=%s\n", sensors_mode_str(sensors_get_mode(s_ctx->sensors)));
+    printf("shunt.uohm=%lu\n", (unsigned long)(sensors_current_dev(s_ctx->sensors)
+        ? ina219_get_shunt_uohm(sensors_current_dev(s_ctx->sensors)) : 0));
+    if (pos_ok && neg_ok) {
+        const bool pos_pos = pos_bus > RAW_SIDE_POS_UV, neg_gnd = neg_bus < RAW_SIDE_GND_UV;
+        const bool pos_gnd = pos_bus < RAW_SIDE_GND_UV, neg_pos = neg_bus > RAW_SIDE_POS_UV;
+        printf("poles=%s\n", pos_pos && neg_gnd ? "ok" : pos_gnd && neg_pos ? "swapped" : "unclear");
+    } else {
+        printf("poles=single\n");
+    }
+    return 0;
+}
+
 /* --- SoC history ---------------------------------------------------------------- */
 
 /*
@@ -2119,6 +2198,163 @@ static void cal_status(ina219_handle_t cd, ina219_handle_t vd)
            (unsigned long)vgain, vgain != 1000000 ? "set" : "not set");
 }
 
+/*
+ * `cal top i <uA> [n]` (alias `cal shunt`): everything about the current channel from
+ * one known current. Nothing that was configured before is trusted -- not the shunt
+ * resistance, not which pole's sensor carries the current, not the sign -- because a
+ * known current and the raw shunt voltages are enough to determine all three:
+ *
+ *   1. Average the raw shunt voltage on BOTH INA219s. That is what each chip actually
+ *      sees across its inputs, before any setting is applied (10 uV per count).
+ *   2. The chip that sees the current is the one with the larger voltage: make it the
+ *      current sensor, on whichever pole it is.
+ *   3. Resistance = that voltage / the known current.
+ *   4. Direction: the reference's sign is the truth (positive = charging); the board's
+ *      sign is set so its reading agrees.
+ *
+ * Gain goes back to 1.0. A zero point taken earlier on the same chip stays valid: its
+ * offset is kept as a voltage and rescaled to the new resistance.
+ */
+#define CAL_SHUNT_MIN_UV 30 /* averaged; three counts -- below that, no current is seen */
+
+static int cal_shunt(int argc, char **argv)
+{
+    if (argc < 3) {
+        printf("usage: cal top i <uA> [samples]\n");
+        printf("Let a steady, known current flow and give the meter's reading.\n");
+        printf("Positive is charging. The more current, the more exact.\n");
+        return 1;
+    }
+    if (no_sensors()) {
+        return 1;
+    }
+    char      *end = NULL;
+    const long ref = strtol(argv[2], &end, 10);
+    if (!end || *end != '\0') {
+        printf("the current is micro-amps, a whole number: 5800000 for 5.8 A\n");
+        return 1;
+    }
+    uint32_t n = 64;
+    if (argc >= 4 && argv[3]) {
+        const long ns = strtol(argv[3], NULL, 10);
+        if (ns < 8 || ns > 1024) {
+            printf("sample count must be 8..1024\n");
+            return 1;
+        }
+        n = (uint32_t)ns;
+    }
+    const int64_t aref = ref < 0 ? -(int64_t)ref : ref;
+    if (aref < 10000) {
+        printf("the known current must be at least 10000 uA (10 mA)\n");
+        return 1;
+    }
+
+    ina219_handle_t pos = sensors_pos_dev(s_ctx->sensors);
+    ina219_handle_t neg = sensors_neg_dev(s_ctx->sensors);
+
+    const bool was_streaming = config()->stream_enabled;
+    config()->stream_enabled    = false;
+    if (!sensor_lock_take(s_ctx, 2000)) {
+        config()->stream_enabled = was_streaming;
+        printf("sensor busy -- try again\n");
+        return 1;
+    }
+    printf("KNOWN CURRENT %ld uA. Reading both sensors, %lu samples", ref, (unsigned long)n);
+    int64_t  sum_p = 0, sum_n = 0;
+    uint32_t got_p = 0, got_n = 0;
+    bool     sat_p = false, sat_n = false;
+    for (uint32_t i = 0; i < n; i++) {
+        ina219_sample_t smp;
+        if (pos && ina219_read_blocking(pos, &smp) == ESP_OK) {
+            sum_p += smp.v_shunt_uv;
+            got_p++;
+            sat_p |= smp.saturated;
+        }
+        if (neg && ina219_read_blocking(neg, &smp) == ESP_OK) {
+            sum_n += smp.v_shunt_uv;
+            got_n++;
+            sat_n |= smp.saturated;
+        }
+        if ((i & 7) == 7) {
+            printf(".");
+        }
+    }
+    sensor_lock_give(s_ctx);
+    config()->stream_enabled = was_streaming;
+    printf("\n");
+
+    const int64_t v_p = got_p ? sum_p / got_p : 0;
+    const int64_t v_n = got_n ? sum_n / got_n : 0;
+    const int64_t a_p = v_p < 0 ? -v_p : v_p, a_n = v_n < 0 ? -v_n : v_n;
+    printf("  positive-pole sensor: %ld uV%s\n", (long)v_p, got_p ? (sat_p ? " SATURATED" : "") : " (absent)");
+    printf("  negative-pole sensor: %ld uV%s\n", (long)v_n, got_n ? (sat_n ? " SATURATED" : "") : " (absent)");
+
+    /* The sensor that sees the current. */
+    const bool use_neg = got_n && (!got_p || a_n >= a_p);
+    ina219_handle_t cd  = use_neg ? neg : pos;
+    const int64_t   v   = use_neg ? v_n : v_p;
+    const int64_t   av  = use_neg ? a_n : a_p;
+    if (!cd || av < CAL_SHUNT_MIN_UV) {
+        printf("neither sensor sees a voltage for this current (%ld uV at most; at\n",
+               (long)(a_p > a_n ? a_p : a_n));
+        printf("least %d uV is needed). The current is not flowing through a shunt\n",
+               CAL_SHUNT_MIN_UV);
+        printf("either INA219 is wired across -- nothing to calibrate from.\n");
+        return 1;
+    }
+    if (use_neg ? sat_n : sat_p) {
+        printf("that sensor is at its range limit: the shunt voltage exceeds what the\n");
+        printf("INA219 can measure (320 mV, about 100 mV on the negative side).\n");
+        return 1;
+    }
+
+    /* A zero point on this same chip: keep it as a voltage (offset * R, before the
+     * sign), take it out of the reading, carry it to the new resistance. */
+    const bool    same_dev = cd == sensors_current_dev(s_ctx->sensors);
+    const int64_t r_old    = ina219_get_shunt_uohm(cd);
+    const int64_t v_off    = same_dev ? ((int64_t)ina219_get_offset_ua(cd) * r_old) / 1000000 : 0;
+    const int64_t vc       = v - v_off;
+    const int64_t avc      = vc < 0 ? -vc : vc;
+    if (avc < CAL_SHUNT_MIN_UV) {
+        printf("after the zero offset only %ld uV is left -- too little to solve from\n",
+               (long)vc);
+        return 1;
+    }
+
+    /* R in uOhm = V[uV] / I[uA] * 1e6. */
+    const int64_t r_new = (avc * 1000000LL) / aref;
+    if (r_new < 150 || r_new > 1000000) {
+        printf("that works out to %ld uOhm, outside the 150..1000000 uOhm this board can\n",
+               (long)r_new);
+        printf("use. Check the known current and the units (micro-amps).\n");
+        return 1;
+    }
+
+    /* Mode first: it decides which device the rest applies to. */
+    const sensors_mode_t want_mode = use_neg ? SENSORS_MODE_N : SENSORS_MODE_P;
+    if (sensors_get_mode(s_ctx->sensors) != want_mode && got_p && got_n) {
+        sensors_set_mode(s_ctx->sensors, want_mode);
+        printf("  current is on the %s-pole sensor: install mode set to %s\n",
+               use_neg ? "negative" : "positive", sensors_mode_str(want_mode));
+    }
+    /* Raw voltage and reference must agree in sign after the board's own inversion. */
+    const bool invert = (vc < 0) != (ref < 0);
+    ina219_set_invert_sign(cd, invert);
+    ina219_set_shunt_uohm(cd, (uint32_t)r_new);
+    ina219_set_offset_ua(cd, same_dev && r_new ? (int32_t)((v_off * 1000000) / r_new) : 0);
+    ina219_set_gain_ppm(cd, 1000000);
+    stats_reset(history_window());
+
+    char b1[24], b2[24];
+    const int64_t fs_ua = ((int64_t)ina219_pga_fullscale_uv(ina219_get_pga_max(cd)) * 1000000LL) / r_new;
+    printf("shunt %ld uOhm (%s mOhm), sign %s, gain 1.000000 -> reads %s A\n",
+           (long)r_new, fixed_fmt(b1, sizeof(b1), r_new, 1000, 3),
+           invert ? "inverted" : "normal", FMT_A(b2, ref));
+    printf("full scale about +/-%s A\n", FMT_A(b1, fs_ua));
+    cal_autosave();
+    return 0;
+}
+
 static int cmd_cal(int argc, char **argv)
 {
     if (no_sensors()) {
@@ -2293,6 +2529,9 @@ static int cmd_cal(int argc, char **argv)
 
     const bool is_zero = (strcmp(argv[1], "zero") == 0);
     const bool is_top  = (strcmp(argv[1], "top") == 0);
+    if (strcmp(argv[1], "shunt") == 0) {
+        return cal_shunt(argc, argv);
+    }
     if ((!is_zero && !is_top) || argc < 3) {
         printf("usage: cal <zero|top> <i|v> [value] [samples]\n");
         return 1;
@@ -2390,6 +2629,18 @@ static int cmd_cal(int argc, char **argv)
     }
 
     /* --- cal top -------------------------------------------------------------- */
+
+    /* The current channel's known-value point always solves the shunt resistance from
+     * the measured current (cal_shunt), whatever resistance is configured: the shunt's
+     * real value is what the meter reading determines, and a +/-10 % gain trim around
+     * a guessed resistance refused exactly the case it is needed for -- a shunt of
+     * unknown value. `cal top i <uA> [n]` is `cal shunt <uA> [n]`. */
+    if (chan_i) {
+        char *sargv[4] = {argv[0], (char *)"shunt", argc >= 4 ? argv[3] : NULL,
+                          argc >= 5 ? argv[4] : NULL};
+        return cal_shunt(argc - 1, sargv);
+    }
+
     if (argc < 4) {
         printf("usage: cal top %s <%s> [samples]\n", argv[2], chan_i ? "uA" : "uV");
         printf("Apply a steady, known %s and read it on your meter first.\n",
@@ -3182,6 +3433,7 @@ void cli_start(app_ctx_t *ctx)
 
     register_cmd("ver",     "Protocol and firmware version, for clients",   NULL,             cmd_ver);
     register_cmd("read",    "Take and print one sample",                    NULL,             cmd_read);
+    register_cmd("raw",     "Each INA219 read directly, and which pole each is on", NULL,   cmd_raw);
     register_cmd("env",     "Temperature, pressure and humidity",           NULL,             cmd_env);
     register_cmd("sensors", "Show or set the dual-sensor install mode",     "[mode <p|n|single|auto>]", cmd_sensors);
     register_cmd("detect",  "Work out which pole carries the shunt (needs a load)", "[samples]", cmd_detect);
@@ -3191,7 +3443,7 @@ void cli_start(app_ctx_t *ctx)
     register_cmd("zero",    "Zero-current calibration (load disconnected!)", "[samples]",     cmd_zero);
     register_cmd("shunt",   "Shunt resistance, or its location in the pack", "[uohm | loc <p|n|single|auto>]", cmd_shunt);
     register_cmd("curve",   "Current/voltage conversion curve and calibration", "[i|v <offset|gain|ref|divider> <v>]", cmd_curve);
-    register_cmd("cal",     "Guided two-point calibration, saved to flash",  "<zero|top> <i|v> [value] [n] | save | forget | reset", cmd_cal);
+    register_cmd("cal",     "Guided two-point calibration, saved to flash",  "<zero|top> <i|v> [value] [n] | shunt <uA> [n] | save | forget | reset", cmd_cal);
     register_cmd("gain",    "Show or set the gain trim in ppm",             "[ppm]",          cmd_gain);
     register_cmd("offset",  "Show or set the current offset in uA",         "[uA]",           cmd_offset);
     register_cmd("pga",     "Show or set the PGA range",                    "<auto|1|2|4|8>", cmd_pga);
