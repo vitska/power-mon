@@ -90,17 +90,34 @@ function Get-CandidatePorts {
             [pscustomobject]@{
                 Port = [regex]::Match($_.Name, '\(COM(\d+)\)').Groups[0].Value.Trim('(', ')')
                 Name = $_.Name
+                # Only a USB port can be the board: the C6's native port, or a USB-UART
+                # adapter (FTDIBUS\ under FTDI's own driver). Bluetooth SPP links
+                # (BTHENUM\) and Intel AMT serial-over-LAN (PCI\) are COM ports too,
+                # and opening a Bluetooth one stalls on a semaphore timeout that reads
+                # like a busy port.
+                Usb  = [bool]($_.PNPDeviceID -match '^(USB|FTDIBUS)\\')
+                Espressif = [bool]($_.PNPDeviceID -match 'VID_303A')
             }
         }
 }
 
 if (-not $Port) {
-    $cands = @(Get-CandidatePorts)
+    $all   = @(Get-CandidatePorts)
+    $cands = @($all | Where-Object Usb)
     if ($cands.Count -eq 0) {
-        throw "No serial ports found. Is the XIAO plugged in? Its native USB-C port enumerates as a USB Serial device."
+        Write-Host ""
+        Write-Host "No USB serial port found. Is the XIAO plugged in? Its native USB-C port" -ForegroundColor Red
+        Write-Host "enumerates as a USB Serial device a second or two after connecting." -ForegroundColor Red
+        if ($all.Count -gt 0) {
+            Write-Host ""
+            Write-Host "Ignored, as they cannot be the board (Bluetooth, serial-over-LAN):" -ForegroundColor DarkGray
+            $all | ForEach-Object { Write-Host "  $($_.Port)  $($_.Name)" -ForegroundColor DarkGray }
+            Write-Host "Pass -Port COMn to use one anyway." -ForegroundColor DarkGray
+        }
+        exit 1
     }
-    # Prefer something that looks like the C6's built-in USB-Serial-JTAG bridge.
-    $pick = $cands | Where-Object { $_.Name -match 'JTAG|Espressif|USB Serial Device' } | Select-Object -First 1
+    # Prefer the C6's built-in USB-Serial-JTAG bridge: Espressif's VID, or its name.
+    $pick = $cands | Where-Object { $_.Espressif -or $_.Name -match 'JTAG|Espressif' } | Select-Object -First 1
     if (-not $pick) { $pick = $cands[0] }
     $Port = $pick.Port
     Write-Host "==> auto-detected $Port  ($($pick.Name))" -ForegroundColor Yellow

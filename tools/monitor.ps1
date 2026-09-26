@@ -32,9 +32,12 @@ $proj = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $elf  = Join-Path $proj 'build\bat-monitor.elf'
 
 if (-not $Port) {
+    # USB ports only, Espressif's VID first: Bluetooth SPP links (BTHENUM\) and Intel
+    # AMT serial-over-LAN (PCI\) are COM ports too, and cannot be the board.
     $cand = Get-CimInstance -ClassName Win32_PnPEntity -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match '\(COM\d+\)' } | Select-Object -First 1
-    if (-not $cand) { throw "No serial port found; pass -Port COMn." }
+            Where-Object { $_.Name -match '\(COM\d+\)' -and $_.PNPDeviceID -match '^(USB|FTDIBUS)\\' } |
+            Sort-Object { $_.PNPDeviceID -notmatch 'VID_303A' } | Select-Object -First 1
+    if (-not $cand) { throw "No USB serial port found. Is the XIAO plugged in? Or pass -Port COMn." }
     $Port = [regex]::Match($cand.Name, 'COM\d+').Value
     Write-Host "==> auto-detected $Port  ($($cand.Name))" -ForegroundColor Yellow
 }
