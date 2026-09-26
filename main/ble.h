@@ -48,6 +48,14 @@ extern "C" {
 typedef void (*ble_line_cb_t)(const char *line, uint16_t conn, void *user);
 
 /**
+ * Called with each write to the firmware-update characteristic, on the NimBLE host
+ * task -- so it must not block. Returns 0 to accept, or an ATT error code to refuse;
+ * the code reaches the client as the write's status. Application codes 0x80-0x9F are
+ * free for the callback's own meanings.
+ */
+typedef int (*ble_ota_cb_t)(const uint8_t *data, size_t len, uint16_t conn, void *user);
+
+/**
  * Link security (DESIGN.md §8.5).
  *
  * OPEN is what a bench needs and what the Xiaoxiang app requires — it cannot pair.
@@ -72,6 +80,7 @@ typedef struct {
                                     bench are distinguishable (§7.7 uses the same
                                     suffix in its advertisement) */
     ble_line_cb_t on_line;
+    ble_ota_cb_t on_ota;         /**< optional; without it the characteristic refuses */
     ble_passkey_cb_t on_passkey; /**< optional; console log is used regardless */
     void       *user;
 } ble_config_t;

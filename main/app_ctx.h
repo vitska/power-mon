@@ -16,6 +16,7 @@
 #include <stdint.h>
 
 #include "driver/i2c_master.h"
+#include "esp_app_desc.h"
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -77,7 +78,14 @@ typedef struct app_ctx_s {
  * 2: the CSV stream gained temp_c, humid_pct and press_hpa columns.
  */
 #define BATMON_CLI_PROTOCOL 3
-#define BATMON_FW_VERSION   "0.5.0-m2"
+/*
+ * The firmware version has exactly one source: version.txt at the project root. ESP-IDF
+ * reads it into the app descriptor, which is embedded in the image at a fixed offset --
+ * so `ver`, `ota status`, and anything inspecting a .bin before flashing it (the phone
+ * app does) all see the same string, and none can drift from the others. MAJOR.MINOR.PATCH;
+ * see README.md "Versioning".
+ */
+#define BATMON_FW_VERSION   (esp_app_get_description()->version)
 #define BATMON_EOT          '\x04'
 
 app_ctx_t *app_ctx(void);

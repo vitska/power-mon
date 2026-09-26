@@ -64,6 +64,10 @@ static const char *TAG = "ble_ser";
 #define NUS_SVC_UUID NUS_UUID_BASE(0x01, 0x00)
 #define NUS_RX_UUID  NUS_UUID_BASE(0x02, 0x00) /* central -> device, write */
 #define NUS_TX_UUID  NUS_UUID_BASE(0x03, 0x00) /* device -> central, notify */
+/* Not part of Nordic's NUS: firmware-update data (CLI.md §6, "Firmware update"). Same
+ * base UUID, next number, inside the same service so a client discovers it in the same
+ * pass; generic NUS terminals ignore a characteristic they do not know. */
+#define NUS_OTA_UUID NUS_UUID_BASE(0x04, 0x00) /* central -> device, write with response */
 
 typedef struct {
     uint16_t handle;
@@ -80,6 +84,7 @@ typedef struct {
 static struct {
     char                 name[BLE_NAME_MAX + 1];
     ble_line_cb_t on_line;
+    ble_ota_cb_t         on_ota;
     void                *user;
 
     conn_slot_t     conns[BLE_MAX_CONNS];
@@ -157,6 +162,18 @@ static int sub_count(void)
 
 /* --- GATT ---------------------------------------------------------------------- */
 
+/* True when this link meets the current security mode. In bonded mode that is an
+ * encrypted AND authenticated link; in open mode, anything. */
+static bool link_secure_enough(uint16_t conn_handle)
+{
+    if (s_ble.mode != BLE_SEC_BONDED) {
+        return true;
+    }
+    struct ble_gap_conn_desc desc;
+    return ble_gap_conn_find(conn_handle, &desc) == 0 && desc.sec_state.encrypted &&
+           desc.sec_state.authenticated;
+}
+
 static int gatt_rx_write(uint16_t conn_handle, uint16_t attr_handle,
                          struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
@@ -175,13 +192,9 @@ static int gatt_rx_write(uint16_t conn_handle, uint16_t attr_handle,
      * and this characteristic can run `cal` -- commands that silently corrupt a year of
      * accumulated charge. Encryption alone is not the bar.
      */
-    if (s_ble.mode == BLE_SEC_BONDED) {
-        struct ble_gap_conn_desc desc;
-        if (ble_gap_conn_find(conn_handle, &desc) != 0 || !desc.sec_state.encrypted ||
-            !desc.sec_state.authenticated) {
-            s_ble.stats.rejected++;
-            return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
-        }
+    if (!link_secure_enough(conn_handle)) {
+        s_ble.stats.rejected++;
+        return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
     }
 
     conn_slot_t *slot = slot_by_handle(conn_handle);
@@ -266,6 +279,44 @@ static int gatt_tx_access(uint16_t conn_handle, uint16_t attr_handle,
     return BLE_ATT_ERR_READ_NOT_PERMITTED;
 }
 
+/*
+ * Firmware-update data. Held to exactly the same bar as RX, because it is the more
+ * dangerous of the two: RX can miscalibrate the gauge, this can replace the firmware.
+ *
+ * Write WITH response only. Each acknowledgement is the flow control -- the next chunk
+ * is not sent until this one is in flash -- and a refusal comes back as the write's
+ * status instead of vanishing the way a failed write-without-response does.
+ */
+static int gatt_ota_write(uint16_t conn_handle, uint16_t attr_handle,
+                          struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    (void)attr_handle; (void)arg;
+
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    if (!link_secure_enough(conn_handle)) {
+        s_ble.stats.rejected++;
+        return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
+    }
+    if (!s_ble.on_ota) {
+        return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
+    }
+
+    /* One ATT write is at most MTU - 3 = 509 bytes. Static: only the host task runs
+     * this, and half a kilobyte is a lot of its 4 KB stack. */
+    static uint8_t buf[512];
+    const uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+    if (len > sizeof(buf)) {
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+    if (ble_hs_mbuf_to_flat(ctxt->om, buf, len, NULL) != 0) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    s_ble.stats.rx_bytes += len;
+    return s_ble.on_ota(buf, len, conn_handle, s_ble.user);
+}
+
 static const struct ble_gatt_chr_def nus_chrs[] = {
     {
         .uuid      = NUS_RX_UUID,
@@ -277,6 +328,11 @@ static const struct ble_gatt_chr_def nus_chrs[] = {
         .access_cb  = gatt_tx_access,
         .val_handle = &s_ble.tx_val_handle,
         .flags      = BLE_GATT_CHR_F_NOTIFY,
+    },
+    {
+        .uuid      = NUS_OTA_UUID,
+        .access_cb = gatt_ota_write,
+        .flags     = BLE_GATT_CHR_F_WRITE,
     },
     {0},
 };
@@ -808,6 +864,7 @@ esp_err_t ble_start(const ble_config_t *cfg)
     }
 
     s_ble.on_line    = cfg->on_line;
+    s_ble.on_ota     = cfg->on_ota;
     s_ble.on_passkey = cfg->on_passkey;
     s_ble.user       = cfg->user;
     for (int i = 0; i < BLE_MAX_CONNS; i++) {

@@ -1,8 +1,11 @@
-# DESIGN.md §6.2 — NVS enlarged to 64 KB for the fuel-gauge state blobs.
-# Not yet used at M1, but fixed now so the layout never has to change under live data.
+# DESIGN.md §6.2 — two OTA slots for BLE firmware updates, on the XIAO's 4 MB flash.
+# nvs, otadata, phy_init and storage keep their offsets from the single-slot layout, so
+# calibration, gauge state and bonds survive the switch. ota_0 sits exactly where
+# factory was; ota_1 goes after storage, which cannot move without losing its contents.
 # Name,     Type, SubType, Offset,   Size
 nvs,        data, nvs,     0x9000,   0x10000
 otadata,    data, ota,     0x19000,  0x2000
 phy_init,   data, phy,     0x1b000,  0x1000
-factory,    app,  factory, 0x20000,  0x1C0000
+ota_0,      app,  ota_0,   0x20000,  0x1C0000
 storage,    data, nvs,     0x1E0000, 0x10000
+ota_1,      app,  ota_1,   0x1F0000, 0x1C0000

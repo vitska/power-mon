@@ -34,6 +34,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "esp_ota_ops.h"
 #include "esp_timer.h"
 #include "fixed_fmt.h"
 #include "freertos/FreeRTOS.h"
@@ -42,6 +43,7 @@
 #include "history_values.h"
 #include "ina219.h"
 #include "lcd.h"
+#include "ota.h"
 #include "linenoise/linenoise.h"
 #include "sdkconfig.h"
 #include "sensors.h"
@@ -353,6 +355,30 @@ static void on_line(const char *line, uint16_t conn, void *user)
 }
 
 /*
+ * Firmware-update data from the OTA characteristic, on the host task. The refusal codes
+ * are the protocol a client sees as the write's status (CLI.md §6, "Firmware update"),
+ * so each ota_write() outcome gets its own.
+ */
+#define OTA_ATT_NO_SESSION 0x80 /* no `ota begin`, or the session was abandoned */
+#define OTA_ATT_BAD_OFFSET 0x81 /* offset is not the byte count received so far */
+#define OTA_ATT_TOO_LONG   0x82 /* runs past the size `ota begin` announced */
+#define OTA_ATT_BUSY       0x83 /* erasing or finishing; retry shortly */
+#define OTA_ATT_FLASH      0x84 /* flash refused it, or it does not start like an image */
+
+static int on_ota(const uint8_t *data, size_t len, uint16_t conn, void *user)
+{
+    (void)conn; (void)user;
+    switch (ota_write(data, len)) {
+    case ESP_OK:                return 0;
+    case ESP_ERR_INVALID_STATE: return OTA_ATT_NO_SESSION;
+    case ESP_ERR_INVALID_ARG:   return OTA_ATT_BAD_OFFSET;
+    case ESP_ERR_INVALID_SIZE:  return OTA_ATT_TOO_LONG;
+    case ESP_ERR_TIMEOUT:       return OTA_ATT_BUSY;
+    default:                    return OTA_ATT_FLASH;
+    }
+}
+
+/*
  * Show the pairing passkey wherever it can be seen. The OLED is the primary place --
  * that is what makes DISPLAY_ONLY pairing honest -- but a board with no panel fitted
  * is a normal configuration here, and ble.c already logs the passkey at WARN so
@@ -374,6 +400,7 @@ esp_err_t cli_ble_start(void)
         .append_mac = true,
 #endif
         .on_line    = on_line,
+        .on_ota     = on_ota,
         .on_passkey = on_passkey,
         .user       = NULL,
     };
@@ -1524,6 +1551,11 @@ static int cmd_ver(int argc, char **argv)
 
     printf("protocol %d\n", BATMON_CLI_PROTOCOL);
     printf("firmware %s\n", BATMON_FW_VERSION);
+    /* The version names a release; the build names the exact binary. Two local builds
+     * of one version differ here, which is what tells them apart on the bench. */
+    char build[17];
+    esp_app_get_elf_sha256(build, sizeof(build));
+    printf("build %s\n", build);
     printf("idf %s\n", esp_get_idf_version());
     printf("chip esp32c6 rev%d cores%d\n", chip.revision, chip.cores);
     printf("mac %02X:%02X:%02X:%02X:%02X:%02X\n", mac[0], mac[1], mac[2], mac[3],
@@ -2705,6 +2737,148 @@ static int cmd_config(int argc, char **argv)
     return 0;
 }
 
+/* --- firmware update ----------------------------------------------------------- */
+
+static int hexval(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static bool parse_sha256(const char *hex, uint8_t out[32])
+{
+    if (strlen(hex) != 64) {
+        return false;
+    }
+    for (int i = 0; i < 32; i++) {
+        const int hi = hexval(hex[2 * i]), lo = hexval(hex[2 * i + 1]);
+        if (hi < 0 || lo < 0) {
+            return false;
+        }
+        out[i] = (uint8_t)(hi << 4 | lo);
+    }
+    return true;
+}
+
+/* key=value, like `config`: this is what the phone app reads to decide what to offer. */
+static void ota_print_status(void)
+{
+    ota_status_t st;
+    ota_get_status(&st);
+    printf("running=%s\n", st.running);
+    printf("version=%s\n", st.version);
+    printf("build=%s\n", st.build);
+    printf("state=%s\n", st.pending ? "probation" : "valid");
+    if (st.pending && st.probation_left_s >= 0) {
+        printf("probation_s=%d\n", st.probation_left_s);
+    }
+    printf("rollback=%d\n", st.can_rollback ? 1 : 0);
+    printf("boot=%s\n", st.boot);
+    printf("spare=%s\n", st.spare);
+    printf("spare.version=%s\n", st.spare_version[0] ? st.spare_version : "none");
+    printf("session=%s\n", st.phase == OTA_RECEIVING ? "receiving" : "idle");
+    if (st.phase == OTA_RECEIVING) {
+        printf("session.received=%lu\n", (unsigned long)st.received);
+        printf("session.size=%lu\n", (unsigned long)st.size);
+    }
+}
+
+static int cmd_ota(int argc, char **argv)
+{
+    if (argc < 2 || strcmp(argv[1], "status") == 0) {
+        ota_print_status();
+        return 0;
+    }
+
+    if (strcmp(argv[1], "begin") == 0) {
+        uint8_t sha[32];
+        char   *end  = NULL;
+        const unsigned long size = argc >= 4 ? strtoul(argv[2], &end, 10) : 0;
+        if (argc < 4 || !end || *end != '\0' || size == 0 || !parse_sha256(argv[3], sha)) {
+            printf("usage: ota begin <bytes> <sha256 as 64 hex digits>\n");
+            return 1;
+        }
+        const esp_err_t err = ota_begin((uint32_t)size, sha);
+        switch (err) {
+        case ESP_OK: {
+            ota_status_t st;
+            ota_get_status(&st);
+            printf("%s erased; send %lu bytes to the OTA characteristic\n", st.spare, size);
+            return 0;
+        }
+        case ESP_ERR_OTA_ROLLBACK_INVALID_STATE:
+            printf("the running image is on probation -- 'ota confirm' or 'ota rollback'\n"
+                   "first; overwriting the only known-good image is what probation prevents\n");
+            break;
+        case ESP_ERR_NOT_FOUND:
+            printf("no spare app slot -- this board still has the single-slot partition\n"
+                   "table. Flash once over USB (tools/flash.ps1) to get BLE updates.\n");
+            break;
+        case ESP_ERR_INVALID_SIZE:
+            printf("%lu bytes does not fit the spare slot\n", size);
+            break;
+        default:
+            printf("cannot start: %s\n", esp_err_to_name(err));
+            break;
+        }
+        return 1;
+    }
+
+    if (strcmp(argv[1], "end") == 0) {
+        char why[96];
+        if (ota_finish(why, sizeof(why)) != ESP_OK) {
+            printf("%s\n", why);
+            return 1;
+        }
+        printf("firmware %s written; 'reboot' to start it\n", why);
+        return 0;
+    }
+
+    if (strcmp(argv[1], "abort") == 0) {
+        ota_abort();
+        printf("abandoned; the running image is untouched\n");
+        return 0;
+    }
+
+    if (strcmp(argv[1], "confirm") == 0) {
+        ota_status_t st;
+        ota_get_status(&st);
+        if (!st.pending) {
+            printf("not on probation; nothing to confirm\n");
+            return 0;
+        }
+        const esp_err_t err = ota_confirm();
+        if (err != ESP_OK) {
+            printf("confirm failed: %s\n", esp_err_to_name(err));
+            return 1;
+        }
+        printf("firmware %s confirmed; it stays\n", st.version);
+        return 0;
+    }
+
+    if (strcmp(argv[1], "rollback") == 0) {
+        if (ota_rollback() != ESP_OK) {
+            printf("nothing to roll back to -- the other slot has no valid image\n");
+            return 1;
+        }
+        printf("rolling back to the previous image; the link will drop\n");
+        return 0;
+    }
+
+    printf("usage: ota [status | begin <bytes> <sha256> | end | abort | confirm | rollback]\n");
+    return 1;
+}
+
+static int cmd_reboot(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    printf("rebooting; the link will drop\n");
+    ota_reboot_after(500);
+    return 0;
+}
+
 static int cmd_options(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -2887,6 +3061,8 @@ void cli_start(app_ctx_t *ctx)
     register_cmd("soc",     "State of charge, endpoints and accumulators",   "[set|full|reset|cap|v0|v100|vfull|rint|taper|rest] [v]", cmd_soc);
     register_cmd("options", "Everything that is set, in one place",         NULL,             cmd_options);
     register_cmd("config",  "Every setting as key=value, for programs",   NULL,             cmd_config);
+    register_cmd("ota",     "Firmware update: status, receive, confirm, roll back", "[status|begin <bytes> <sha256>|end|abort|confirm|rollback]", cmd_ota);
+    register_cmd("reboot",  "Restart the device",                             NULL,             cmd_reboot);
 
     printf("\n");
     printf("bat-monitor console, protocol %d. 'help' lists commands, 'ver' for a\n",

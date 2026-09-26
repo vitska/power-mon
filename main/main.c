@@ -22,6 +22,7 @@
 #include "bme280.h"
 #include "history_values.h"
 #include "lcd.h"
+#include "ota.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "esp_check.h"
@@ -657,6 +658,10 @@ void app_main(void)
         /* Not fatal: the console and the sampler do not need it. */
         ESP_LOGE(TAG, "NVS init failed: %s", esp_err_to_name(nvs_err));
     }
+
+    /* Early, so a new image's probation clock starts at boot rather than after sensor
+     * bring-up -- which is exactly the part most likely to hang in a bad build. */
+    ota_init();
 
 #if CONFIG_BATMON_INIT_ANTENNA_PINS
     init_antenna_pins();

@@ -6,6 +6,7 @@ idf_component_register(
                 "values.c"
                 "history_values.c"
                 "config.c"
+                "ota.c"
     INCLUDE_DIRS "."
-    REQUIRES     driver esp_timer console bt esp_hw_support nvs_flash esp_app_format esp_driver_usb_serial_jtag vfs ina219 sensors fuelgauge bme280
+    REQUIRES     driver esp_timer console bt esp_hw_support nvs_flash esp_app_format app_update mbedtls esp_driver_usb_serial_jtag vfs ina219 sensors fuelgauge bme280
 )

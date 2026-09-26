@@ -27,7 +27,7 @@ Three documents, three jobs:
 | M5 | Battery Service + vendor service | not started; pairing (§8.5) **done** |
 | M5b | OLED + button + BME280 + temperature corrections | **OLED and BME280 done**; button and §5.6 corrections outstanding |
 | M6 | Low power (tiers down to the light-sleep floor) | not started |
-| M7 | OTA, docs | docs in progress |
+| M7 | OTA, docs | **OTA over BLE done** — two slots, rollback, the app updates from GitHub releases; docs in progress |
 
 ## What works today
 
@@ -43,6 +43,8 @@ Three documents, three jobs:
   centrals at once**, with LE Secure Connections passkey pairing.
 - **Live monitoring**: a repainting dashboard (`mon`), and grouped telemetry at three
   independent rates to both transports.
+- **Firmware updates over BLE**: the phone app checks GitHub for a newer release and
+  flashes it. A new image runs on probation and rolls back on its own unless confirmed.
 
 ## Design changes since the original document
 
@@ -66,8 +68,8 @@ length; the short version:
 ## Build
 
 Requires **ESP-IDF v5.3 or newer** (the ESP32-C6 needs ≥5.1; the `i2c_master` driver
-needs ≥5.2). BLE pulls in NimBLE, so the binary is ~769 KB — 57 % of the app partition
-still free.
+needs ≥5.2). BLE pulls in NimBLE, so the binary is ~800 KB — 55 % of each 1.75 MB
+app slot still free.
 
 ### Option A — Docker (no local IDF install)
 
@@ -116,6 +118,46 @@ idf.py build flash monitor
 ```
 
 Exit the monitor with `Ctrl-]`.
+
+## Versioning and releases
+
+**One source: [`version.txt`](version.txt)**, `MAJOR.MINOR.PATCH`. ESP-IDF reads it into
+the app descriptor embedded in the image, so `ver`, `ota status` and the `.bin` file
+itself all carry the same string — the phone app reads the version out of an image
+before flashing it, not from a release title.
+
+- **PATCH**: fixes, nothing a client can notice changing.
+- **MINOR**: new commands, settings or telemetry fields. Clients keep working.
+- **MAJOR**: something a client must adapt to. A `protocol` bump (CLI.md §3) is always
+  at least this.
+
+**A release is a GitHub release** of this repo tagged `vX.Y.Z`, with the app image
+attached as `bat-monitor.bin`. That is exactly what the app looks for: the newest
+release, compared numerically against what the board reports. Cut one with:
+
+```powershell
+.	oolselease.ps1 -Bump patch -DryRun   # bump + build + verify; publishes nothing
+.	oolselease.ps1 -Bump minor           # commit, build, tag, push, publish
+```
+
+It refuses a dirty tree, and it reads the version back out of the built image before
+publishing, so a stale build directory cannot ship under the wrong number. Local builds
+carry whatever `version.txt` says; `build` in `ver` tells two of them apart.
+
+### Updating over BLE
+
+The app's **Firmware** tab shows what the board runs and what is published, and flashes
+either the latest release or a local `build/bat-monitor.bin`. Under the hood (CLI.md §6):
+the image goes into the spare slot, the board verifies it and reboots into it on
+probation, and the app confirms it once it has reconnected. Anything that goes wrong
+before that — a crash, a hang, no reconnect within ten minutes — puts the board back on
+the previous firmware by itself.
+
+**The first time needs USB.** A board running firmware before 0.6.0 has one app slot
+and a bootloader without rollback. `.	oolslash.ps1` once writes the new bootloader,
+the two-slot partition table and the firmware; calibration, gauge state and bonds are
+kept, because the NVS partition stays where it was. Every update after that can go over
+the air.
 
 ## Toolchain troubleshooting
 

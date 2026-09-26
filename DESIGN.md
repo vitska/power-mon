@@ -1199,9 +1199,20 @@ time, not by sample count.
 nvs,      data, nvs,     0x9000,   0x10000    # 64 KB (enlarged from the 24 KB default)
 otadata,  data, ota,     0x19000,  0x2000
 phy_init, data, phy,     0x1b000,  0x1000
-factory,  app,  factory, 0x20000,  0x1C0000
+ota_0,    app,  ota_0,   0x20000,  0x1C0000
 storage,  data, nvs,     0x1E0000, 0x10000    # reserved: event log / future use
+ota_1,    app,  ota_1,   0x1F0000, 0x1C0000
 ```
+
+Two app slots for firmware updates over BLE (M7, brought forward; CLI.md §6). This
+needs the XIAO's full 4 MB, not IDF's 2 MB default. Everything that existed in the
+single-slot layout kept its offset: `ota_0` is where `factory` was, and `ota_1` goes
+*after* `storage` rather than displacing it, so moving to this table over USB loses no
+calibration, gauge state or bonds. The bootloader is built with
+`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`: a new image boots on probation and is abandoned
+at the next reset unless the app confirms it — and the firmware forces that reset after
+ten minutes unconfirmed, so an image that boots but has lost its radio cannot strand the
+board.
 
 ### 6.3 Write policy and flash endurance
 
@@ -1766,7 +1777,8 @@ the sensor.
 - **TX power** default 0 dBm rather than the maximum; configurable (`cfg.tx_power_dbm`) for
   installations where the pack is in a metal enclosure.
 - **Wi-Fi and 802.15.4 are never initialised.** `esp_wifi` is not linked in the production
-  build; the OTA path (§11 M7) is a separate build variant, not a dormant capability.
+  build. Firmware updates arrive over the BLE link that is already up (CLI.md §6), so
+  OTA needs no second radio.
 - Advertising **stops entirely** after `cfg.adv_timeout_min` (default 0 = never) of no
   connection, if the user opts in. With advertising off, T2 falls by its 15–40 µA radio
   term — worth having, but no longer the transformative saving it was when the floor was

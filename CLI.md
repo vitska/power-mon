@@ -33,6 +33,7 @@ Protocol version **3**. Check it with `ver` before anything else.
 | Service | `6E400001-B5A3-F393-E0A9-E50E24DCCA9E` (Nordic UART) |
 | RX — write commands here | `6E400002-B5A3-F393-E0A9-E50E24DCCA9E` — Write, Write-No-Response |
 | TX — subscribe for output | `6E400003-B5A3-F393-E0A9-E50E24DCCA9E` — Notify |
+| OTA — firmware image data | `6E400004-B5A3-F393-E0A9-E50E24DCCA9E` — Write (with response) only. Not part of Nordic's NUS; see §6 "Firmware update" |
 | Connections | **up to 3 at once** |
 | Preferred ATT MTU | 512 |
 
@@ -181,13 +182,19 @@ only command designed for machine parsing rather than human reading:
 
 ```
 protocol 3
-firmware 0.4.0-m2
+firmware 0.6.0
+build 3f2a9c1d07e4b815
 idf v5.3.5-1161-g6d0016c3c1f
 chip esp32c6 rev2 cores1
 mac CC:8D:A2:F2:DC:FA
 built Aug 21 2026 18:33:21
 units micro
 ```
+
+`firmware` is the release version, MAJOR.MINOR.PATCH (README.md "Versioning"); compare
+it numerically, never as a string. `build` is the first 16 hex digits of the image's ELF
+SHA-256 — two builds of the same version differ there, which is what tells a local build
+from the published one.
 
 `protocol` is bumped when an existing command's output shape changes, an argument's
 meaning changes, or the framing changes. **Adding** a command does not bump it. A client
@@ -562,7 +569,78 @@ In `bonded` mode a write to RX from an unauthenticated link is rejected with ATT
 required too. Handle that error by initiating pairing rather than retrying.
 
 `open` mode has **no pairing at all**: anything in range can run every command,
-including calibration. It is the default and it is a bench setting.
+including calibration **and a firmware update**. It is the default and it is a bench
+setting. The OTA characteristic is held to the same rule as RX: in `bonded` mode an
+unauthenticated write to it is refused with `0x05`.
+
+### Firmware update
+
+| Command | Notes |
+|---|---|
+| `ota` / `ota status` | `key=value` lines, below. Machine-readable, like `config` |
+| `ota begin <bytes> <sha256>` | Erases the spare slot for an image of that size and remembers its SHA-256 (64 hex digits). Takes seconds — ~40 ms per 4 KB. Abandons any session already open |
+| `ota end` | Checks length, SHA-256, the image's own checksum, the chip, and that it is `bat-monitor`; then selects it for the next boot. Does **not** reboot |
+| `ota abort` | Abandons a session. The running image is untouched |
+| `ota confirm` | Ends probation: the running image is kept |
+| `ota rollback` | Marks the running image bad and reboots into the other slot. Link drops |
+| `reboot` | Restarts after half a second, so the reply still arrives. Link drops |
+
+**How an update goes.**
+
+```
+send  ota begin 821776 3b9f…e1       -> "ota_1 erased; send 821776 bytes …", exit 0
+write OTA char: [offset u32 LE][up to MTU-7 bytes]   … repeat, each acknowledged
+send  ota end                        -> "firmware 0.6.1 written; 'reboot' to start it"
+send  reboot                         -> link drops; board restarts into the new image
+reconnect, handshake
+send  ota status                     -> state=probation, version=0.6.1
+send  ota confirm                    -> it stays
+```
+
+**Data writes.** Each write to the OTA characteristic is a 4-byte little-endian offset,
+then image bytes: at most `ATT_MTU − 3 − 4`. Use Write **with** response and send the
+next chunk only after the acknowledgement — that is the flow control, one chunk per
+connection event, so ask for a short connection interval for the duration (~25 KB/s at
+7.5 ms). The offset must equal the number of bytes accepted so far; an exact repeat of
+the previous chunk is accepted and ignored, so a write whose acknowledgement was lost
+may be resent. A refusal comes back as the write's ATT status:
+
+| Status | Meaning |
+|---|---|
+| `0x80` | No session: no `ota begin`, or it was abandoned |
+| `0x81` | Wrong offset — a chunk went missing or was duplicated |
+| `0x82` | Runs past the size given to `ota begin` |
+| `0x83` | Busy (erasing or finishing). Retry shortly |
+| `0x84` | Flash refused it, or the first bytes are not an image. The session is abandoned |
+| `0x05` | Insufficient authentication (`bonded` mode, unpaired link) |
+
+**Probation and rollback.** A newly written image boots on probation. It stays there
+until `ota confirm`; a reset before that — a crash, the watchdog, a power cycle — boots
+the previous image again, and after **ten minutes** unconfirmed the firmware forces that
+reset itself. So an update that breaks the radio costs ten minutes, not a USB cable.
+Confirm only once you have talked to the new image: the handshake succeeding is the
+evidence that it works. `ota begin` is refused while on probation; confirm or roll back
+first, since overwriting the only known-good image is what probation exists to prevent.
+
+`ota status`:
+
+```
+running=ota_0
+version=0.6.1
+build=3f2a9c1d07e4b815
+state=probation            # or valid
+probation_s=583            # only on probation: seconds until forced rollback
+rollback=1                 # the other slot holds a valid image
+boot=ota_0                 # what the next reset boots; differs from running after `ota end`
+spare=ota_1                # where an update would be written
+spare.version=0.6.0        # or none
+session=idle               # or receiving, with session.received= and session.size=
+```
+
+**The first time is over USB.** BLE updates need the two-slot partition table and the
+rollback-capable bootloader, and neither can be changed over the air. A board whose
+`ota` answers `exit -2` is running older firmware: flash it once with `tools/flash.ps1`.
+Calibration and bonds survive that — the NVS partition does not move.
 
 ---
 
@@ -592,6 +670,8 @@ Things worth building in from the start:
   averaging, one per four samples.
 - **Reconnect and re-handshake** after any disconnect; do not cache calibration across
   connections, since another client may have changed it.
+- **Check `ota status` on connect.** A board on probation rolls back in minutes unless
+  someone confirms it; if your client just updated it, confirm after the handshake.
 
 ---
 
