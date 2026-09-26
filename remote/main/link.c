@@ -663,6 +663,11 @@ static int gap_event(struct ble_gap_event *e, void *arg)
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGI(TAG, "disconnected, reason 0x%x", e->disconnect.reason);
         s.conn         = BLE_HS_CONN_HANDLE_NONE;
+        /* A link that fails while being established ("connection failed to be
+         * established", 0x23e) can arrive as a disconnect with no successful connect
+         * event before it. Left set, this flag made the scanner skip the board forever:
+         * seen on hardware as a remote that never reconnected after one bad attempt. */
+        s.connecting   = false;
         s.want_passkey = false;
         xEventGroupClearBits(s.ev, EV_READY);
         xEventGroupSetBits(s.ev, EV_EOT); /* release a command waiting on a dead link */
