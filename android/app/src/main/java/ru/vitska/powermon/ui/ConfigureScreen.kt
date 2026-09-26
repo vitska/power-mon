@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
@@ -67,7 +66,6 @@ fun ConfigureScreen(vm: MonitorViewModel) {
     val t by vm.telemetry.collectAsState()
     val cfg by vm.config.collectAsState()
     var last by remember { mutableStateOf<String?>(null) }
-    var confirm by remember { mutableStateOf<Confirmation?>(null) }
 
     /** A read-only command: show what it said, change nothing. */
     val run: (String) -> Unit = { cmd ->
@@ -94,8 +92,6 @@ fun ConfigureScreen(vm: MonitorViewModel) {
         Unit
     }
 
-    val guarded: (Confirmation) -> Unit = { confirm = it }
-
     /*
      * Calibration answers are shown where the calibration is, not only in "Last
      * response" at the top of the screen: the device's refusals name the physical
@@ -119,8 +115,11 @@ fun ConfigureScreen(vm: MonitorViewModel) {
         }
         Unit
     }
-    /* A value the board is certain to refuse, explained before anything is sent. */
-    var calProblem by remember { mutableStateOf<CalProblem?>(null) }
+
+    /* No confirmation dialogs: every calibration action runs the moment it is tapped. */
+    val guarded: (Confirmation) -> Unit = { c ->
+        if (c.command.startsWith("cal ")) calSet(c.command) else set(c.command)
+    }
 
     LaunchedEffect(link) {
         if (link == Link.Ready && !cfg.supported) vm.refreshConfig()
@@ -604,58 +603,11 @@ fun ConfigureScreen(vm: MonitorViewModel) {
 
         Spacer(Modifier.height(24.dp))
     }
-
-    calProblem?.let { pb ->
-        AlertDialog(
-            onDismissRequest = { calProblem = null },
-            title = { Text(pb.title) },
-            text = { Text(pb.body) },
-            confirmButton = {
-                if (pb.alternative != null) {
-                    Button(onClick = {
-                        calProblem = null
-                        pb.onAlternative?.invoke(pb.alternative)
-                    }) { Text(pb.action ?: ("Use " + pb.alternative + " A")) }
-                } else {
-                    TextButton(onClick = { calProblem = null }) { Text("OK") }
-                }
-            },
-            dismissButton = {
-                if (pb.alternative != null) {
-                    TextButton(onClick = { calProblem = null }) { Text("Cancel") }
-                }
-            },
-        )
-    }
-
-    confirm?.let { c ->
-        AlertDialog(
-            onDismissRequest = { confirm = null },
-            title = { Text(c.title) },
-            text = { Text(c.body) },
-            confirmButton = {
-                Button(onClick = {
-                    confirm = null
-                    if (c.command.startsWith("cal ")) calSet(c.command) else set(c.command)
-                }) { Text("Run") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirm = null }) { Text("Cancel") }
-            },
-        )
-    }
 }
 
+/** Not a dialog any more — just the (title, body, command) `guarded` used to show
+ *  before running the command immediately. Kept as the shape every call site passes. */
 private data class Confirmation(val title: String, val body: String, val command: String)
-
-/** A value the board would refuse, and, where there is one, the value that would work. */
-private class CalProblem(
-    val title: String,
-    val body: String,
-    val alternative: Double?,
-    val action: String? = null,
-    val onAlternative: ((Double) -> Unit)? = null,
-)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
