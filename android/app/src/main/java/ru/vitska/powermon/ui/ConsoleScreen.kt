@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
@@ -26,6 +27,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -43,6 +46,7 @@ fun ConsoleScreen(vm: MonitorViewModel) {
     val busy by vm.busy.collectAsState()
     var entry by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+    val clipboard = LocalClipboardManager.current
 
     LaunchedEffect(lines.size) {
         if (lines.isNotEmpty()) listState.animateScrollToItem(lines.size - 1)
@@ -50,21 +54,23 @@ fun ConsoleScreen(vm: MonitorViewModel) {
 
     Column(Modifier.fillMaxSize().padding(12.dp)) {
         Card(Modifier.fillMaxWidth().weight(1f)) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize().padding(10.dp),
-            ) {
-                items(lines) { l ->
-                    Text(
-                        l,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        color = if (l.startsWith("> ")) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
-                    )
+            SelectionContainer {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize().padding(10.dp),
+                ) {
+                    items(lines) { l ->
+                        Text(
+                            l,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            color = if (l.startsWith("> ")) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -102,6 +108,9 @@ fun ConsoleScreen(vm: MonitorViewModel) {
             TextButton(onClick = { vm.launchCommand("help") }) { Text("help") }
             TextButton(onClick = { vm.launchCommand("options") }) { Text("options") }
             TextButton(onClick = { vm.launchCommand("stats") }) { Text("stats") }
+            TextButton(onClick = { clipboard.setText(AnnotatedString(lines.joinToString("\n"))) }) {
+                Text("copy all")
+            }
             TextButton(onClick = { vm.clearConsole() }) { Text("clear") }
         }
 
