@@ -292,10 +292,10 @@ fun ConfigureScreen(vm: MonitorViewModel) {
 
             Text("KNOWN VALUES", style = MaterialTheme.typography.labelSmall)
             Text(
-                "Enter what your meter reads. For current the board solves the shunt " +
-                    "resistance from it, so the shunt's value need not be known; for " +
-                    "voltage it solves the gain. Current must exceed 10 mA and voltage " +
-                    "0.5 V.",
+                "Enter what your meter reads and tap Set -- applied immediately. For " +
+                    "current the board solves the shunt resistance from it, so the " +
+                    "shunt's value need not be known; for voltage it solves the gain " +
+                    "from one instant reading.",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(8.dp))
@@ -320,19 +320,13 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                 )
             }
             MicroField(
-                "Measured voltage AT REST", "V", "12.44",
+                "Measured voltage", "V", "12.44",
                 prefill = t.volts?.let { String.format("%.3f", it) },
             ) { v ->
-                // Instant, silent: applied and saved the moment it is sent (firmware
+                // Instant, silent: applied and saved the moment Set is tapped (firmware
                 // "cal top v" is one reading, no averaging); the field above shows the
                 // result once refreshConfig() returns, so there is nothing else to show.
                 silent("cal top v " + Micro.volts(v))
-            }
-            MicroField(
-                "Terminal voltage UNDER LOAD", "V", "12.10",
-                prefill = t.volts?.let { String.format("%.3f", it) },
-            ) { v ->
-                silent("cal vpath " + Micro.volts(v))
             }
 
             calResult?.let { res ->
@@ -349,9 +343,6 @@ fun ConfigureScreen(vm: MonitorViewModel) {
 
             Spacer(Modifier.height(12.dp))
             Wrap {
-                AssistChip(onClick = { set("cal save") }, label = { Text("Save") })
-                AssistChip(onClick = { vm.launchRefreshConfig() }, label = { Text("Refresh") })
-                AssistChip(onClick = { run("curve") }, label = { Text("curve") })
                 OutlinedButton(onClick = {
                     guarded(
                         Confirmation(
