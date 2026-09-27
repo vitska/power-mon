@@ -1,5 +1,6 @@
 package ru.vitska.powermon.ui
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -96,47 +97,49 @@ fun MonitorScreen(vm: MonitorViewModel, onPickDevice: () -> Unit = {}) {
         }
 
         // State of charge gets the space, as it does on the device's own panel.
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp)) {
-                // Which curve the percentage comes from: a LiFePO4 pack gauged on the
-                // lead-acid curve reads nonsense, and this is where that would show.
-                val chem = Chemistries.byKey(cfg.str("battery.chem"))
+        Column(
+            Modifier.fillMaxWidth()
+                .border(1.dp, MaterialTheme.colorScheme.surfaceVariant)
+                .padding(16.dp),
+        ) {
+            // Which curve the percentage comes from: a LiFePO4 pack gauged on the
+            // lead-acid curve reads nonsense, and this is where that would show.
+            val chem = Chemistries.byKey(cfg.str("battery.chem"))
+            Text(
+                "STATE OF CHARGE" +
+                    (chem?.let { "  ·  ${it.short} ${cfg.str("battery.cells") ?: "?"}S" } ?: ""),
+                style = MaterialTheme.typography.labelSmall,
+            )
+            Row(verticalAlignment = Alignment.Bottom) {
                 Text(
-                    "STATE OF CHARGE" +
-                        (chem?.let { "  ·  ${it.short} ${cfg.str("battery.cells") ?: "?"}S" } ?: ""),
-                    style = MaterialTheme.typography.labelSmall,
+                    f(t.socPct, 1),
+                    fontSize = 56.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFamily = FontFamily.Monospace,
                 )
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text(
-                        f(t.socPct, 1),
-                        fontSize = 56.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFamily = FontFamily.Monospace,
-                    )
-                    Text(" %", style = MaterialTheme.typography.titleMedium)
-                }
-                Spacer(Modifier.height(8.dp))
-                LinearProgressIndicator(
-                    progress = { ((t.socPct ?: 0.0) / 100.0).toFloat().coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "${f(t.chargeAh, 2)} Ah   ·   ${t.state}",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+                Text(" %", style = MaterialTheme.typography.titleMedium)
             }
+            Spacer(Modifier.height(8.dp))
+            LinearProgressIndicator(
+                progress = { ((t.socPct ?: 0.0) / 100.0).toFloat().coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "${f(t.chargeAh, 2)} Ah   ·   ${t.state}",
+                style = MaterialTheme.typography.bodyMedium,
+            )
         }
 
         if (link == Link.Ready) {
             HistoryChart(history)
         }
 
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(Modifier.fillMaxWidth()) {
             Metric("VOLTS", f(t.volts, 3), Modifier.weight(1f))
             Metric("AMPS", f(t.amps, 4), Modifier.weight(1f))
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(Modifier.fillMaxWidth()) {
             Metric("WATTS", f(t.watts, 2), Modifier.weight(1f))
             Metric("RATE", t.fastHz?.let { String.format("%.1f Hz", it) } ?: "—",
                 Modifier.weight(1f))
@@ -173,24 +176,29 @@ fun MonitorScreen(vm: MonitorViewModel, onPickDevice: () -> Unit = {}) {
     }
 }
 
+/** A bordered cell, not a filled card: an outline is enough to mark the grid, and a
+ *  flat colour box read as its own separate panel against the near-black screen. */
 @Composable
 private fun Metric(label: String, value: String, modifier: Modifier = Modifier) {
-    Card(modifier) {
-        Column(Modifier.padding(14.dp)) {
-            Text(label, style = MaterialTheme.typography.labelSmall)
-            Text(
-                value,
-                // A signed four-decimal current ("-0.0216") is two characters longer
-                // than anything else shown here and wraps at the display size; step
-                // down rather than truncate, since the low-current digits are the
-                // ones worth reading.
-                fontSize = if (value.length > 6) 21.sp else 26.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                softWrap = false,
-            )
-        }
+    Column(
+        modifier
+            .border(1.dp, MaterialTheme.colorScheme.surfaceVariant)
+            .padding(14.dp),
+    ) {
+        Text(label, style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            value,
+            // A signed four-decimal current ("-0.0216") is two characters longer
+            // than anything else shown here and wraps at the display size; step
+            // down rather than truncate, since the low-current digits are the
+            // ones worth reading.
+            fontSize = if (value.length > 6) 21.sp else 26.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            softWrap = false,
+        )
     }
 }
 
