@@ -111,7 +111,10 @@ fun AppRoot(canScan: Boolean, vm: MonitorViewModel = viewModel()) {
             // Material3's NavigationBar reserved space above the system's own
             // gesture/button bar automatically; a plain Row does not, so without this
             // the tab bar draws underneath the system buttons instead of above them.
-            Box(Modifier.fillMaxWidth().navigationBarsPadding()) {
+            Row(
+                Modifier.fillMaxWidth().navigationBarsPadding().height(52.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 CompactTabBar(
                     tab = tab,
                     onSelect = { tab = it },
@@ -121,13 +124,15 @@ fun AppRoot(canScan: Boolean, vm: MonitorViewModel = viewModel()) {
                         Triple("Console", Icons.Filled.Terminal, 2),
                         Triple("Firmware", Icons.Filled.SystemUpdate, 3),
                     ),
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
                 )
-                // In the bar's own corner, not a row of its own -- so it adds no height.
+                // Its own narrow strip beside the tabs, not overlaid on top of the last
+                // one's label -- same corner, but nothing to collide with.
                 Text(
                     "v" + au.currentVersion,
                     fontSize = 9.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 4.dp, bottom = 2.dp),
+                    modifier = Modifier.padding(end = 4.dp),
                 )
             }
         },
@@ -158,11 +163,9 @@ private fun CompactTabBar(
     tab: Int,
     onSelect: (Int) -> Unit,
     items: List<Triple<String, androidx.compose.ui.graphics.vector.ImageVector, Int>>,
+    modifier: Modifier = Modifier,
 ) {
-    Row(
-        Modifier.fillMaxWidth().height(52.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-    ) {
+    Row(modifier, horizontalArrangement = Arrangement.SpaceEvenly) {
         items.forEach { (label, icon, index) ->
             val selected = tab == index
             val color = if (selected) MaterialTheme.colorScheme.primary
