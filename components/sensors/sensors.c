@@ -417,3 +417,338 @@ void sensors_report(sensors_handle_t h)
              h->volt_dev == h->pos ? "positive pole" : "negative pole",
              h->volt_dev == h->cur_dev ? " (shared, software bus correction on)" : "");
 }
+
+/* --- calibration -------------------------------------------------------------- */
+
+/*
+ * Integer square root, Newton's method. Avoiding sqrt() keeps the float ban whole
+ * (DESIGN.md §4.3). The loop condition is `y < g`, not `y != g`: the naive form
+ * oscillates forever between two adjacent values for an input whose root is not
+ * exact, which on a console command would simply hang the calling task.
+ */
+static uint64_t isqrt64(uint64_t x)
+{
+    if (x == 0) {
+        return 0;
+    }
+    uint64_t g = x;
+    uint64_t y = (g + 1) / 2;
+    while (y < g) {
+        g = y;
+        y = (g + x / g) / 2;
+    }
+    return g;
+}
+
+esp_err_t sensors_average(sensors_handle_t h, uint32_t n,
+                         int64_t *sum_i_ua, int64_t *sum_v_uv,
+                         uint32_t *got, bool *saturated,
+                         sensors_progress_cb_t progress, void *progress_ctx)
+{
+    ESP_RETURN_ON_FALSE(h && sum_i_ua && sum_v_uv && got && saturated, ESP_ERR_INVALID_ARG,
+                        TAG, "null");
+    *sum_i_ua  = 0;
+    *sum_v_uv  = 0;
+    *got       = 0;
+    *saturated = false;
+
+    /*
+     * Freeze auto-ranging for the duration.
+     *
+     * Two reasons, and the second one is why this is not merely an optimisation. A
+     * range change discards the next conversion, so a thrashing autoranger makes every
+     * blocking read burn its retry budget -- measured at ~2.5 s per sample near zero
+     * current, which turned a 64-sample average into well over a minute. And a
+     * measurement whose scale changes underneath it is a worse measurement: the range
+     * that was correct when averaging started is the right one to keep.
+     */
+    const bool auto_c = h->cur_dev  ? ina219_get_autorange(h->cur_dev)  : false;
+    const bool auto_v = h->volt_dev ? ina219_get_autorange(h->volt_dev) : false;
+    if (h->cur_dev)                        ina219_set_autorange(h->cur_dev, false);
+    if (h->volt_dev && h->volt_dev != h->cur_dev) ina219_set_autorange(h->volt_dev, false);
+
+    esp_err_t ret = ESP_OK;
+    for (uint32_t k = 0; k < n; k++) {
+        power_sample_t s;
+        ret = sensors_read_blocking(h, &s);
+        if (ret != ESP_OK) {
+            break;
+        }
+        if (s.i_valid) {
+            *sum_i_ua += s.i_ua;
+        }
+        if (s.saturated) {
+            *saturated = true;
+        }
+        if (s.v_valid) {
+            *sum_v_uv += s.v_pack_uv;
+        }
+        (*got)++;
+        if (progress) {
+            progress(k, progress_ctx);
+        }
+    }
+
+    if (h->cur_dev)                        ina219_set_autorange(h->cur_dev, auto_c);
+    if (h->volt_dev && h->volt_dev != h->cur_dev) ina219_set_autorange(h->volt_dev, auto_v);
+    return ret;
+}
+
+bool sensors_solve_gain_ppm(int64_t measured, int64_t reference, uint32_t old_ppm,
+                           uint32_t *new_ppm)
+{
+    if (!new_ppm) {
+        return false;
+    }
+    const int64_t am = measured < 0 ? -measured : measured;
+    const int64_t ar = reference < 0 ? -reference : reference;
+
+    /* No validation: the entered reference is trusted as-is, at whatever magnitude
+     * and sign it was given. Only a literal zero reading is refused, since a ratio
+     * against it is not a number. */
+    if (am == 0) {
+        return false;
+    }
+    *new_ppm = (uint32_t)(((int64_t)old_ppm * ar) / am);
+    return true;
+}
+
+esp_err_t sensors_calibrate_shunt(sensors_handle_t h, int64_t known_ua, uint32_t n_samples,
+                                  sensors_progress_cb_t progress, void *progress_ctx,
+                                  sensors_shunt_cal_t *out)
+{
+    ESP_RETURN_ON_FALSE(h && out, ESP_ERR_INVALID_ARG, TAG, "null");
+    *out = (sensors_shunt_cal_t){0};
+
+    const int64_t aref = known_ua < 0 ? -known_ua : known_ua;
+    if (aref == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    ina219_handle_t pos = h->pos;
+    ina219_handle_t neg = h->neg;
+
+    int64_t  sum_p = 0, sum_n = 0;
+    uint32_t got_p = 0, got_n = 0;
+    bool     sat_p = false, sat_n = false;
+    for (uint32_t i = 0; i < n_samples; i++) {
+        ina219_sample_t smp;
+        if (pos && ina219_read_blocking(pos, &smp) == ESP_OK) {
+            sum_p += smp.v_shunt_uv;
+            got_p++;
+            sat_p |= smp.saturated;
+        }
+        if (neg && ina219_read_blocking(neg, &smp) == ESP_OK) {
+            sum_n += smp.v_shunt_uv;
+            got_n++;
+            sat_n |= smp.saturated;
+        }
+        if (progress) {
+            progress(i, progress_ctx);
+        }
+    }
+
+    const int64_t v_p = got_p ? sum_p / (int64_t)got_p : 0;
+    const int64_t v_n = got_n ? sum_n / (int64_t)got_n : 0;
+    const int64_t a_p = v_p < 0 ? -v_p : v_p;
+    const int64_t a_n = v_n < 0 ? -v_n : v_n;
+
+    out->v_pos_uv = v_p;
+    out->v_neg_uv = v_n;
+    out->got_pos  = got_p;
+    out->got_neg  = got_n;
+    out->sat_pos  = sat_p;
+    out->sat_neg  = sat_n;
+
+    /* No validation: whichever sensor sees the larger magnitude is used, whatever
+     * that magnitude is. Only "neither sensor exists" stops it -- nothing to read. */
+    const bool      use_neg = got_n && (!got_p || a_n >= a_p);
+    ina219_handle_t cd      = use_neg ? neg : pos;
+    const int64_t   v       = use_neg ? v_n : v_p;
+    if (!cd) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* A zero point on this same chip: keep it as a voltage (offset * R, before the
+     * sign), take it out of the reading, carry it to the new resistance. */
+    const bool    same_dev = cd == h->cur_dev;
+    const int64_t r_old    = ina219_get_shunt_uohm(cd);
+    const int64_t v_off    = same_dev ? ((int64_t)ina219_get_offset_ua(cd) * r_old) / 1000000 : 0;
+    const int64_t vc       = v - v_off;
+    const int64_t avc      = vc < 0 ? -vc : vc;
+
+    /* R in uOhm = V[uV] / I[uA] * 1e6. No range check: whatever this works out to is
+     * set, and the driver's own floor (ina219_set_shunt_uohm) is the only backstop. */
+    const int64_t r_new = (avc * 1000000LL) / aref;
+
+    /* Mode first: it decides which device the rest applies to. */
+    const sensors_mode_t want_mode = use_neg ? SENSORS_MODE_N : SENSORS_MODE_P;
+    out->mode_changed = (h->cfg.mode != want_mode) && got_p && got_n;
+    out->mode          = want_mode;
+    if (out->mode_changed) {
+        sensors_set_mode(h, want_mode);
+    }
+
+    /* Raw voltage and reference must agree in sign after the board's own inversion. */
+    const bool invert = (vc < 0) != (known_ua < 0);
+    ina219_set_invert_sign(cd, invert);
+    ina219_set_shunt_uohm(cd, (uint32_t)r_new);
+    const int32_t new_offset = (same_dev && r_new) ? (int32_t)((v_off * 1000000) / r_new) : 0;
+    ina219_set_offset_ua(cd, new_offset);
+    ina219_set_gain_ppm(cd, 1000000);
+
+    out->dev        = cd;
+    out->inverted    = invert;
+    out->shunt_uohm  = (uint32_t)r_new;
+    out->offset_ua   = new_offset;
+    return ESP_OK;
+}
+
+esp_err_t sensors_zero_current(sensors_handle_t h, uint32_t n_samples,
+                               int32_t *out_offset_ua, int32_t *out_stddev_ua,
+                               sensors_progress_cb_t progress, void *progress_ctx)
+{
+    ESP_RETURN_ON_FALSE(h, ESP_ERR_INVALID_ARG, TAG, "null");
+    ina219_handle_t dev = h->cur_dev;
+    if (!dev) {
+        ESP_LOGE(TAG, "no current sensor -- roles unresolved");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /*
+     * Force the finest range: the offset we are measuring is a shunt-voltage offset,
+     * and PGA/1 resolves it 8x better than PGA/8. Unity gain while measuring: convert()
+     * subtracts the offset BEFORE applying gain, so an offset measured through a
+     * non-unity gain is stored in the wrong domain and comes out scaled by 1/gain. It
+     * cancels only when gain happens to be exactly 1.0 -- which it is on a fresh board,
+     * and is not once the gain has been trimmed, so re-running this after a gain trim
+     * would otherwise be subtly wrong. Both restored below with the range settings.
+     */
+    const ina219_pga_t saved_pga  = ina219_get_pga(dev);
+    const bool         saved_auto = ina219_get_autorange(dev);
+    const int32_t      saved_off  = ina219_get_offset_ua(dev);
+    const uint32_t     saved_gain = ina219_get_gain_ppm(dev);
+
+    ina219_set_autorange(dev, false);
+    ina219_set_pga(dev, INA219_PGA_1);
+    ina219_set_offset_ua(dev, 0); /* measure raw, not residual */
+    ina219_set_gain_ppm(dev, 1000000);
+
+    int64_t   sum = 0, sum_sq = 0;
+    uint32_t  got = 0;
+    esp_err_t err = ESP_OK;
+    for (uint32_t i = 0; i < n_samples; i++) {
+        ina219_sample_t s;
+        err = ina219_read_blocking(dev, &s);
+        if (err != ESP_OK) {
+            break;
+        }
+        sum    += s.i_ua;
+        sum_sq += (int64_t)s.i_ua * (int64_t)s.i_ua;
+        got++;
+        if (progress) {
+            progress(i, progress_ctx);
+        }
+    }
+
+    const int32_t mean = got ? (int32_t)(sum / (int64_t)got) : 0;
+    int32_t       stddev = 0;
+    if (got >= 2) {
+        /* var = E[x^2] - E[x]^2, population variance. Adequate here; the sample-vs-
+         * population distinction is noise next to the measurement it describes. */
+        int64_t var = (sum_sq / (int64_t)got) - ((int64_t)mean * (int64_t)mean);
+        if (var < 0) {
+            var = 0; /* can only be rounding */
+        }
+        stddev = (int32_t)isqrt64((uint64_t)var);
+    }
+
+    if (out_offset_ua) *out_offset_ua = mean;
+    if (out_stddev_ua) *out_stddev_ua = stddev;
+
+    /* Restore range and gain regardless of outcome. */
+    ina219_set_autorange(dev, saved_auto);
+    ina219_set_pga(dev, saved_pga);
+    ina219_set_gain_ppm(dev, saved_gain);
+
+    if (err != ESP_OK) {
+        ina219_set_offset_ua(dev, saved_off);
+        return err;
+    }
+
+    /* No validation: the measured mean is baked in as the offset regardless of
+     * spread. A noisy sample (current actually flowing) is on the person running
+     * this, not something the firmware second-guesses. */
+    ina219_set_offset_ua(dev, mean);
+    return ESP_OK;
+}
+
+/*
+ * The voltage-channel twin of the above. Same shape, three differences worth naming:
+ *
+ *  - There is no range to force. The bus channel has one fixed 4 mV/LSB scale, so
+ *    nothing corresponds to dropping the PGA to /1 for resolution.
+ *  - Gain is forced to unity for the same reason it is above: convert() subtracts the
+ *    offset BEFORE gain, so an offset measured through a non-unity gain is stored in
+ *    the wrong domain.
+ *  - No validation on magnitude, deliberately: a caller expecting VBUS at ground and
+ *    getting a floating 3.4 V instead bakes that in. That used to be rejected here;
+ *    it no longer is, per the same "trust what was measured" policy as every other
+ *    calibration path in this file.
+ */
+esp_err_t sensors_zero_voltage(sensors_handle_t h, uint32_t n_samples,
+                               int32_t *out_offset_uv, uint32_t *out_spread_uv,
+                               sensors_progress_cb_t progress, void *progress_ctx)
+{
+    ESP_RETURN_ON_FALSE(h, ESP_ERR_INVALID_ARG, TAG, "null");
+    ina219_handle_t dev = h->volt_dev;
+    if (!dev) {
+        ESP_LOGE(TAG, "no voltage sensor -- roles unresolved");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const int32_t  saved_off  = ina219_get_vbus_offset_uv(dev);
+    const uint32_t saved_gain = ina219_get_vbus_gain_ppm(dev);
+
+    ina219_set_vbus_offset_uv(dev, 0);
+    ina219_set_vbus_gain_ppm(dev, 1000000);
+
+    int64_t   sum = 0;
+    uint32_t  lo = UINT32_MAX, hi = 0, got = 0;
+    esp_err_t err = ESP_OK;
+
+    for (uint32_t i = 0; i < n_samples; i++) {
+        power_sample_t s;
+        err = sensors_read_blocking(h, &s);
+        if (err != ESP_OK) {
+            break;
+        }
+        if (!s.v_valid) {
+            continue;
+        }
+        sum += s.v_pack_uv;
+        if (s.v_pack_uv < lo) lo = s.v_pack_uv;
+        if (s.v_pack_uv > hi) hi = s.v_pack_uv;
+        got++;
+        if (progress) {
+            progress(i, progress_ctx);
+        }
+    }
+
+    if (err != ESP_OK || got == 0) {
+        ina219_set_vbus_offset_uv(dev, saved_off);
+        ina219_set_vbus_gain_ppm(dev, saved_gain);
+        return err != ESP_OK ? err : ESP_ERR_INVALID_STATE;
+    }
+
+    const int32_t mean = (int32_t)(sum / (int64_t)got);
+    if (out_offset_uv) *out_offset_uv = mean;
+    if (out_spread_uv) *out_spread_uv = (lo <= hi) ? (hi - lo) : 0;
+
+    ina219_set_vbus_gain_ppm(dev, saved_gain);
+
+    /* No validation: the measured mean is baked in as the offset regardless of
+     * magnitude, whether or not VBUS was actually at ground. */
+    ina219_set_vbus_offset_uv(dev, mean);
+    return ESP_OK;
+}

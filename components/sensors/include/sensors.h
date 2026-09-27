@@ -152,6 +152,78 @@ const char *sensors_mode_str(sensors_mode_t m);
 /** One-line human summary of what was found and how it is wired. */
 void sensors_report(sensors_handle_t h);
 
+/* --- calibration (moved here from the console: this is sensor behaviour, not
+ * command-line glue. Nothing below prints -- a caller wanting progress feedback
+ * during a long average passes `progress`, called once per sample; a caller wanting
+ * exclusive access against a concurrent sampler task still arranges that itself,
+ * exactly as before this code lived here. */
+
+typedef void (*sensors_progress_cb_t)(uint32_t sample_index, void *ctx);
+
+/**
+ * Averages n samples of current and pack voltage together, freezing autoranging for
+ * the duration: a range change discards the next conversion, and a scale that moves
+ * mid-average is a worse measurement than a slightly noisy one at a fixed scale.
+ */
+esp_err_t sensors_average(sensors_handle_t h, uint32_t n,
+                         int64_t *sum_i_ua, int64_t *sum_v_uv,
+                         uint32_t *got, bool *saturated,
+                         sensors_progress_cb_t progress, void *progress_ctx);
+
+/**
+ * Solves the gain that would make `measured` read as `reference`, scaled from
+ * `old_ppm`. No range validation -- see ina219_set_gain_ppm() / set_vbus_gain_ppm()
+ * for the driver's own hardware-sanity floor. Returns false only when `measured` is
+ * exactly zero, since a ratio against it is not a number.
+ */
+bool sensors_solve_gain_ppm(int64_t measured, int64_t reference, uint32_t old_ppm,
+                           uint32_t *new_ppm);
+
+/** What `sensors_calibrate_shunt()` found and did. */
+typedef struct {
+    bool     mode_changed;   /**< true if this call moved the install mode */
+    sensors_mode_t mode;     /**< pole the current was found on */
+    ina219_handle_t dev;     /**< the device now holding the current role */
+    int64_t  v_pos_uv, v_neg_uv;   /**< each pole's raw shunt reading, for display */
+    uint32_t got_pos, got_neg;
+    bool     sat_pos, sat_neg;
+    bool     inverted;
+    uint32_t shunt_uohm;
+    int32_t  offset_ua;
+} sensors_shunt_cal_t;
+
+/**
+ * Auto-detects which pole's INA219 is actually wired across the shunt -- whichever
+ * reads the larger raw shunt voltage under this known current -- then solves that
+ * device's resistance directly from the measured value, never from a fixed or
+ * configured shunt. Sets mode (only when both poles answered), sign, shunt
+ * resistance, offset (carried over from any existing zero point on the same chip)
+ * and unity gain.
+ *
+ * Returns ESP_ERR_INVALID_ARG for a zero known current, ESP_ERR_NOT_FOUND if neither
+ * pole answered.
+ */
+esp_err_t sensors_calibrate_shunt(sensors_handle_t h, int64_t known_ua, uint32_t n_samples,
+                                  sensors_progress_cb_t progress, void *progress_ctx,
+                                  sensors_shunt_cal_t *out);
+
+/**
+ * Zero-current calibration (DESIGN.md §5.5): forces PGA/1 and unity gain, averages
+ * the raw current, and bakes the mean in as the offset -- no validation of spread or
+ * magnitude, on the assumption the load was actually disconnected. Restores PGA,
+ * autorange and gain regardless of outcome; on a read error the offset is left
+ * unchanged and the error is returned.
+ */
+esp_err_t sensors_zero_current(sensors_handle_t h, uint32_t n_samples,
+                               int32_t *out_offset_ua, int32_t *out_stddev_ua,
+                               sensors_progress_cb_t progress, void *progress_ctx);
+
+/** The voltage-channel twin of sensors_zero_current(). No range to force and no
+ *  spread check -- see the implementation for why. */
+esp_err_t sensors_zero_voltage(sensors_handle_t h, uint32_t n_samples,
+                               int32_t *out_offset_uv, uint32_t *out_spread_uv,
+                               sensors_progress_cb_t progress, void *progress_ctx);
+
 #ifdef __cplusplus
 }
 #endif

@@ -96,18 +96,15 @@ bool sensor_lock_take(app_ctx_t *ctx, uint32_t timeout_ms);
 void sensor_lock_give(app_ctx_t *ctx);
 
 
-/** Blocking zero-current calibration of the CURRENT sensor (DESIGN.md §5.5).
- *  Returns ESP_OK and writes the new offset on success; ESP_ERR_INVALID_STATE if the
- *  current was not stable enough to trust, in which case the offset is unchanged. */
+/** Blocking zero-current calibration of the CURRENT sensor (DESIGN.md §5.5): takes
+ *  the sensor lock, delegates the actual averaging and offset write to
+ *  sensors_zero_current(), prints progress dots, and releases the lock. The measured
+ *  mean is baked in as the offset regardless of spread; a real read error leaves the
+ *  offset unchanged and is returned as-is. */
 esp_err_t run_zero_calibration(app_ctx_t *ctx, uint32_t n_samples,
                                int32_t *out_offset_ua, int32_t *out_stddev_ua);
 
-/** Zero-VOLTAGE calibration of the VOLTAGE sensor: the bus-channel counterpart of
- *  run_zero_calibration(). Requires 0 V on VBUS -- pack disconnected. Returns
- *  ESP_ERR_INVALID_STATE if a real voltage is present, in which case nothing changes.
- *
- *  Unlike the current channel there is no noise floor to compare against: the bus LSB
- *  is 4 mV, so a genuine offset is either several counts or invisible. The guard is
- *  therefore on magnitude, not on spread. */
+/** The bus-channel counterpart of run_zero_calibration(), wrapping
+ *  sensors_zero_voltage() the same way. */
 esp_err_t run_zero_voltage_calibration(app_ctx_t *ctx, uint32_t n_samples,
                                        int32_t *out_offset_uv, uint32_t *out_spread_uv);

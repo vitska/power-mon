@@ -1188,100 +1188,61 @@ static void curve_show(ina219_handle_t cd, ina219_handle_t vd)
                                                                  : "subtract shunt");
 }
 
-/* Averages n samples so a one-point gain solve is not decided by a single reading. */
+/* Progress dot for an averaging loop, at the cadence `curve_average` used to print
+ * inline before the averaging moved into sensors.c. */
+static void average_progress_dot(uint32_t index, void *ctx)
+{
+    (void)ctx;
+    if ((index % 4) == 0) {
+        printf(".");
+        fflush(stdout);
+    }
+}
+
+/* Same, at the cadence cal_shunt()'s dual-sensor read used to print inline. */
+static void shunt_progress_dot(uint32_t index, void *ctx)
+{
+    (void)ctx;
+    if ((index & 7) == 7) {
+        printf(".");
+    }
+}
+
+/* Averages n samples so a one-point gain solve is not decided by a single reading.
+ * Thin wrapper: takes the sensor lock and prints progress/failure, sensors_average()
+ * does the actual reading. */
 static esp_err_t curve_average(uint32_t n, int64_t *sum_i_ua, int64_t *sum_v_uv,
                                uint32_t *got, bool *saturated)
 {
-    *sum_i_ua  = 0;
-    *sum_v_uv  = 0;
-    *got       = 0;
-    *saturated = false;
-
     if (!sensor_lock_take(s_ctx, 2000)) {
         printf("sensor busy -- try again\n");
         return ESP_ERR_TIMEOUT;
     }
-
-    /*
-     * Freeze auto-ranging for the duration.
-     *
-     * Two reasons, and the second one is why this is not merely an optimisation. A
-     * range change discards the next conversion, so a thrashing autoranger makes every
-     * blocking read burn its retry budget -- measured at ~2.5 s per sample near zero
-     * current, which turned a 64-sample average into well over a minute. And a
-     * measurement whose scale changes underneath it is a worse measurement: the range
-     * that was correct when averaging started is the right one to keep.
-     *
-     * Restored on every exit path below, including the error ones.
-     */
-    ina219_handle_t cd_f = sensors_current_dev(s_ctx->sensors);
-    ina219_handle_t vd_f = sensors_voltage_dev(s_ctx->sensors);
-    const bool auto_c = cd_f ? ina219_get_autorange(cd_f) : false;
-    const bool auto_v = vd_f ? ina219_get_autorange(vd_f) : false;
-    if (cd_f) ina219_set_autorange(cd_f, false);
-    if (vd_f && vd_f != cd_f) ina219_set_autorange(vd_f, false);
-
-    for (uint32_t k = 0; k < n; k++) {
-        power_sample_t s;
-        const esp_err_t err = sensors_read_blocking(s_ctx->sensors, &s);
-        if (err != ESP_OK) {
-            printf("\n");
-            if (cd_f) ina219_set_autorange(cd_f, auto_c);
-            if (vd_f && vd_f != cd_f) ina219_set_autorange(vd_f, auto_v);
-            sensor_lock_give(s_ctx);
-            return err;
-        }
-        if (s.i_valid) {
-            *sum_i_ua += s.i_ua;
-        }
-        if (s.saturated) {
-            *saturated = true;
-        }
-        if (s.v_valid) {
-            *sum_v_uv += s.v_pack_uv;
-        }
-        (*got)++;
-        if ((k % 4) == 0) {
-            printf(".");
-            fflush(stdout);
-        }
-    }
+    const esp_err_t err = sensors_average(s_ctx->sensors, n, sum_i_ua, sum_v_uv, got,
+                                          saturated, average_progress_dot, NULL);
     printf("\n");
-    if (cd_f) ina219_set_autorange(cd_f, auto_c);
-    if (vd_f && vd_f != cd_f) ina219_set_autorange(vd_f, auto_v);
     sensor_lock_give(s_ctx);
-    return ESP_OK;
+    return err;
 }
 
 /*
- * Solves gain so that `measured` reads as `reference`. Refuses well outside +/-10%,
- * where the fault is the shunt value or the divider ratio rather than gain -- see
- * ina219_set_gain_ppm(). Also refuses near zero, where the ratio is dominated by
- * offset error and the resulting gain is meaningless.
+ * Solves gain so that `measured` reads as `reference`, and prints what it found.
+ * sensors_solve_gain_ppm() does the math; this is the console-facing wording around
+ * it, including the one case it refuses: a literal zero measurement, where a ratio
+ * against it is not a number.
  */
-static bool curve_solve_gain(int64_t measured, int64_t reference, int64_t floor_abs,
-                             uint32_t old_ppm, uint32_t *new_ppm, const char *unit)
+static bool curve_solve_gain(int64_t measured, int64_t reference, uint32_t old_ppm,
+                             uint32_t *new_ppm)
 {
-    (void)floor_abs;
-    (void)unit;
-    char b1[24], b2[24];
-    const int64_t am = measured < 0 ? -measured : measured;
-    const int64_t ar = reference < 0 ? -reference : reference;
-
-    /* No validation: the entered reference is trusted as-is, at whatever magnitude
-     * and sign it was given. Only a literal zero reading is refused, since a ratio
-     * against it is not a number. */
-    if (am == 0) {
+    if (!sensors_solve_gain_ppm(measured, reference, old_ppm, new_ppm)) {
         printf("measured value is exactly zero -- no ratio to solve a gain from.\n");
         return false;
     }
-
-    const int64_t want = ((int64_t)old_ppm * ar) / am;
+    char b1[24], b2[24];
     printf("measured %s, reference %s -> gain %lu ppm\n",
            fixed_fmt(b1, sizeof(b1), measured, 1000000, 4),
            fixed_fmt(b2, sizeof(b2), reference, 1000000, 4),
-           (unsigned long)want);
-    *new_ppm = (uint32_t)want;
+           (unsigned long)*new_ppm);
     return true;
 }
 
@@ -1419,14 +1380,12 @@ static int cmd_curve(int argc, char **argv)
         bool      ok;
         esp_err_t apply = ESP_OK;
         if (is_i) {
-            ok = curve_solve_gain(si / (int64_t)got, ref, 10000,
-                                  ina219_get_gain_ppm(cd), &want, "uA");
+            ok = curve_solve_gain(si / (int64_t)got, ref, ina219_get_gain_ppm(cd), &want);
             if (ok) {
                 apply = ina219_set_gain_ppm(cd, want);
             }
         } else {
-            ok = curve_solve_gain(sv / (int64_t)got, ref, 500000,
-                                  ina219_get_vbus_gain_ppm(vd), &want, "uV");
+            ok = curve_solve_gain(sv / (int64_t)got, ref, ina219_get_vbus_gain_ppm(vd), &want);
             if (ok) {
                 apply = ina219_set_vbus_gain_ppm(vd, want);
             }
@@ -2215,15 +2174,6 @@ static int cal_shunt(int argc, char **argv)
         }
         n = (uint32_t)ns;
     }
-    const int64_t aref = ref < 0 ? -(int64_t)ref : ref;
-    if (aref == 0) {
-        printf("the known current is exactly zero -- nothing to divide by.\n");
-        return 1;
-    }
-
-    ina219_handle_t pos = sensors_pos_dev(s_ctx->sensors);
-    ina219_handle_t neg = sensors_neg_dev(s_ctx->sensors);
-
     const bool was_streaming = config()->stream_enabled;
     config()->stream_enabled    = false;
     if (!sensor_lock_take(s_ctx, 2000)) {
@@ -2232,79 +2182,44 @@ static int cal_shunt(int argc, char **argv)
         return 1;
     }
     printf("KNOWN CURRENT %ld uA. Reading both sensors, %lu samples", ref, (unsigned long)n);
-    int64_t  sum_p = 0, sum_n = 0;
-    uint32_t got_p = 0, got_n = 0;
-    bool     sat_p = false, sat_n = false;
-    for (uint32_t i = 0; i < n; i++) {
-        ina219_sample_t smp;
-        if (pos && ina219_read_blocking(pos, &smp) == ESP_OK) {
-            sum_p += smp.v_shunt_uv;
-            got_p++;
-            sat_p |= smp.saturated;
-        }
-        if (neg && ina219_read_blocking(neg, &smp) == ESP_OK) {
-            sum_n += smp.v_shunt_uv;
-            got_n++;
-            sat_n |= smp.saturated;
-        }
-        if ((i & 7) == 7) {
-            printf(".");
-        }
-    }
+    sensors_shunt_cal_t cal;
+    const esp_err_t err = sensors_calibrate_shunt(s_ctx->sensors, ref, n,
+                                                  shunt_progress_dot, NULL, &cal);
     sensor_lock_give(s_ctx);
     config()->stream_enabled = was_streaming;
     printf("\n");
 
-    const int64_t v_p = got_p ? sum_p / got_p : 0;
-    const int64_t v_n = got_n ? sum_n / got_n : 0;
-    const int64_t a_p = v_p < 0 ? -v_p : v_p, a_n = v_n < 0 ? -v_n : v_n;
-    printf("  positive-pole sensor: %ld uV%s\n", (long)v_p, got_p ? (sat_p ? " SATURATED" : "") : " (absent)");
-    printf("  negative-pole sensor: %ld uV%s\n", (long)v_n, got_n ? (sat_n ? " SATURATED" : "") : " (absent)");
+    if (err == ESP_ERR_INVALID_ARG) {
+        printf("the known current is exactly zero -- nothing to divide by.\n");
+        return 1;
+    }
 
-    /* No validation: whichever sensor sees the larger magnitude is used, whatever
-     * that magnitude is. Only "neither sensor exists" stops it -- nothing to read. */
-    const bool use_neg = got_n && (!got_p || a_n >= a_p);
-    ina219_handle_t cd  = use_neg ? neg : pos;
-    const int64_t   v   = use_neg ? v_n : v_p;
-    if (!cd) {
+    printf("  positive-pole sensor: %ld uV%s\n", (long)cal.v_pos_uv,
+           cal.got_pos ? (cal.sat_pos ? " SATURATED" : "") : " (absent)");
+    printf("  negative-pole sensor: %ld uV%s\n", (long)cal.v_neg_uv,
+           cal.got_neg ? (cal.sat_neg ? " SATURATED" : "") : " (absent)");
+
+    if (err == ESP_ERR_NOT_FOUND) {
         printf("no sensor answered -- nothing to calibrate from.\n");
         return 1;
     }
-    (void)sat_p;
-    (void)sat_n;
-
-    /* A zero point on this same chip: keep it as a voltage (offset * R, before the
-     * sign), take it out of the reading, carry it to the new resistance. */
-    const bool    same_dev = cd == sensors_current_dev(s_ctx->sensors);
-    const int64_t r_old    = ina219_get_shunt_uohm(cd);
-    const int64_t v_off    = same_dev ? ((int64_t)ina219_get_offset_ua(cd) * r_old) / 1000000 : 0;
-    const int64_t vc       = v - v_off;
-    const int64_t avc      = vc < 0 ? -vc : vc;
-
-    /* R in uOhm = V[uV] / I[uA] * 1e6. No range check: whatever this works out to is
-     * set, and the driver's own floor (ina219_set_shunt_uohm) is the only backstop. */
-    const int64_t r_new = (avc * 1000000LL) / aref;
-
-    /* Mode first: it decides which device the rest applies to. */
-    const sensors_mode_t want_mode = use_neg ? SENSORS_MODE_N : SENSORS_MODE_P;
-    if (sensors_get_mode(s_ctx->sensors) != want_mode && got_p && got_n) {
-        sensors_set_mode(s_ctx->sensors, want_mode);
-        printf("  current is on the %s-pole sensor: install mode set to %s\n",
-               use_neg ? "negative" : "positive", sensors_mode_str(want_mode));
+    if (err != ESP_OK) {
+        printf("failed: %s\n", esp_err_to_name(err));
+        return 1;
     }
-    /* Raw voltage and reference must agree in sign after the board's own inversion. */
-    const bool invert = (vc < 0) != (ref < 0);
-    ina219_set_invert_sign(cd, invert);
-    ina219_set_shunt_uohm(cd, (uint32_t)r_new);
-    ina219_set_offset_ua(cd, same_dev && r_new ? (int32_t)((v_off * 1000000) / r_new) : 0);
-    ina219_set_gain_ppm(cd, 1000000);
+    if (cal.mode_changed) {
+        printf("  current is on the %s-pole sensor: install mode set to %s\n",
+               cal.mode == SENSORS_MODE_N ? "negative" : "positive",
+               sensors_mode_str(cal.mode));
+    }
     stats_reset(history_window());
 
     char b1[24], b2[24];
-    const int64_t fs_ua = ((int64_t)ina219_pga_fullscale_uv(ina219_get_pga_max(cd)) * 1000000LL) / r_new;
-    printf("shunt %ld uOhm (%s mOhm), sign %s, gain 1.000000 -> reads %s A\n",
-           (long)r_new, fixed_fmt(b1, sizeof(b1), r_new, 1000, 3),
-           invert ? "inverted" : "normal", FMT_A(b2, ref));
+    const int64_t fs_ua = ((int64_t)ina219_pga_fullscale_uv(ina219_get_pga_max(cal.dev)) *
+                           1000000LL) / (int64_t)cal.shunt_uohm;
+    printf("shunt %lu uOhm (%s mOhm), sign %s, gain 1.000000 -> reads %s A\n",
+           (unsigned long)cal.shunt_uohm, fixed_fmt(b1, sizeof(b1), cal.shunt_uohm, 1000, 3),
+           cal.inverted ? "inverted" : "normal", FMT_A(b2, ref));
     printf("full scale about +/-%s A\n", FMT_A(b1, fs_ua));
     cal_autosave();
     return 0;
@@ -2525,7 +2440,7 @@ static int cmd_cal(int argc, char **argv)
     }
 
     uint32_t want = 0;
-    if (!curve_solve_gain((int64_t)s.v_pack_uv, ref, 0, ina219_get_vbus_gain_ppm(vd), &want, "uV")) {
+    if (!curve_solve_gain((int64_t)s.v_pack_uv, ref, ina219_get_vbus_gain_ppm(vd), &want)) {
         printf("nothing changed.\n");
         return 1;
     }
