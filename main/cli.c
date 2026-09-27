@@ -1417,23 +1417,33 @@ static int cmd_curve(int argc, char **argv)
         }
         (void)sat;
 
-        uint32_t want = 0;
-        bool     ok;
+        uint32_t  want = 0;
+        bool      ok;
+        esp_err_t apply = ESP_OK;
         if (is_i) {
             ok = curve_solve_gain(si / (int64_t)got, ref, 10000,
                                   ina219_get_gain_ppm(cd), &want, "uA");
             if (ok) {
-                ESP_ERROR_CHECK(ina219_set_gain_ppm(cd, want));
+                apply = ina219_set_gain_ppm(cd, want);
             }
         } else {
             ok = curve_solve_gain(sv / (int64_t)got, ref, 500000,
                                   ina219_get_vbus_gain_ppm(vd), &want, "uV");
             if (ok) {
-                ESP_ERROR_CHECK(ina219_set_vbus_gain_ppm(vd, want));
+                apply = ina219_set_vbus_gain_ppm(vd, want);
             }
         }
         if (!ok) {
             printf("nothing changed.\n");
+            return 1;
+        }
+        if (apply != ESP_OK) {
+            /* Not ESP_ERROR_CHECK: with the solve's own +/-10%% band removed, a gain
+             * this far from 1.0 is now reachable, and the driver's hardware-sanity
+             * floor rejecting it must not crash the board -- it must just say no. */
+            printf("solved %lu ppm, but the driver refused it: %s (limited to\n"
+                   "900000..1100000 ppm). Nothing changed.\n",
+                   (unsigned long)want, esp_err_to_name(apply));
             return 1;
         }
         stats_reset(history_window());
@@ -2586,7 +2596,16 @@ static int cmd_cal(int argc, char **argv)
         printf("nothing changed.\n");
         return 1;
     }
-    ESP_ERROR_CHECK(ina219_set_vbus_gain_ppm(vd, want));
+    /* Not ESP_ERROR_CHECK: the solve itself no longer refuses an implausible ratio,
+     * so a far-off reference now reaches the driver's own 900000..1100000 ppm floor,
+     * and that must not abort the board -- it must just refuse the write. */
+    const esp_err_t apply = ina219_set_vbus_gain_ppm(vd, want);
+    if (apply != ESP_OK) {
+        printf("solved %lu ppm, but the driver refused it: %s (limited to\n"
+               "900000..1100000 ppm). Nothing changed.\n",
+               (unsigned long)want, esp_err_to_name(apply));
+        return 1;
+    }
     stats_reset(history_window());
     cal_autosave();
     cal_status(cd, vd);
