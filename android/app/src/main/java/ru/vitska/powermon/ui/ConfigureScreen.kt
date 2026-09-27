@@ -340,20 +340,6 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                 )
                 if (calBusy) Text("command in flight...", style = MaterialTheme.typography.labelMedium)
             }
-
-            Spacer(Modifier.height(12.dp))
-            Wrap {
-                OutlinedButton(onClick = {
-                    guarded(
-                        Confirmation(
-                            "Erase the stored calibration?",
-                            "Both live and stored trims are cleared. The board reverts to " +
-                                "nominal scaling until it is calibrated again.",
-                            "cal reset",
-                        )
-                    )
-                }) { Text("Erase") }
-            }
         }
 
         // ------------------------------------------------------------ the rest
@@ -648,13 +634,12 @@ private fun RawSensorsPanel(vm: MonitorViewModel) {
     val raw by vm.raw.collectAsState()
     val link by vm.link.collectAsState()
 
-    // Live, not on request: read both sensors as soon as this section is on screen,
-    // then every few seconds while it stays there.
+    // Once, not polled: a recurring `raw` every few seconds shares the board's single
+    // command channel with everything else on this screen -- including Set on the
+    // calibration fields -- and queuing behind it is what made Set look like it had
+    // stopped responding. Read once when the section appears; tap again to refresh.
     LaunchedEffect(link) {
-        while (link == Link.Ready) {
-            vm.launchRefreshRaw()
-            delay(3000)
-        }
+        if (link == Link.Ready) vm.launchRefreshRaw()
     }
 
     Text("BOTH SENSORS, READ DIRECTLY", style = MaterialTheme.typography.labelSmall)
