@@ -581,6 +581,25 @@ esp_err_t sensors_calibrate_shunt(sensors_handle_t h, int64_t known_ua, uint32_t
      * set, and the driver's own floor (ina219_set_shunt_uohm) is the only backstop. */
     const int64_t r_new = (avc * 1000000LL) / aref;
 
+    /*
+     * The resistance write first, and checked: it is the one value here with its own
+     * hardware floor (R_SHUNT_MIN_UOHM in ina219.c), and a shunt this low is exactly
+     * the "unknown, possibly tiny shunt" case this function exists for -- it is not
+     * unusual input. A refusal here must leave EVERYTHING else untouched too: a mode,
+     * sign or offset change with no matching resistance behind it is a worse, silently
+     * wrong state than simply refusing to calibrate. This is what used to reach
+     * cli.c as a `cal.shunt_uohm` of 0 and get divided into a "full scale" display --
+     * a real division by zero, not merely a wrong number on screen.
+     */
+    out->dev       = cd;
+    out->shunt_uohm = (uint32_t)r_new;
+    if (ina219_set_shunt_uohm(cd, (uint32_t)r_new) != ESP_OK) {
+        /* A distinct code from the zero-known-current ESP_ERR_INVALID_ARG above, so
+         * the caller can tell "bad input" from "the driver's own floor refused a
+         * computed value" and word the refusal accordingly. */
+        return ESP_ERR_INVALID_SIZE;
+    }
+
     /* Mode first: it decides which device the rest applies to. */
     const sensors_mode_t want_mode = use_neg ? SENSORS_MODE_N : SENSORS_MODE_P;
     out->mode_changed = (h->cfg.mode != want_mode) && got_p && got_n;
@@ -592,15 +611,12 @@ esp_err_t sensors_calibrate_shunt(sensors_handle_t h, int64_t known_ua, uint32_t
     /* Raw voltage and reference must agree in sign after the board's own inversion. */
     const bool invert = (vc < 0) != (known_ua < 0);
     ina219_set_invert_sign(cd, invert);
-    ina219_set_shunt_uohm(cd, (uint32_t)r_new);
     const int32_t new_offset = (same_dev && r_new) ? (int32_t)((v_off * 1000000) / r_new) : 0;
     ina219_set_offset_ua(cd, new_offset);
     ina219_set_gain_ppm(cd, 1000000);
 
-    out->dev        = cd;
-    out->inverted    = invert;
-    out->shunt_uohm  = (uint32_t)r_new;
-    out->offset_ua   = new_offset;
+    out->inverted   = invert;
+    out->offset_ua  = new_offset;
     return ESP_OK;
 }
 

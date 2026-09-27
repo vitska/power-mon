@@ -201,7 +201,10 @@ typedef struct {
  * and unity gain.
  *
  * Returns ESP_ERR_INVALID_ARG for a zero known current, ESP_ERR_NOT_FOUND if neither
- * pole answered.
+ * pole answered, ESP_ERR_INVALID_SIZE if the computed resistance is below the
+ * driver's own floor (ina219_set_shunt_uohm()) -- `out->shunt_uohm` is still filled
+ * in with what was computed so the caller can report it, but nothing was applied:
+ * mode, sign, offset and gain are all left exactly as they were.
  */
 esp_err_t sensors_calibrate_shunt(sensors_handle_t h, int64_t known_ua, uint32_t n_samples,
                                   sensors_progress_cb_t progress, void *progress_ctx,

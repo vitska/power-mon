@@ -2203,6 +2203,17 @@ static int cal_shunt(int argc, char **argv)
         printf("no sensor answered -- nothing to calibrate from.\n");
         return 1;
     }
+    if (err == ESP_ERR_INVALID_SIZE) {
+        /* Not a crash: cal.shunt_uohm is what was computed and rejected, so this
+         * prints it without ever dividing by it -- that division is exactly what
+         * used to happen here, and a value this low is now reachable with no
+         * validation upstream to catch it first. */
+        char br[24];
+        printf("computed %lu uOhm (%s mOhm), but the driver refused it: too low to\n"
+               "trust. Nothing changed -- mode, sign, offset and gain are unchanged.\n",
+               (unsigned long)cal.shunt_uohm, fixed_fmt(br, sizeof(br), cal.shunt_uohm, 1000, 3));
+        return 1;
+    }
     if (err != ESP_OK) {
         printf("failed: %s\n", esp_err_to_name(err));
         return 1;
