@@ -809,8 +809,19 @@ private fun MicroField(
             Button(onClick = { v?.let(onSet) }, enabled = v != null) { Text("Set") }
         }
         Current(current, current?.let { it + " " + unit })
-        if (prefill != null && text.isEmpty()) {
-            TextButton(onClick = { text = prefill }) { Text("use device reading " + prefill) }
+        // Always visible, whatever is typed and whether Set has been pressed -- this is
+        // what "does it match?" gets checked against, so it must not vanish the moment
+        // you start typing or the moment you tap Set.
+        if (prefill != null) {
+            if (text.isEmpty()) {
+                TextButton(onClick = { text = prefill }) { Text("device reads " + prefill + " " + unit + " now") }
+            } else {
+                Text(
+                    "device reads " + prefill + " " + unit + " now",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
         }
     }
 }
