@@ -973,6 +973,21 @@ esp_err_t fg_reset(void)
     return store();
 }
 
+char fg_state_code(fg_state_t s)
+{
+    switch (s) {
+    case FG_CHARGE:    return 'C';
+    case FG_ABSORB:    return 'A';
+    case FG_FULL:      return 'F';
+    case FG_DISCHARGE: return 'D';
+    case FG_EMPTY:     return 'E';
+    case FG_SETTLING:  return 'S';
+    case FG_REST:      return 'R';
+    case FG_UNKNOWN:
+    default:           return 'U';
+    }
+}
+
 const char *fg_state_str(fg_state_t s)
 {
     switch (s) {

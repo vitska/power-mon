@@ -60,6 +60,15 @@ fun HistoryChart(h: SocHistory?) {
                     Text("-${spanH / 2} h", style = MaterialTheme.typography.labelSmall)
                     Text("now", style = MaterialTheme.typography.labelSmall)
                 }
+                if (h.states.isNotEmpty()) {
+                    // What the band under the line means.
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        listOf("CHARGE", "FULL", "DISCHARGE", "EMPTY", "REST").forEach { s ->
+                            Text("■ " + s.lowercase(), color = stateColor(s),
+                                style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
             }
         }
     }
@@ -71,6 +80,9 @@ private fun Chart(h: SocHistory, spanH: Int) {
     val fill = line.copy(alpha = 0.18f)
     val grid = MaterialTheme.colorScheme.outlineVariant
     val ageNow = h.ageNowS()
+    // Resolved here: a Canvas draw scope is not composable, so it cannot read the theme.
+    val bandColor = listOf('C', 'A', 'F', 'D', 'E', 'S', 'R')
+        .associateWith { c -> stateColor(stateName(c)!!) }
 
     Canvas(Modifier.fillMaxWidth().height(140.dp)) {
         val w = size.width
@@ -120,5 +132,18 @@ private fun Chart(h: SocHistory, spanH: Int) {
             run.add(Offset(x, y))
         }
         flush()
+
+        // The gauge's state along the bottom, as a timeline under the SoC: each point's
+        // state holds for one interval after it, i.e. until the next point.
+        val band = 6.dp.toPx()
+        val step = (w * h.intervalS / span).toFloat()
+        for (i in 0 until minOf(n, h.states.size)) {
+            val c = bandColor[h.states[i]] ?: continue
+            val age = ageNow + (n - 1 - i).toLong() * h.intervalS
+            if (age > span) continue
+            val x = (w * (1.0 - age / span)).toFloat()
+            val x1 = minOf(w, x + step)
+            if (x1 > x) drawRect(c, Offset(x, ht - band), androidx.compose.ui.geometry.Size(x1 - x, band))
+        }
     }
 }

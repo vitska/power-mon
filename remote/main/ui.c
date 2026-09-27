@@ -175,6 +175,21 @@ static int rssi_bars(int8_t dbm)
 #define GY 162
 #define GW 284
 #define GH 74
+#define GBAND 4 /* rows at the bottom of the graph given to the state band */
+
+/* The gauge-state colour, the same one the mode label uses, from the monitor's
+ * one-letter code (fg_state_code()). 0 = draw nothing. */
+static uint16_t state_colour(char c)
+{
+    switch (c) {
+    case 'C': case 'A': return C_GREEN;
+    case 'F':           return C_CYAN;
+    case 'D':           return C_ORANGE;
+    case 'E':           return C_RED;
+    case 'S': case 'R': return C_GREY;
+    default:            return 0;
+    }
+}
 
 /*
  * The monitor's own history (`hist`): a point every 10 minutes for 48 hours, fetched
@@ -186,10 +201,11 @@ static void draw_graph(void)
 {
     static link_hist_t h;
     static int16_t     ycol[GW];
+    static char        scol[GW];
     link_history(&h);
 
     const int64_t span_s = (int64_t)s_span_h * 3600;
-    for (int c = 0; c < GW; c++) ycol[c] = -1;
+    for (int c = 0; c < GW; c++) { ycol[c] = -1; scol[c] = 0; }
     for (int i = 0; i < h.count; i++) {
         if (h.pts[i] == LINK_HIST_NONE) continue;
         /* Age of point i: the newest is age_s old, each earlier one interval older. */
@@ -197,6 +213,7 @@ static void draw_graph(void)
         if (age > span_s) continue;
         const int c = GW - 1 - (int)(age * (GW - 1) / span_s);
         ycol[c] = (int16_t)(GH - 1 - (int)h.pts[i] * (GH - 1) / 1000);
+        scol[c] = h.st[i];
     }
     /* Neighbouring points are one interval apart, which on the 12 h span is ~4 px:
      * interpolate between them so it draws a line, not a row of dots. Anything
@@ -207,6 +224,7 @@ static void draw_graph(void)
         if (last >= 0 && c - last > 1 && c - last <= join) {
             for (int k = last + 1; k < c; k++) {
                 ycol[k] = (int16_t)(ycol[last] + (ycol[c] - ycol[last]) * (k - last) / (c - last));
+                scol[k] = scol[last]; /* a state holds until the next point */
             }
         }
         last = c;
@@ -226,6 +244,11 @@ static void draw_graph(void)
                 if (yc >= 0) {
                     if (y == yc || y == yc + 1) px = line;
                     else if (y > yc)            px = fill;
+                }
+                /* The gauge's state along the bottom, as a timeline under the SoC. */
+                if (y >= GH - GBAND) {
+                    const uint16_t sc = state_colour(scol[c]);
+                    if (sc) px = sc;
                 }
                 buf[r * GW + c] = px;
             }

@@ -242,6 +242,10 @@ esp_err_t fg_save(void);
 
 const char *fg_state_str(fg_state_t s);
 
+/** One letter per state, for compact series like the SoC history:
+ *  U C A F D E S R (UNKNOWN CHARGE ABSORB FULL DISCHARGE EMPTY SETTLING REST). */
+char fg_state_code(fg_state_t s);
+
 #ifdef __cplusplus
 }
 #endif

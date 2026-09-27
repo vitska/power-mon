@@ -1926,6 +1926,11 @@ static int cmd_raw(int argc, char **argv)
  * gap -- a boot, or a moment the gauge had no SoC -- and must be drawn as a break.
  * The newest point was taken age_s seconds ago and each earlier one interval_s before
  * the next, which is all a client without a shared clock needs to place them.
+ *
+ * `state=` lines carry the fuel gauge's state at each point, one letter per point in
+ * the same order, 24 to a line (fg_state_code(): U C A F D E S R; `-` for none). A
+ * client concatenates them like the `soc=` lines; one that predates them skips the
+ * unknown key.
  */
 static int cmd_hist(int argc, char **argv)
 {
@@ -1935,8 +1940,9 @@ static int cmd_hist(int argc, char **argv)
         return 0;
     }
     static uint16_t pts[SOC_HIST_POINTS];
+    static char     st[SOC_HIST_POINTS];
     uint32_t        age = 0;
-    const int       n   = soc_history_get(pts, &age);
+    const int       n   = soc_history_get(pts, st, &age);
     printf("interval_s=%d\n", SOC_HIST_PERIOD_S);
     printf("capacity=%d\n", SOC_HIST_POINTS);
     printf("points=%d\n", n);
@@ -1949,6 +1955,10 @@ static int cmd_hist(int argc, char **argv)
             else                         printf("%u", (unsigned)pts[j]);
         }
         printf("\n");
+    }
+    for (int i = 0; i < n; i += 24) {
+        const int k = (n - i < 24) ? n - i : 24;
+        printf("state=%.*s\n", k, &st[i]);
     }
     return 0;
 }

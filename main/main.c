@@ -315,9 +315,11 @@ static void sampler_task(void *arg)
                 fg_status_t st;
                 fg_get(&st);
                 /* An unseeded gauge has no SoC worth recording: a gap, not a zero. */
-                soc_history_push(s.t_us, st.state == FG_UNKNOWN
-                                             ? SOC_HIST_NONE
-                                             : (uint16_t)st.soc_permille);
+                soc_history_push(s.t_us,
+                                 st.state == FG_UNKNOWN ? SOC_HIST_NONE
+                                                        : (uint16_t)st.soc_permille,
+                                 st.state == FG_UNKNOWN ? SOC_HIST_STATE_NONE
+                                                        : fg_state_code(st.state));
             }
             break;
         case ESP_ERR_NOT_FINISHED:

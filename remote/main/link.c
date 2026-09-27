@@ -96,7 +96,9 @@ static struct {
 
     /* SoC history: filled while a `hist` reply is parsed, published when it ends. */
     uint16_t    hist_tmp[LINK_HIST_MAX];
+    char        hist_tmp_st[LINK_HIST_MAX];
     int         hist_tmp_n;
+    int         hist_tmp_st_n;
     bool        hist_tmp_seen;
     uint32_t    hist_tmp_interval, hist_tmp_age;
     link_hist_t hist;
@@ -280,6 +282,11 @@ static void on_line(char *line)
                  t = strtok_r(NULL, ",", &save)) {
                 s.hist_tmp[s.hist_tmp_n++] = (t[0] == '-') ? LINK_HIST_NONE : (uint16_t)atoi(t);
             }
+        } else if (strcmp(k, "state") == 0) {
+            /* One state letter per point, same order as `soc=`, split over lines. */
+            for (const char *c = v; *c && *c != 0x0D && s.hist_tmp_st_n < LINK_HIST_MAX; c++) {
+                s.hist_tmp_st[s.hist_tmp_st_n++] = *c;
+            }
         } else if (strcmp(k, "points") == 0) {
             s.hist_tmp_seen = true;
         } else if (strcmp(k, "interval_s") == 0) {
@@ -346,6 +353,7 @@ static bool run(const char *cmd, int timeout_ms);
 static void fetch_history(void)
 {
     s.hist_tmp_n        = 0;
+    s.hist_tmp_st_n     = 0;
     s.hist_tmp_seen     = false;
     s.hist_tmp_interval = 600;
     s.hist_tmp_age      = 0;
@@ -356,9 +364,13 @@ static void fetch_history(void)
          * "unknown command". */
         s.hist.supported = s.hist_tmp_seen;
         if (s.hist_tmp_seen) {
+            /* A monitor from before 0.11.2 sends no states: those points have none. */
+            for (int i = s.hist_tmp_st_n; i < s.hist_tmp_n; i++) s.hist_tmp_st[i] = '-';
             const bool changed = s.hist.count != s.hist_tmp_n ||
-                                 memcmp(s.hist.pts, s.hist_tmp, s.hist_tmp_n * 2) != 0;
+                                 memcmp(s.hist.pts, s.hist_tmp, s.hist_tmp_n * 2) != 0 ||
+                                 memcmp(s.hist.st, s.hist_tmp_st, s.hist_tmp_n) != 0;
             memcpy(s.hist.pts, s.hist_tmp, s.hist_tmp_n * 2);
+            memcpy(s.hist.st, s.hist_tmp_st, s.hist_tmp_n);
             s.hist.count      = s.hist_tmp_n;
             s.hist.interval_s = s.hist_tmp_interval;
             s.hist.age_s      = s.hist_tmp_age;

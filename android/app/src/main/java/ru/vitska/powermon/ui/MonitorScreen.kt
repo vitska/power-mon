@@ -188,12 +188,19 @@ fun MonitorScreen(vm: MonitorViewModel, onPickDevice: () -> Unit = {}) {
  *  flat colour box read as its own separate panel against the near-black screen. */
 /** Same colours as the remote display uses for the same states. */
 @Composable
-private fun stateColor(state: String): androidx.compose.ui.graphics.Color = when (state) {
+internal fun stateColor(state: String): androidx.compose.ui.graphics.Color = when (state) {
     "FULL" -> androidx.compose.ui.graphics.Color(0xFF4DD0E1)
     "EMPTY" -> MaterialTheme.colorScheme.error
     "CHARGE", "ABSORB" -> MaterialTheme.colorScheme.primary
     "DISCHARGE" -> androidx.compose.ui.graphics.Color(0xFFFFA726)
     else -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+/** The history's one-letter state codes (fg_state_code() on the device). */
+internal fun stateName(code: Char): String? = when (code) {
+    'C' -> "CHARGE"; 'A' -> "ABSORB"; 'F' -> "FULL"; 'D' -> "DISCHARGE"
+    'E' -> "EMPTY"; 'S' -> "SETTLING"; 'R' -> "REST"
+    else -> null
 }
 
 @Composable

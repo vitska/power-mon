@@ -73,6 +73,9 @@ data class Handshake(
 data class SocHistory(
     val supported: Boolean,
     val points: List<Int?> = emptyList(),
+    /** The monitor's gauge state letter per point (U C A F D E S R, '-' none); shorter
+     *  than [points] -- or empty -- from firmware that does not send it. */
+    val states: List<Char> = emptyList(),
     val intervalS: Int = 600,
     val ageS: Long = 0,
     val fetchedAtMs: Long = 0,
@@ -83,6 +86,7 @@ data class SocHistory(
     companion object {
         fun parse(lines: List<String>): SocHistory {
             val pts = mutableListOf<Int?>()
+            val sts = mutableListOf<Char>()
             var interval = 600
             var age = 0L
             for (l in lines) {
@@ -94,9 +98,10 @@ data class SocHistory(
                     "interval_s" -> interval = v.toIntOrNull() ?: 600
                     "age_s" -> age = v.toLongOrNull() ?: 0
                     "soc" -> v.split(',').forEach { t -> pts.add(t.trim().toIntOrNull()) }
+                    "state" -> v.trim().forEach { sts.add(it) }
                 }
             }
-            return SocHistory(true, pts, interval, age, System.currentTimeMillis())
+            return SocHistory(true, pts, sts, interval, age, System.currentTimeMillis())
         }
     }
 }

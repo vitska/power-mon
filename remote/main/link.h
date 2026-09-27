@@ -95,6 +95,7 @@ typedef struct {
     uint32_t age_s;       /* how long ago the newest point was taken, as of now */
     uint32_t seq;         /* bumps on every fetch that changed anything */
     uint16_t pts[LINK_HIST_MAX];
+    char     st[LINK_HIST_MAX]; /* the monitor's gauge state letter per point, '-' none */
 } link_hist_t;
 
 void link_history(link_hist_t *out);

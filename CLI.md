@@ -525,10 +525,17 @@ points=145
 age_s=212
 soc=723,722,722,721,-,698,697,...     # 24 values a line, oldest first
 soc=...
+state=RRRRDDDDDDDDDDDDDSSRRRRR                # one letter a point, same order
+state=...
 exit 0
 ```
 
 - **Values:** SoC in **permille**. Concatenate every `soc=` line in order.
+- **States:** the fuel gauge's state at each point, one letter per point in the same
+  order, 24 a line; concatenate every `state=` line. `U` UNKNOWN, `C` CHARGE, `A`
+  ABSORB, `F` FULL, `D` DISCHARGE, `E` EMPTY, `S` SETTLING, `R` REST, `-` none (a gap,
+  or a point stored by firmware before 0.11.2). Fewer letters than points means the
+  missing ones have none. Clients older than this skip the unknown key.
 - **Gaps:** `-` is a gap: a boot, or a moment the gauge had no SoC. **Draw it as a
   break**, not a line across it.
 - **Placing points in time:** the newest point was taken `age_s` seconds ago, and each
@@ -537,7 +544,7 @@ exit 0
 - **Persistence:** the history is written to flash at every point, so an OTA update or a
   power cycle keeps it. The monitor cannot know how long it was off, so a restored
   history gets a `-` at boot.
-- **Size:** at most 288 points, about 1.4 KB over BLE. Polling it every couple of minutes
+- **Size:** at most 288 points, about 1.8 KB over BLE. Polling it every couple of minutes
   is fine.
 - **Firmware:** `hist` needs 0.9.0 or later. Older firmware answers `exit -2`.
 

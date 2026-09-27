@@ -70,6 +70,9 @@ sample_stats_t *history_window(void);
 #define SOC_HIST_POINTS   288  /* 48 h */
 #define SOC_HIST_PERIOD_S 600  /* 10 min */
 #define SOC_HIST_NONE     0xFFFF
+/* State letter for a point with none recorded: a gap, or a point stored by firmware
+ * before the state was kept alongside SoC. */
+#define SOC_HIST_STATE_NONE '-'
 
 /** Restores the stored history and marks the boot gap. Call once, after NVS is up. */
 void soc_history_init(void);
@@ -77,12 +80,14 @@ void soc_history_init(void);
 /** True when the next point is due. Cheap enough to call on every sample. */
 bool soc_history_due(int64_t now_us);
 
-/** Records one point, permille or SOC_HIST_NONE, and persists the ring. */
-void soc_history_push(int64_t now_us, uint16_t soc_permille);
+/** Records one point -- SoC in permille or SOC_HIST_NONE, and the gauge's state letter
+ *  (fg_state_code()) at that moment -- and persists the ring. */
+void soc_history_push(int64_t now_us, uint16_t soc_permille, char state);
 
-/** Copies the history, oldest first, into out[SOC_HIST_POINTS]. Returns how many points
- *  there are; *age_s is how long ago the newest was taken. */
-int soc_history_get(uint16_t *out, uint32_t *age_s);
+/** Copies the history, oldest first, into out[SOC_HIST_POINTS] and the state letters
+ *  into st[SOC_HIST_POINTS]. Returns how many points there are; *age_s is how long
+ *  ago the newest was taken. */
+int soc_history_get(uint16_t *out, char *st, uint32_t *age_s);
 
 /** Forgets the history, in RAM and in flash. */
 void soc_history_clear(void);

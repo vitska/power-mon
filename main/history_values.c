@@ -103,6 +103,7 @@ int32_t stats_mean_uv(const sample_stats_t *s)
 
 static struct {
     uint16_t ring[SOC_HIST_POINTS];
+    char     st[SOC_HIST_POINTS]; /* the gauge's state letter at each point */
     uint16_t head;          /* next slot to write */
     uint16_t count;
     int64_t  next_due_us;   /* 0 until the first sample sets the schedule */
@@ -116,9 +117,11 @@ static portMUX_TYPE s_hist_mux = portMUX_INITIALIZER_UNLOCKED;
 static void hist_save(void)
 {
     static uint16_t copy[SOC_HIST_POINTS];
+    static char     st[SOC_HIST_POINTS];
     uint16_t head, count;
     taskENTER_CRITICAL(&s_hist_mux);
     memcpy(copy, s_hist.ring, sizeof(copy));
+    memcpy(st, s_hist.st, sizeof(st));
     head  = s_hist.head;
     count = s_hist.count;
     taskEXIT_CRITICAL(&s_hist_mux);
@@ -128,16 +131,20 @@ static void hist_save(void)
         return;
     }
     nvs_set_blob(h, "ring", copy, sizeof(copy));
+    /* Its own key, not a wider "ring": history stored before states were kept still
+     * loads, just with no state against its points. */
+    nvs_set_blob(h, "st", st, sizeof(st));
     nvs_set_u16(h, "head", head);
     nvs_set_u16(h, "count", count);
     nvs_commit(h);
     nvs_close(h);
 }
 
-static void hist_append(uint16_t v)
+static void hist_append(uint16_t v, char state)
 {
     taskENTER_CRITICAL(&s_hist_mux);
     s_hist.ring[s_hist.head] = v;
+    s_hist.st[s_hist.head]   = state;
     s_hist.head              = (s_hist.head + 1) % SOC_HIST_POINTS;
     if (s_hist.count < SOC_HIST_POINTS) {
         s_hist.count++;
@@ -150,18 +157,23 @@ void soc_history_init(void)
     nvs_handle_t h;
     size_t       len = sizeof(s_hist.ring);
     uint16_t     head = 0, count = 0;
+    memset(s_hist.st, SOC_HIST_STATE_NONE, sizeof(s_hist.st));
     if (nvs_open(HIST_NS, NVS_READONLY, &h) == ESP_OK) {
         if (nvs_get_blob(h, "ring", s_hist.ring, &len) == ESP_OK && len == sizeof(s_hist.ring) &&
             nvs_get_u16(h, "head", &head) == ESP_OK && nvs_get_u16(h, "count", &count) == ESP_OK &&
             head < SOC_HIST_POINTS && count <= SOC_HIST_POINTS) {
             s_hist.head  = head;
             s_hist.count = count;
+            size_t slen = sizeof(s_hist.st);
+            if (nvs_get_blob(h, "st", s_hist.st, &slen) != ESP_OK || slen != sizeof(s_hist.st)) {
+                memset(s_hist.st, SOC_HIST_STATE_NONE, sizeof(s_hist.st));
+            }
         }
         nvs_close(h);
     }
     if (s_hist.count > 0) {
         /* However long the power was off, it was not measured. */
-        hist_append(SOC_HIST_NONE);
+        hist_append(SOC_HIST_NONE, SOC_HIST_STATE_NONE);
         s_hist.last_point_us = esp_timer_get_time();
         ESP_LOGI("hist", "restored %u SoC points (48 h ring), gap marked", s_hist.count);
     }
@@ -179,9 +191,9 @@ bool soc_history_due(int64_t now_us)
     return now_us >= s_hist.next_due_us;
 }
 
-void soc_history_push(int64_t now_us, uint16_t soc_permille)
+void soc_history_push(int64_t now_us, uint16_t soc_permille, char state)
 {
-    hist_append(soc_permille);
+    hist_append(soc_permille, state);
     s_hist.last_point_us = now_us;
     /* On schedule from the previous due time, not from now: a late sample must not
      * make every later point late too. */
@@ -191,12 +203,14 @@ void soc_history_push(int64_t now_us, uint16_t soc_permille)
     hist_save();
 }
 
-int soc_history_get(uint16_t *out, uint32_t *age_s)
+int soc_history_get(uint16_t *out, char *st, uint32_t *age_s)
 {
     taskENTER_CRITICAL(&s_hist_mux);
     const int n = s_hist.count;
     for (int i = 0; i < n; i++) {
-        out[i] = s_hist.ring[(s_hist.head - n + i + SOC_HIST_POINTS) % SOC_HIST_POINTS];
+        const int k = (s_hist.head - n + i + SOC_HIST_POINTS) % SOC_HIST_POINTS;
+        out[i] = s_hist.ring[k];
+        st[i]  = s_hist.st[k];
     }
     const int64_t last = s_hist.last_point_us;
     taskEXIT_CRITICAL(&s_hist_mux);
