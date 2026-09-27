@@ -1348,6 +1348,7 @@ static int cmd_curve(int argc, char **argv)
                                    : ina219_set_vbus_offset_uv(vd, (int32_t)v);
         if (err != ESP_OK) { printf("failed: %s\n", esp_err_to_name(err)); return 1; }
         stats_reset(history_window());
+        cal_autosave(); /* a direct set is as deliberate as `cal top`; save the same way */
         curve_show(cd, vd);
         return 0;
     }
@@ -1363,6 +1364,7 @@ static int cmd_curve(int argc, char **argv)
             return 1;
         }
         stats_reset(history_window());
+        cal_autosave();
         curve_show(cd, vd);
         return 0;
     }
@@ -1377,6 +1379,7 @@ static int cmd_curve(int argc, char **argv)
             return 1;
         }
         stats_reset(history_window());
+        cal_autosave();
         curve_show(cd, vd);
         return 0;
     }

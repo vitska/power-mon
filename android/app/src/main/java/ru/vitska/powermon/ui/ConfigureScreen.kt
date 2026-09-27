@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -197,10 +198,12 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                 ?.let { String.format("%+d uA", it) } ?: "—")
             KV("Current gain", cfg.gainPct("cal.i_gain_ppm")
                 ?.let { it + "  (" + cfg.str("cal.i_gain_ppm") + " ppm)" } ?: "—")
+            GainStepper("i", cfg.long("cal.i_gain_ppm"), set)
             KV("Voltage offset", cfg.long("cal.v_offset_uv")
                 ?.let { String.format("%+d uV", it) } ?: "—")
             KV("Voltage gain", cfg.gainPct("cal.v_gain_ppm")
                 ?.let { it + "  (" + cfg.str("cal.v_gain_ppm") + " ppm)" } ?: "—")
+            GainStepper("v", cfg.long("cal.v_gain_ppm"), set)
             KV("Harness path", cfg.milli("shunt.vpath_uohm", 3)?.let { it + " mOhm" } ?: "—")
             KV(
                 "Stored in flash",
@@ -908,6 +911,32 @@ private fun BatteryPicker(
                 "This firmware does not report a chemistry (before 0.8.0).",
                 style = MaterialTheme.typography.labelSmall,
             )
+        }
+    }
+}
+
+/**
+ * Nudges a gain by 1 ppm at a time: `curve i|v gain <ppm>`, sent and saved the moment
+ * it is tapped — a direct set persists immediately (CLI.md §6), unlike `cal top`'s
+ * confirmation-free but still averaged solve. For walking out the last count or two
+ * once a `cal top` solve has already done the coarse work.
+ */
+@Composable
+private fun GainStepper(chan: String, ppm: Long?, set: (String) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween) {
+        Text("fine-tune, 1 ppm", style = MaterialTheme.typography.labelSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedButton(
+                onClick = { ppm?.let { set("curve " + chan + " gain " + (it - 1)) } },
+                enabled = ppm != null,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+            ) { Text("−1") }
+            OutlinedButton(
+                onClick = { ppm?.let { set("curve " + chan + " gain " + (it + 1)) } },
+                enabled = ppm != null,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+            ) { Text("+1") }
         }
     }
 }

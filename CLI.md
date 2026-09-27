@@ -491,12 +491,13 @@ Guided two-point flow. Everything here persists automatically.
 | `cal top i <uA> [n]` | n 8–1024, default 64 | Current gain from a meter reading. ~17 s |
 | `cal top v <uV> [n]` | | Voltage gain. Use a reading taken **at rest** |
 | `cal vpath <uV>` | | Harness resistance, from a **loaded** terminal reading. Needs ≥ 0.5 A |
-| `cal save` | | Persist values set via `curve` |
+| `cal save` | | Persist whatever is live — needed after `curve ... ref`, which solves a value but does not save it |
 | `cal forget` | | Erase the stored calibration |
 | `cal reset [i\|v]` | | Clear live **and** stored trims |
 | `curve` | | Every term numerically, with the raw µ integers in parentheses |
-| `curve i offset <uA>` / `gain <ppm>` / `ref <uA> [n]` | gain 900000–1100000 | Direct set |
-| `curve v offset <uV>` / `gain <ppm>` / `ref <uV> [n]` / `divider <q16>` | divider ≥ 65536 | Direct set |
+| `curve i offset <uA>` / `gain <ppm>` | gain 900000–1100000 | Direct set. **Saved immediately**, like `cal` — a one-`ppm` nudge does not need a separate `cal save` |
+| `curve v offset <uV>` / `gain <ppm>` / `divider <q16>` | divider ≥ 65536 | Direct set. **Saved immediately** |
+| `curve i ref <uA> [n]` / `curve v ref <uV> [n]` | n 8–1024, default 64 | Solves gain from a meter reading at the present load — **not** saved on its own; follow with `cal save` |
 | `zero [n]` | | Older alias of `cal zero i` |
 | `gain [ppm]`, `offset [uA]`, `pga <auto\|1\|2\|4\|8>` | | Individual legacy accessors |
 
