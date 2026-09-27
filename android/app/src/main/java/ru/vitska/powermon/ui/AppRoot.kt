@@ -112,8 +112,8 @@ fun AppRoot(canScan: Boolean, vm: MonitorViewModel = viewModel()) {
             // gesture/button bar automatically; a plain Row does not, so without this
             // the tab bar draws underneath the system buttons instead of above them.
             Row(
-                Modifier.fillMaxWidth().navigationBarsPadding().height(52.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                Modifier.fillMaxWidth().navigationBarsPadding().height(36.dp),
+                verticalAlignment = Alignment.Bottom,
             ) {
                 CompactTabBar(
                     tab = tab,
@@ -126,13 +126,12 @@ fun AppRoot(canScan: Boolean, vm: MonitorViewModel = viewModel()) {
                     ),
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                 )
-                // Its own narrow strip beside the tabs, not overlaid on top of the last
-                // one's label -- same corner, but nothing to collide with.
+                // Its own narrow strip beside the tabs, pinned to the very bottom edge.
                 Text(
                     "v" + au.currentVersion,
                     fontSize = 9.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(end = 4.dp),
+                    modifier = Modifier.padding(end = 4.dp, bottom = 2.dp),
                 )
             }
         },
@@ -155,8 +154,9 @@ fun AppRoot(canScan: Boolean, vm: MonitorViewModel = viewModel()) {
 /**
  * A plain Row standing in for Material3's NavigationBar, which reserves a fixed 80dp
  * regardless of content -- more than a 4-tab switcher needs, and not something its own
- * API lets a caller shrink. This one is as tall as its icon+label actually are, so the
- * screen above it keeps more of the height for values worth looking at.
+ * API lets a caller shrink. Icon only, no label under it: the icon alone is enough to
+ * find a tab again once it has been tapped once, and dropping the label is most of
+ * what makes this narrower than a standard bottom nav bar.
  */
 @Composable
 private fun CompactTabBar(
@@ -170,14 +170,12 @@ private fun CompactTabBar(
             val selected = tab == index
             val color = if (selected) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurfaceVariant
-            Column(
+            Box(
                 Modifier.weight(1f).fillMaxHeight()
                     .clickable { onSelect(index) },
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
+                contentAlignment = Alignment.Center,
             ) {
                 Icon(icon, contentDescription = label, tint = color, modifier = Modifier.size(20.dp))
-                Text(label, color = color, fontSize = 10.sp)
             }
         }
     }
