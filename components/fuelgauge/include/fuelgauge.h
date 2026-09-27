@@ -43,12 +43,36 @@
 extern "C" {
 #endif
 
+/*
+ * THE STATE MACHINE. Every sample classifies the pack by current direction and
+ * voltage, and the state decides which anchor is looked for:
+ *
+ *   UNKNOWN   -> first sample seeds SoC from voltage
+ *   CHARGE    charging below absorption voltage (bulk)
+ *   ABSORB    charging at/above v_full (CV stage): waiting for the taper -> FULL
+ *   FULL      full anchor latched; held while the charger keeps it there
+ *   DISCHARGE discharging: watching for the empty endpoint -> EMPTY
+ *   EMPTY     empty anchor latched; held until charge flows in
+ *   SETTLING  idle, waiting t_rest for the voltage to relax to OCV
+ *   REST      idle and settled: SoC re-syncs to resting voltage
+ *
+ * FULL, EMPTY and a settled REST are REFERENCE POINTS: each is a moment where SoC is
+ * known from something other than the count. Capacity is learned from the charge
+ * drawn between two of them (see fuelgauge.c, "capacity learning"), so a discharge
+ * that never reaches 0 % still measures the battery.
+ *
+ * Only UNKNOWN/FULL/EMPTY keep their old names and values' meaning on the wire; the
+ * others are new strings in the telemetry `state` field.
+ */
 typedef enum {
-    FG_UNKNOWN = 0, /**< no trustworthy reference yet */
-    FG_COUNTING,    /**< integrating, current outside the deadband */
-    FG_RESTING,     /**< idle long enough that OCV is meaningful */
-    FG_FULL,        /**< absorption voltage reached at taper current */
-    FG_EMPTY,       /**< hit the empty endpoint under load */
+    FG_UNKNOWN = 0,
+    FG_CHARGE,
+    FG_ABSORB,
+    FG_FULL,
+    FG_DISCHARGE,
+    FG_EMPTY,
+    FG_SETTLING,
+    FG_REST,
 } fg_state_t;
 
 /*
@@ -120,7 +144,8 @@ typedef struct {
     uint32_t i_rated_ua;          /**< the rate the nameplate capacity assumes */
 
     /* Capacity learning (§5.4). */
-    uint16_t learn_min_depth_permille; /**< minimum discharge depth to learn from */
+    uint16_t learn_min_depth_permille; /**< minimum SoC change between two reference
+                                            points to learn capacity from */
     uint16_t learn_blend_q8;           /**< how hard to move capacity, 256 = snap */
 
     /* Appended, not inserted: config.c reads the stored blob by size, and a config
@@ -145,7 +170,7 @@ typedef struct {
         .ocv_blend_q8        = 64u,       /* 0.25, §8.3 tag 0x0023 */ \
         .peukert_q8          = 294u,      /* k 1.15, Appendix B lead-acid */ \
         .i_rated_ua          = 2200000u,  /* C/20 = 2.2 A: how car batteries are rated */ \
-        .learn_min_depth_permille = 600u, /* §8.3 tag 0x0024 */ \
+        .learn_min_depth_permille = 200u, /* 20 %: partial cycles are the norm */ \
         .learn_blend_q8      = 64u,       /* 0.25 -- learn slowly, it is a big claim */ \
         .chemistry           = FG_CHEM_FLOODED,                                  \
         .cells               = 6,                                                \
@@ -166,8 +191,9 @@ typedef struct {
     uint32_t   design_capacity_uah; /**< for SoH: learned / design */
     uint32_t   learn_count;         /**< how many times capacity has been learned */
     uint32_t   last_learn_uah;      /**< the last raw measurement, before blending */
-    int64_t    q_since_full_uas;    /**< effective charge since the last full anchor */
-    bool       have_full_anchor;    /**< a learn window is open */
+    bool       have_ref;            /**< a learning span is open from a reference point */
+    uint32_t   ref_soc_permille;    /**< SoC at that reference point */
+    int64_t    q_since_ref_uas;     /**< effective charge since it (negative = drawn) */
     uint32_t   rest_current_ua;     /**< below this |i| the pack counts as resting */
     uint32_t   peukert_factor_q16;  /**< the multiplier in use right now, for display */
 } fg_status_t;

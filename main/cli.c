@@ -1694,14 +1694,14 @@ static void soc_show(void)
         printf("             last raw measurement %s Ah\n",
                fixed_fmt(b1, sizeof(b1), st.last_learn_uah, 1000000, 2));
     }
-    if (st.have_full_anchor) {
-        printf("learn window OPEN: %s Ah drawn since full, needs %s Ah\n",
-               fixed_fmt(b1, sizeof(b1), -st.q_since_full_uas / 3600, 1000000, 2),
-               fixed_fmt(b2, sizeof(b2),
-                         ((int64_t)st.full_capacity_uah *
-                          c.learn_min_depth_permille) / 1000, 1000000, 2));
+    if (st.have_ref) {
+        printf("learn span   from %s %% reference, %s Ah since; learns at the next\n",
+               fixed_fmt(b1, sizeof(b1), st.ref_soc_permille, 10, 1),
+               fixed_fmt(b2, sizeof(b2), -st.q_since_ref_uas / 3600, 1000000, 3));
+        printf("             FULL/EMPTY/rest at least %s %% lower\n",
+               fixed_fmt(b3, sizeof(b3), c.learn_min_depth_permille, 10, 1));
     } else {
-        printf("learn window closed -- opens at the next full-charge anchor\n");
+        printf("learn span   none -- opens at the next FULL, EMPTY or settled rest\n");
     }
     printf("Peukert      k %s, x%s at the present rate\n",
            fixed_fmt(b1, sizeof(b1), c.peukert_q8, 256, 3),
@@ -1733,7 +1733,7 @@ static void soc_show(void)
            (unsigned long)c.t_rest_s, FMT_A(b3, st.rest_current_ua));
     printf("rated rate   %s A -- the current the nameplate capacity assumes\n",
            FMT_A(b1, c.i_rated_ua));
-    printf("learning     needs %lu.%lu %% depth, blended at %lu %%\n",
+    printf("learning     needs %lu.%lu %% SoC change between references, blend %lu %%\n",
            (unsigned long)(c.learn_min_depth_permille / 10),
            (unsigned long)(c.learn_min_depth_permille % 10),
            (unsigned long)((uint32_t)c.learn_blend_q8 * 100 / 256));
@@ -1756,7 +1756,7 @@ static int cmd_soc(int argc, char **argv)
         printf("  soc rest <s>           idle time before OCV is trusted\n");
         printf("  soc peukert <q8>       k in Q8: 256 = 1.00, 294 = 1.15 lead-acid\n");
         printf("  soc irated <uA>        rate the nameplate capacity assumes, C/20\n");
-        printf("  soc depth <permille>   discharge depth required to learn capacity\n");
+        printf("  soc depth <permille>   SoC change between references to learn capacity\n");
         printf("Everything here is stored in flash and survives a reboot.\n");
         return 0;
     }

@@ -53,16 +53,22 @@ static struct {
     bool       voltage_only;
 
     int64_t  last_t_us;
-    int64_t  idle_since_us;  /* 0 = not idle */
-    int64_t  full_since_us;  /* 0 = full condition not currently held */
+    int64_t  idle_since_us;  /* SETTLING/REST: when the settle timer last (re)started */
+    int64_t  full_since_us;  /* ABSORB: 0 = full-hold window not running */
     int64_t  full_sum_ua;    /* current summed over the full-hold window */
     uint32_t full_n;
-    int64_t  empty_since_us; /* 0 = empty condition not currently held */
+    int64_t  empty_since_us; /* DISCHARGE: 0 = empty condition not currently held */
     uint32_t s_since_anchor;
     int64_t  anchor_rem_us;  /* sub-second remainder carried into s_since_anchor */
 
-    int64_t  q_since_full_uas;  /* unclamped, for capacity learning */
-    bool     have_full_anchor;
+    /* Capacity learning: the span since the last reference point (FULL, EMPTY or a
+     * settled REST). q_since_ref is the effective (Peukert-adjusted) net charge, q_in
+     * the raw charge that went IN during it -- a span with real charging inside it is
+     * not a clean discharge measurement. */
+    bool     have_ref;
+    uint32_t ref_soc_permille;
+    int64_t  q_since_ref_uas;
+    int64_t  q_in_since_ref_uas;
     uint32_t learn_count;
     uint32_t last_learn_uah;
     uint32_t peukert_factor_q16;
@@ -392,9 +398,10 @@ static esp_err_t store(void)
     if (err == ESP_OK) err = nvs_set_i64 (h, "out", s_fg.cum_out_uas);
     if (err == ESP_OK) err = nvs_set_u32 (h, "cap", s_fg.full_capacity_uah);
     if (err == ESP_OK) err = nvs_set_u32 (h, "lrn", s_fg.learn_count);
-    if (err == ESP_OK) err = nvs_set_i64 (h, "qsf", s_fg.q_since_full_uas);
-    if (err == ESP_OK) err = nvs_set_u8  (h, "haf", s_fg.have_full_anchor ? 1 : 0);
-    if (err == ESP_OK) err = nvs_set_u8  (h, "st",  (uint8_t)s_fg.state);
+    if (err == ESP_OK) err = nvs_set_u8  (h, "hr",  s_fg.have_ref ? 1 : 0);
+    if (err == ESP_OK) err = nvs_set_u32 (h, "rsc", s_fg.ref_soc_permille);
+    if (err == ESP_OK) err = nvs_set_i64 (h, "qsr", s_fg.q_since_ref_uas);
+    if (err == ESP_OK) err = nvs_set_i64 (h, "qir", s_fg.q_in_since_ref_uas);
     if (err == ESP_OK) err = nvs_set_u8  (h, "ver", FG_VER);
     if (err == ESP_OK) err = nvs_commit(h);
 
@@ -445,11 +452,14 @@ esp_err_t fg_init(void)
     }
     if (nvs_get_i64(h, "in",  &i64) == ESP_OK) s_fg.cum_in_uas  = i64;
     if (nvs_get_i64(h, "out", &i64) == ESP_OK) s_fg.cum_out_uas = i64;
-    if (nvs_get_u8 (h, "st",  &u8)  == ESP_OK) s_fg.state = (fg_state_t)u8;
     if (nvs_get_u32(h, "lrn", &u32) == ESP_OK) s_fg.learn_count = u32;
-    if (nvs_get_i64(h, "qsf", &i64) == ESP_OK) s_fg.q_since_full_uas = i64;
-    if (nvs_get_u8 (h, "haf", &u8)  == ESP_OK) s_fg.have_full_anchor = (u8 != 0);
+    if (nvs_get_u8 (h, "hr",  &u8)  == ESP_OK) s_fg.have_ref = (u8 != 0);
+    if (nvs_get_u32(h, "rsc", &u32) == ESP_OK) s_fg.ref_soc_permille = u32;
+    if (nvs_get_i64(h, "qsr", &i64) == ESP_OK) s_fg.q_since_ref_uas = i64;
+    if (nvs_get_i64(h, "qir", &i64) == ESP_OK) s_fg.q_in_since_ref_uas = i64;
     nvs_close(h);
+    /* The state itself is not restored: it is re-derived from the first samples.
+     * UNKNOWN with voltage_only false means "count restored, do not re-seed". */
 
     /*
      * A restored count is stale by however long the power was off, and there is no way
@@ -476,7 +486,140 @@ esp_err_t fg_init(void)
     return ESP_OK;
 }
 
+/* --- capacity learning (§5.4) ------------------------------------------------ */
+
+/*
+ * Blends a raw capacity measurement into the learned capacity.
+ *
+ * Plausibility is deliberately wide: an old battery really does drop to a tenth of
+ * its nameplate (45 Ah rated, 4 Ah left), and a gauge that refuses to believe that
+ * keeps showing SoC against capacity the pack no longer has. Below 1/20 or above 1.5x
+ * nameplate is a measurement fault (a mis-set shunt, a missed anchor), not a battery.
+ *
+ * The FIRST measurement replaces the nameplate outright: the nameplate is a claim
+ * about a new battery, not a measurement of this one, and blending a real 4 Ah
+ * against it at 25 % a cycle would take a dozen cycles to get close. After that,
+ * each measurement moves capacity in proportion to how deep its span was -- a 20 %
+ * span is weaker evidence than an 80 % one.
+ */
+static bool learn_capacity(uint32_t measured_uah, uint32_t depth_permille)
+{
+    s_fg.last_learn_uah = measured_uah;
+
+    const uint32_t design = s_fg.cfg.design_capacity_uah;
+    if (measured_uah < design / 20 || measured_uah > design + design / 2) {
+        ESP_LOGW(TAG, "capacity measurement %lu uAh implausible against %lu nameplate "
+                      "-- ignored",
+                 (unsigned long)measured_uah, (unsigned long)design);
+        return false;
+    }
+
+    if (s_fg.learn_count == 0) {
+        s_fg.full_capacity_uah = measured_uah;
+    } else {
+        uint32_t w = (uint32_t)s_fg.cfg.learn_blend_q8 * depth_permille / 500;
+        if (w < 1)   w = 1;
+        if (w > 256) w = 256;
+        const int64_t delta = (int64_t)measured_uah - (int64_t)s_fg.full_capacity_uah;
+        s_fg.full_capacity_uah =
+            (uint32_t)((int64_t)s_fg.full_capacity_uah + (delta * (int64_t)w) / 256);
+    }
+    s_fg.learn_count++;
+    ESP_LOGI(TAG, "learned capacity: measured %lu uAh over %lu.%lu%% -> %lu uAh",
+             (unsigned long)measured_uah,
+             (unsigned long)(depth_permille / 10), (unsigned long)(depth_permille % 10),
+             (unsigned long)s_fg.full_capacity_uah);
+    return true;
+}
+
+/*
+ * A REFERENCE POINT: SoC is known right now from something other than the count --
+ * FULL (100 %), EMPTY (0 %), or a settled resting voltage. If a span is open from an
+ * earlier reference, the charge drawn between the two against the SoC they differ by
+ * IS the capacity:
+ *
+ *     capacity = charge drawn / (SoC_before - SoC_now)
+ *
+ * so any discharge deep enough to clear learn_min_depth measures the battery, whether
+ * or not it ever reaches 0 %. Learned only on DISCHARGE spans: charge going in exceeds
+ * the capacity it restores (lead-acid coulombic efficiency is well under 100 %), so a
+ * span with real charging in it would inflate the figure.
+ *
+ * Returns true if capacity was learned, so the caller snaps the count to the
+ * reference rather than blending toward it with a capacity that just changed.
+ */
+static bool ref_point(uint32_t soc_now)
+{
+    bool learned = false;
+    if (s_fg.have_ref && soc_now < s_fg.ref_soc_permille) {
+        const uint32_t depth = s_fg.ref_soc_permille - soc_now;
+        const int64_t  drawn = -s_fg.q_since_ref_uas;
+        const int64_t  in_max = capacity_uas() / 50; /* 2 %: float/ripple, not a charge */
+        if (depth >= s_fg.cfg.learn_min_depth_permille && drawn > 0 &&
+            s_fg.q_in_since_ref_uas <= in_max) {
+            const uint32_t measured_uah = (uint32_t)((drawn * 1000 / depth) / 3600);
+            learned = learn_capacity(measured_uah, depth);
+        }
+    }
+    s_fg.have_ref           = true;
+    s_fg.ref_soc_permille   = soc_now;
+    s_fg.q_since_ref_uas    = 0;
+    s_fg.q_in_since_ref_uas = 0;
+    s_fg.dirty              = true;
+    return learned;
+}
+
 /* --- the gauge ----------------------------------------------------------------- */
+
+/* Entry actions: timers belong to the state that runs them, so each starts fresh. */
+static void enter(fg_state_t next, int64_t now)
+{
+    if (next == s_fg.state) {
+        return;
+    }
+    s_fg.full_since_us  = 0;
+    s_fg.empty_since_us = 0;
+    if (next == FG_SETTLING) {
+        s_fg.idle_since_us = now;
+    }
+    s_fg.state = next;
+    s_fg.dirty = true;
+}
+
+/* A settled rest: re-sync the count to the resting voltage (§5.4). */
+static void rest_resync(void)
+{
+    const uint32_t ocv_soc = soc_from_ocv(s_fg.ocv_uv);
+
+    if (s_fg.voltage_only) {
+        /* No count worth keeping: take the voltage outright, flat curve or not. */
+        set_charge_from_soc(ocv_soc);
+        s_fg.voltage_only   = false;
+        s_fg.s_since_anchor = 0;
+        ref_point(ocv_soc);
+        return;
+    }
+
+    /* On the flat part of a flat chemistry (LiFePO4, NiMH) the resting voltage says
+     * too little to correct a count, or to measure capacity against. */
+    if (ocv_soc > chem()->trust_lo_permille && ocv_soc < chem()->trust_hi_permille) {
+        return;
+    }
+
+    const bool learned = ref_point(ocv_soc);
+    if (learned || s_fg.s_since_anchor == UINT32_MAX) {
+        /* Snap: either capacity just changed under the count, or the count was
+         * carried over from before boot and never checked against this pack. */
+        set_charge_from_soc(ocv_soc);
+    } else {
+        /* Blend, do not snap: a rested OCV is good but not exact. */
+        const int64_t target = (capacity_uas() * (int64_t)ocv_soc) / 1000;
+        const int64_t delta  = target - s_fg.charge_uas;
+        s_fg.charge_uas += (delta * (int64_t)s_fg.cfg.ocv_blend_q8) / 256;
+    }
+    s_fg.s_since_anchor = 0;
+    s_fg.dirty          = true;
+}
 
 void fg_update(const power_sample_t *s)
 {
@@ -506,7 +649,11 @@ void fg_update(const power_sample_t *s)
         (s->i_ua > -(int32_t)s_fg.cfg.i_deadband_ua &&
          s->i_ua < (int32_t)s_fg.cfg.i_deadband_ua);
 
-    if (dt > 0 && dt < DEAD_GAP_US && !in_deadband) {
+    if (dt >= DEAD_GAP_US) {
+        /* Charge flowed that was never measured: the open learning span no longer
+         * knows how much was drawn, so it closes rather than learn from a hole. */
+        s_fg.have_ref = false;
+    } else if (dt > 0 && !in_deadband) {
         /* A gap between MAX_GAP_US and DEAD_GAP_US still integrates -- at the last
          * known current, which is the honest choice when the alternative is to
          * discard real charge -- but it is not treated as an anchor. */
@@ -517,7 +664,8 @@ void fg_update(const power_sample_t *s)
         /* Lifetime counters take the RAW coulombs. These answer "how much charge
          * passed through the shunt", which is a measurement, not a model. */
         if (dq > 0) {
-            s_fg.cum_in_uas += dq;
+            s_fg.cum_in_uas         += dq;
+            s_fg.q_in_since_ref_uas += dq;
         } else {
             s_fg.cum_out_uas -= dq;
         }
@@ -529,57 +677,72 @@ void fg_update(const power_sample_t *s)
             dq_eff = -peukert_scale(-dq, -(int64_t)s->i_ua);
         }
 
-        s_fg.charge_uas       += dq_eff;
-        s_fg.q_since_full_uas += dq_eff;
+        s_fg.charge_uas      += dq_eff;
+        s_fg.q_since_ref_uas += dq_eff;
 
         /* Clamp to the physical range. Hitting a clamp is information, not an error:
-         * it means the count and the pack have diverged, and the next OCV anchor is
-         * what fixes it. */
+         * it means the count and the pack have diverged, and the next reference point
+         * is what fixes it. */
         if (s_fg.charge_uas < 0) {
             s_fg.charge_uas = 0;
         } else if (s_fg.charge_uas > capacity_uas()) {
             s_fg.charge_uas = capacity_uas();
         }
-        s_fg.voltage_only = false;
-        s_fg.dirty        = true;
-    }
-
-    /* --- idle / rest tracking ------------------------------------------------- */
-    const bool at_rest = s->i_ua > -(int32_t)rest_current_ua() &&
-                         s->i_ua < (int32_t)rest_current_ua();
-    if (at_rest) {
-        if (s_fg.idle_since_us == 0) {
-            s_fg.idle_since_us = now;
-        }
-    } else {
-        s_fg.idle_since_us = 0;
-        if (s_fg.state == FG_RESTING) {
-            s_fg.state = FG_COUNTING;
-        }
+        s_fg.dirty = true;
     }
 
     /* Sub-second remainder carried, not dropped: samples arrive every ~100 ms, and
-     * truncating each dt to whole seconds added 0 every time -- "last anchor" stayed
-     * at 0 s forever. */
+     * truncating each dt to whole seconds added 0 every time. */
     if (dt > 0 && s_fg.s_since_anchor != UINT32_MAX) {
         s_fg.anchor_rem_us  += dt;
         s_fg.s_since_anchor += (uint32_t)(s_fg.anchor_rem_us / 1000000);
         s_fg.anchor_rem_us  %= 1000000;
     }
 
-    /* --- full detection: absorption voltage AND taper current (§5.4 A) -------- */
-    const bool charging = s->i_ua > (int32_t)s_fg.cfg.i_deadband_ua;
-    if (charging && s_fg.state == FG_EMPTY) {
-        s_fg.state = FG_COUNTING; /* charge is going in: no longer at the empty point */
+    /* --- bootstrap --------------------------------------------------------------- */
+    if (s_fg.state == FG_UNKNOWN && s_fg.voltage_only) {
+        if (!s->v_valid) {
+            return;
+        }
+        /* First-ever reading and nothing stored: seed from the compensated voltage so
+         * the display is useful immediately. Still voltage_only, so the first settled
+         * rest replaces it rather than blending against a guess. */
+        set_charge_from_soc(soc_from_ocv(s_fg.ocv_uv));
     }
-    /*
-     * The taper is judged on the MEAN current over the hold window, not on every
-     * sample. A CV charger's current ripples, and with the taper checked per sample a
-     * single reading above it restarted the 60 s window -- at 1.39 A against a
-     * 1.47 A taper the ripple did that often enough that full never latched and SoC
-     * sat near 0 % at 14.8 V.
-     */
-    if (s->v_valid && charging && s->v_pack_uv >= s_fg.cfg.v_full_uv) {
+
+    /* --- classify: which state the pack is in NOW ---------------------------------
+     *
+     * Direction uses the REST threshold, not the integration deadband: resting only
+     * has to mean "too little current for the terminal voltage to be far from OCV",
+     * and a pack with a monitor on it always draws a few milliamps. Absorption is
+     * checked first and on the deadband: at v_full a pack is on a charger however
+     * small the current, and a charger tapering below the rest threshold must still
+     * reach FULL. FULL and EMPTY are sticky while the direction that produced them
+     * continues; resting after either goes through SETTLING like any other rest. */
+    const int32_t ri = (int32_t)rest_current_ua();
+    const bool at_absorb = s->v_valid && s->v_pack_uv >= s_fg.cfg.v_full_uv &&
+                           s->i_ua > (int32_t)s_fg.cfg.i_deadband_ua;
+    fg_state_t next;
+    if (at_absorb) {
+        next = (s_fg.state == FG_FULL) ? FG_FULL : FG_ABSORB;
+    } else if (s->i_ua > ri) {
+        next = (s_fg.state == FG_FULL) ? FG_FULL : FG_CHARGE;
+    } else if (s->i_ua < -ri) {
+        next = (s_fg.state == FG_EMPTY) ? FG_EMPTY : FG_DISCHARGE;
+    } else {
+        next = (s_fg.state == FG_REST) ? FG_REST : FG_SETTLING;
+    }
+    enter(next, now);
+
+    /* --- per-state work: each state looks for its own anchor ---------------------- */
+    switch (s_fg.state) {
+    case FG_ABSORB: {
+        /*
+         * FULL (§5.4 A): absorption voltage AND taper current, held. The taper is
+         * judged on the MEAN current over the hold window, not on every sample: a CV
+         * charger's current ripples, and a per-sample check restarted the window on
+         * every excursion above the taper, so full never latched.
+         */
         if (s_fg.full_since_us == 0) {
             s_fg.full_since_us = now;
             s_fg.full_sum_ua   = 0;
@@ -589,148 +752,74 @@ void fg_update(const power_sample_t *s)
         s_fg.full_n++;
         if ((now - s_fg.full_since_us) >= (int64_t)s_fg.cfg.t_full_hold_s * 1000000) {
             const int64_t mean_ua = s_fg.full_sum_ua / (int64_t)s_fg.full_n;
+            s_fg.full_since_us = 0; /* judge the next window afresh */
             if (mean_ua <= (int64_t)s_fg.cfg.i_taper_ua) {
-                /* Three conditions together, held: this is the strongest anchor a
-                 * gauge gets, so it snaps rather than blends. */
+                ref_point(1000);
                 s_fg.charge_uas     = capacity_uas();
                 s_fg.rem_frac       = 0;
-                s_fg.state          = FG_FULL;
                 s_fg.s_since_anchor = 0;
                 s_fg.voltage_only   = false;
-                s_fg.dirty          = true;
-                /* Open a learning window: from a known-full pack, the charge that
-                 * comes out before the empty anchor IS the capacity. */
-                s_fg.q_since_full_uas = 0;
-                s_fg.have_full_anchor = true;
+                enter(FG_FULL, now);
             }
-            s_fg.full_since_us = 0; /* judge the next window afresh */
         }
-    } else {
-        s_fg.full_since_us = 0;
-        if (s_fg.state == FG_FULL && !charging) {
-            s_fg.state = FG_COUNTING;
-        }
+        break;
     }
 
-    /* --- empty detection: at the endpoint under load (§5.4 B) ----------------- */
-    const bool discharging = s->i_ua < -(int32_t)s_fg.cfg.i_deadband_ua;
-    const uint32_t floor_uv =
-        (uint32_t)(((uint64_t)s_fg.cfg.v_0pct_uv * EMPTY_FLOOR_Q8) / 256);
-    const bool empty_now = s->v_valid && discharging && s->v_pack_uv >= floor_uv &&
-                           s_fg.ocv_uv <= s_fg.cfg.v_0pct_uv;
-    if (!empty_now) {
-        s_fg.empty_since_us = 0;
-    } else if (s_fg.empty_since_us == 0) {
-        s_fg.empty_since_us = now;
-    }
-    if (empty_now &&
-        (now - s_fg.empty_since_us) >= (int64_t)EMPTY_HOLD_S * 1000000) {
-        s_fg.empty_since_us = 0;
+    case FG_DISCHARGE: {
         /*
-         * CAPACITY LEARNING (§5.4). A full anchor followed by an empty anchor brackets
-         * a complete discharge, and the effective charge that flowed between them is
-         * the pack's real capacity.
-         *
-         * Learned only in this direction, never full-from-empty: lead-acid coulombic
-         * efficiency is well under 100 %, so charge going IN exceeds the capacity it
-         * restores and learning from a recharge would inflate the figure every cycle.
+         * EMPTY (§5.4 B): the compensated voltage at the 0 % endpoint under load,
+         * held. Below EMPTY_FLOOR of v_0pct it is not a battery at its endpoint but
+         * an absent one or a disconnected VBUS, and must not anchor anything.
          */
-        if (s_fg.have_full_anchor) {
-            const int64_t consumed = -s_fg.q_since_full_uas; /* positive */
-            const int64_t needed   =
-                (capacity_uas() * (int64_t)s_fg.cfg.learn_min_depth_permille) / 1000;
-
-            if (consumed >= needed && consumed > 0) {
-                const uint32_t measured_uah = (uint32_t)(consumed / 3600);
-                s_fg.last_learn_uah = measured_uah;
-
-                /* Reject the implausible before blending: a capacity outside half to
-                 * one-and-a-half times nameplate is a measurement fault (a missed
-                 * anchor, a mis-set shunt), not a battery that changed. */
-                const uint32_t lo = s_fg.cfg.design_capacity_uah / 2;
-                const uint32_t hi = s_fg.cfg.design_capacity_uah +
-                                    s_fg.cfg.design_capacity_uah / 2;
-                if (measured_uah >= lo && measured_uah <= hi) {
-                    const int64_t delta =
-                        (int64_t)measured_uah - (int64_t)s_fg.full_capacity_uah;
-                    s_fg.full_capacity_uah = (uint32_t)(
-                        (int64_t)s_fg.full_capacity_uah +
-                        (delta * (int64_t)s_fg.cfg.learn_blend_q8) / 256);
-                    s_fg.learn_count++;
-                    /* All three narrowed to 32 bits deliberately: see the
-                     * nano-format note in fg_init(). */
-                    ESP_LOGI(TAG, "learned capacity: measured %lu uAh over %lu%% "
-                                  "depth -> %lu uAh (blended)",
-                             (unsigned long)measured_uah,
-                             (unsigned long)((consumed * 100) / capacity_uas()),
-                             (unsigned long)s_fg.full_capacity_uah);
-                } else {
-                    ESP_LOGW(TAG, "capacity measurement %lu uAh implausible against "
-                                  "%lu nameplate -- ignored",
-                             (unsigned long)measured_uah,
-                             (unsigned long)s_fg.cfg.design_capacity_uah);
-                }
-            }
-            s_fg.have_full_anchor = false; /* one learn per full-to-empty span */
-        }
-
-        s_fg.charge_uas     = 0;
-        s_fg.rem_frac       = 0;
-        s_fg.state          = FG_EMPTY;
-        s_fg.s_since_anchor = 0;
-        s_fg.voltage_only   = false;
-        s_fg.dirty          = true;
-    }
-
-    /* --- resting OCV re-sync (§5.4) ------------------------------------------- */
-    if (s->v_valid && s_fg.idle_since_us != 0 &&
-        (now - s_fg.idle_since_us) >= (int64_t)s_fg.cfg.t_rest_s * 1000000) {
-
-        const uint32_t ocv_soc = soc_from_ocv(s_fg.ocv_uv);
-
-        /* On the flat part of a flat chemistry (LiFePO4, NiMH) the resting voltage
-         * says too little to correct a count with; see fg_chem_profile_t. */
-        const bool flat = ocv_soc > chem()->trust_lo_permille &&
-                          ocv_soc < chem()->trust_hi_permille;
-        bool anchored = true;
-
-        if (s_fg.voltage_only || s_fg.state == FG_UNKNOWN) {
-            /* No count worth keeping: take the voltage estimate outright, flat curve
-             * or not -- a rough guess beats none. */
-            set_charge_from_soc(ocv_soc);
-            s_fg.voltage_only = false;
-        } else if (flat) {
-            /* Keep the count. It is not an anchor, so the time since one keeps
-             * running and a restored count stays marked unverified. */
-            anchored = false;
-        } else if (s_fg.s_since_anchor == UINT32_MAX) {
-            /* A count carried over from before boot has never been checked against
-             * this pack in this power-up (see fg_init), so the first rest replaces
-             * it rather than nudging it: blending a stale 0 % toward the truth at
-             * 25 % per rest period takes hours to undo. */
-            set_charge_from_soc(ocv_soc);
-        } else {
-            /* Blend, do not snap. A rested OCV is good but not exact, and snapping
-             * would make the displayed SoC jump every time the load goes away. */
-            const int64_t target = (capacity_uas() * (int64_t)ocv_soc) / 1000;
-            const int64_t delta  = target - s_fg.charge_uas;
-            s_fg.charge_uas += (delta * (int64_t)s_fg.cfg.ocv_blend_q8) / 256;
-        }
-        s_fg.state = FG_RESTING;
-        if (anchored) {
+        const uint32_t floor_uv =
+            (uint32_t)(((uint64_t)s_fg.cfg.v_0pct_uv * EMPTY_FLOOR_Q8) / 256);
+        const bool empty_now = s->v_valid && s->v_pack_uv >= floor_uv &&
+                               s_fg.ocv_uv <= s_fg.cfg.v_0pct_uv;
+        if (!empty_now) {
+            s_fg.empty_since_us = 0;
+        } else if (s_fg.empty_since_us == 0) {
+            s_fg.empty_since_us = now;
+        } else if ((now - s_fg.empty_since_us) >= (int64_t)EMPTY_HOLD_S * 1000000) {
+            ref_point(0);
+            s_fg.charge_uas     = 0;
+            s_fg.rem_frac       = 0;
             s_fg.s_since_anchor = 0;
+            s_fg.voltage_only   = false;
+            enter(FG_EMPTY, now);
         }
-        s_fg.idle_since_us  = now; /* re-arm; blend again after another rest period */
-        s_fg.dirty          = true;
-    } else if (s_fg.state == FG_UNKNOWN && s->v_valid) {
-        /*
-         * First-ever reading and nothing stored: seed from the compensated voltage so
-         * the display is useful immediately. Marked voltage_only, so the first real
-         * rest replaces it rather than blending against a guess.
-         */
-        set_charge_from_soc(soc_from_ocv(s_fg.ocv_uv));
-        s_fg.state        = FG_COUNTING;
-        s_fg.voltage_only = true;
+        break;
+    }
+
+    case FG_FULL:
+    case FG_EMPTY:
+        /* Held at an endpoint: the reference stays pinned to it. Hours on a float
+         * charger after FULL would otherwise count as charge going in during the
+         * span and block the discharge after it from ever being learned from. */
+        s_fg.q_since_ref_uas    = 0;
+        s_fg.q_in_since_ref_uas = 0;
+        break;
+
+    case FG_SETTLING:
+        if (s->v_valid &&
+            (now - s_fg.idle_since_us) >= (int64_t)s_fg.cfg.t_rest_s * 1000000) {
+            rest_resync();
+            s_fg.idle_since_us = now;
+            enter(FG_REST, now);
+        }
+        break;
+
+    case FG_REST:
+        /* Keep re-syncing while the rest continues: the voltage is still relaxing,
+         * and each period brings it closer to true OCV. */
+        if (s->v_valid &&
+            (now - s_fg.idle_since_us) >= (int64_t)s_fg.cfg.t_rest_s * 1000000) {
+            rest_resync();
+            s_fg.idle_since_us = now;
+        }
+        break;
+
+    default:
+        break;
     }
 
     /* --- persistence policy (§6.3) ------------------------------------------- */
@@ -767,8 +856,9 @@ void fg_get(fg_status_t *out)
     out->design_capacity_uah = s_fg.cfg.design_capacity_uah;
     out->learn_count       = s_fg.learn_count;
     out->last_learn_uah    = s_fg.last_learn_uah;
-    out->q_since_full_uas  = s_fg.q_since_full_uas;
-    out->have_full_anchor  = s_fg.have_full_anchor;
+    out->have_ref          = s_fg.have_ref;
+    out->ref_soc_permille  = s_fg.ref_soc_permille;
+    out->q_since_ref_uas   = s_fg.q_since_ref_uas;
     out->peukert_factor_q16 = s_fg.peukert_factor_q16 ? s_fg.peukert_factor_q16
                                                       : (1u << 16);
 }
@@ -812,6 +902,9 @@ esp_err_t fg_set_config(const fg_config_t *cfg)
         const uint32_t soc = soc_from_charge();
         s_fg.full_capacity_uah = cfg->design_capacity_uah;
         set_charge_from_soc(soc);
+        /* A deliberately set capacity replaces what was learned; the next
+         * measurement is again the first, and replaces it outright. */
+        s_fg.learn_count = 0;
     }
     return store();
 }
@@ -829,7 +922,7 @@ esp_err_t fg_set_chemistry(fg_chem_t c, uint8_t cells)
      * next voltage sample, as on a first boot. Lifetime counters are history and stay. */
     s_fg.state            = FG_UNKNOWN;
     s_fg.voltage_only     = true;
-    s_fg.have_full_anchor = false;
+    s_fg.have_ref         = false;
     s_fg.s_since_anchor   = UINT32_MAX;
     s_fg.idle_since_us    = 0;
     s_fg.full_since_us    = 0;
@@ -844,14 +937,16 @@ esp_err_t fg_set_soc_permille(uint32_t permille)
         return ESP_ERR_INVALID_ARG;
     }
     set_charge_from_soc(permille);
-    s_fg.state          = FG_COUNTING;
     s_fg.voltage_only   = false;
     s_fg.s_since_anchor = 0;
+    /* A typed-in SoC is not a measurement: no capacity is learned across it. */
+    s_fg.have_ref       = false;
     return store();
 }
 
 esp_err_t fg_set_full(void)
 {
+    ref_point(1000);
     s_fg.charge_uas     = capacity_uas();
     s_fg.rem_frac       = 0;
     s_fg.state          = FG_FULL;
@@ -869,21 +964,26 @@ esp_err_t fg_reset(void)
     s_fg.state        = FG_UNKNOWN;
     s_fg.voltage_only = true;
     s_fg.full_capacity_uah = s_fg.cfg.design_capacity_uah;
-    /* A reset abandons the learn window too: the span it was measuring is no longer
-     * bracketed by a trustworthy full anchor. */
-    s_fg.q_since_full_uas = 0;
-    s_fg.have_full_anchor = false;
+    s_fg.learn_count       = 0;
+    /* A reset abandons the learning span too: it is no longer bracketed by a
+     * trustworthy reference point. */
+    s_fg.have_ref           = false;
+    s_fg.q_since_ref_uas    = 0;
+    s_fg.q_in_since_ref_uas = 0;
     return store();
 }
 
 const char *fg_state_str(fg_state_t s)
 {
     switch (s) {
-    case FG_COUNTING: return "COUNTING";
-    case FG_RESTING:  return "RESTING";
-    case FG_FULL:     return "FULL";
-    case FG_EMPTY:    return "EMPTY";
+    case FG_CHARGE:    return "CHARGE";
+    case FG_ABSORB:    return "ABSORB";
+    case FG_FULL:      return "FULL";
+    case FG_DISCHARGE: return "DISCHARGE";
+    case FG_EMPTY:     return "EMPTY";
+    case FG_SETTLING:  return "SETTLING";
+    case FG_REST:      return "REST";
     case FG_UNKNOWN:
-    default:          return "UNKNOWN";
+    default:           return "UNKNOWN";
     }
 }

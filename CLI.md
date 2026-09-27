@@ -357,7 +357,7 @@ parser can either use them or skip them on that one character.
 #d,ms,shunt_mv,pga,sat
 #e,ms,temp_c,humid_pct,press_hpa
 f,7073,13.113,-0.0006
-c,7213,-0.007,90.2,39.696,RESTING,13.117,1.000
+c,7213,-0.007,90.2,39.696,REST,13.117,1.000
 d,19203,0.030,/1 (+/-40mV),0
 e,7033,26.97,48.9,1001.64
 ```
@@ -403,7 +403,7 @@ records.
 | `watts` | volts × amps |
 | `soc_pct` | state of charge, one decimal |
 | `charge_ah` | accumulated charge, 3 decimals |
-| `state` | `UNKNOWN` \| `COUNTING` \| `RESTING` \| `FULL` \| `EMPTY` |
+| `state` | `UNKNOWN` \| `CHARGE` \| `ABSORB` \| `FULL` \| `DISCHARGE` \| `EMPTY` \| `SETTLING` \| `REST` |
 | `ocv_v` | I·R-compensated open-circuit estimate — what the SoC map actually uses |
 | `peukert` | the discharge multiplier in force right now; `1.000` while charging |
 | `shunt_mv` | raw shunt drop before any scaling — the wiring diagnostic |
@@ -596,7 +596,7 @@ lead-acid while charging) needs the divider (`curve v divider`).
 | `soc rest <s>` | | Idle time before OCV is trusted |
 | `soc peukert <q8>` | 256–512 | k; 256 = disabled |
 | `soc irated <uA>` | | Rate the nameplate capacity assumes |
-| `soc depth <permille>` | 100–1000 | Discharge depth required to learn capacity |
+| `soc depth <permille>` | 100–1000 | SoC change between two reference points (FULL, EMPTY, settled rest) needed to learn capacity; default 200 |
 
 All of it persists. A rejected config prints the constraint that failed:
 `v0 < v100 <= vfull`, non-zero capacity, `peukert` 256–512, `depth` 100–1000.
