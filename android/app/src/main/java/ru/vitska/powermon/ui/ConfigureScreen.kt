@@ -140,8 +140,8 @@ fun ConfigureScreen(vm: MonitorViewModel) {
     }
 
     /* No confirmation dialogs: every calibration action runs the moment it is tapped. */
-    val guarded: (Confirmation) -> Unit = { c ->
-        if (c.command.startsWith("cal ")) calSet(c.command) else set(c.command)
+    val guarded: (String) -> Unit = { command ->
+        if (command.startsWith("cal ")) calSet(command) else set(command)
     }
 
     /**
@@ -191,13 +191,6 @@ fun ConfigureScreen(vm: MonitorViewModel) {
         // ------------------------------------------------------------ calibration
 
         Section("Calibration") {
-            Text(
-                "Two zero points, then one known value per channel. The device solves " +
-                    "and stores the trims itself — you supply the meter reading.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(Modifier.height(10.dp))
-
             Text("DEVICE READS NOW", style = MaterialTheme.typography.labelSmall)
             KV("Voltage", t.volts?.let { String.format("%.3f V", it) } ?: "—")
             KV("Current", t.amps?.let { String.format("%+.4f A", it) } ?: "—")
@@ -254,35 +247,10 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             Spacer(Modifier.height(12.dp))
 
             Text("ZERO POINTS", style = MaterialTheme.typography.labelSmall)
-            Text(
-                "Sets the offset: what the channel reads when the true value is zero. " +
-                    "Do these before the known-value points below.",
-                style = MaterialTheme.typography.bodySmall,
-            )
             Spacer(Modifier.height(8.dp))
             Wrap {
-                OutlinedButton(onClick = {
-                    guarded(
-                        Confirmation(
-                            "Record the current zero point?",
-                            "THE LOAD MUST BE DISCONNECTED. Running this with current " +
-                                "flowing poisons the offset permanently and the firmware " +
-                                "cannot detect it. Averages 256 samples, about 35 s.",
-                            "cal zero i",
-                        )
-                    )
-                }) { Text("Zero current") }
-                OutlinedButton(onClick = {
-                    guarded(
-                        Confirmation(
-                            "Record the voltage zero point?",
-                            "VBUS must be tied to GROUND, not merely disconnected — a " +
-                                "floating input reads a real voltage and the device will " +
-                                "refuse. Averages 256 samples, about 68 s.",
-                            "cal zero v",
-                        )
-                    )
-                }) { Text("Zero voltage") }
+                OutlinedButton(onClick = { guarded("cal zero i") }) { Text("Zero current") }
+                OutlinedButton(onClick = { guarded("cal zero v") }) { Text("Zero voltage") }
             }
 
             Spacer(Modifier.height(12.dp))
@@ -290,13 +258,6 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             Spacer(Modifier.height(12.dp))
 
             Text("KNOWN VALUES", style = MaterialTheme.typography.labelSmall)
-            Text(
-                "Enter what your meter reads and tap Set -- one instant reading, " +
-                    "applied and saved immediately, no averaging or wait. For current " +
-                    "the board solves the shunt resistance from it, so the shunt's " +
-                    "value need not be known; for voltage it solves the gain.",
-                style = MaterialTheme.typography.bodySmall,
-            )
             Spacer(Modifier.height(8.dp))
             MicroField(
                 "Measured current now", "A", "",
@@ -337,12 +298,6 @@ fun ConfigureScreen(vm: MonitorViewModel) {
         // ------------------------------------------------------------ the rest
 
         Section("Shunt and topology") {
-            Text(
-                "Get these right before calibrating: a wrong shunt value shows up as a " +
-                    "gain outside ±10 %, which the device refuses rather than absorbs.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(Modifier.height(8.dp))
             MicroField(
                 "Shunt resistance", "mOhm", "100",
                 current = cfg.milli("shunt.uohm", 3),
@@ -361,26 +316,10 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             KV("Active range", cfg.str("sense.pga")?.let { "/" + it } ?: "—")
             KV("Autorange", cfg.bool("sense.autorange")?.let { if (it) "on" else "off" } ?: "—")
             Spacer(Modifier.height(8.dp))
-            OutlinedButton(onClick = {
-                guarded(
-                    Confirmation(
-                        "Detect topology?",
-                        "Needs a load -- the device refuses at zero current. Takes about " +
-                            "9 s and overwrites the shunt-location setting.",
-                        "detect",
-                    )
-                )
-            }) { Text("detect") }
+            OutlinedButton(onClick = { guarded("detect") }) { Text("detect") }
         }
 
         Section("Telemetry rates") {
-            Text(
-                "A group set to off stops without disturbing the others. For a genuine " +
-                    "10 Hz fast group the device also needs profile fast -- the default " +
-                    "profile tops out at 7.3 Hz.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(Modifier.height(8.dp))
             RateRow("fast", 20, 60_000, cfg.str("stream.fast_ms"), set)
             RateRow("calc", 20, 60_000, cfg.str("stream.calc_ms"), set)
             RateRow("diag", 20, 60_000, cfg.str("stream.diag_ms"), set)
@@ -419,27 +358,11 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                     cfg.micro("soc.v100_uv", 2)?.let { b -> "$a – $b V resting" }
                 },
             ) { chem, cells ->
-                guarded(
-                    Confirmation(
-                        "Switch to ${chem.name}" + (cells?.let { ", $it cells" } ?: "") + "?",
-                        "Loads that chemistry's voltage curve, endpoints and charge " +
-                            "behaviour" + (if (cells == null) ", with the cell count " +
-                            "guessed from the present voltage" else "") + ". The charge " +
-                            "count restarts from the resting voltage; capacity and " +
-                            "calibration are kept.",
-                        "battery ${chem.key}" + (cells?.let { " $it" } ?: ""),
-                    )
-                )
+                guarded("battery ${chem.key}" + (cells?.let { " $it" } ?: ""))
             }
         }
 
         Section("Fuel gauge") {
-            Text(
-                "The pack endpoints and gauge behaviour. All of it persists; a rejected " +
-                    "value prints the constraint that failed (v0 < v100 <= vfull).",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(Modifier.height(8.dp))
             MicroField("Design capacity", "Ah", "44", current = cfg.micro("soc.cap_uah", 1)) {
                 set("soc cap " + Micro.ampHours(it))
             }
@@ -489,27 +412,8 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             )
             Spacer(Modifier.height(8.dp))
             Wrap {
-                OutlinedButton(onClick = {
-                    guarded(
-                        Confirmation(
-                            "Declare the pack full?",
-                            "This anchors the count at 100 % right now. Only correct if the " +
-                                "battery really is at absorption voltage with tapered current.",
-                            "soc full",
-                        )
-                    )
-                }) { Text("soc full") }
-                OutlinedButton(onClick = {
-                    guarded(
-                        Confirmation(
-                            "Forget the charge count?",
-                            "The accumulated count is discarded and SoC re-seeds from " +
-                                "voltage, which is the less trustworthy source until the " +
-                                "next anchor.",
-                            "soc reset",
-                        )
-                    )
-                }) { Text("soc reset") }
+                OutlinedButton(onClick = { guarded("soc full") }) { Text("soc full") }
+                OutlinedButton(onClick = { guarded("soc reset") }) { Text("soc reset") }
             }
         }
 
@@ -542,13 +446,6 @@ fun ConfigureScreen(vm: MonitorViewModel) {
         }
 
         Section("BLE and pairing") {
-            Text(
-                "open mode has no pairing at all: anything in range can run every " +
-                    "command, calibration included. It is the default and it is a bench " +
-                    "setting.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(Modifier.height(8.dp))
             KV("Name", cfg.str("ble.name") ?: "—")
             KV(
                 "Links",
@@ -559,20 +456,7 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             KV("Bonds", cfg.str("ble.bonds") ?: "—")
             Spacer(Modifier.height(8.dp))
             Choice("ble pair", listOf("open", "bonded"), cfg.str("ble.pair")) { mode ->
-                guarded(
-                    Confirmation(
-                        "Switch pairing to " + mode + "?",
-                        if (mode == "bonded") {
-                            "This persists and DROPS THE CURRENT LINK. On reconnect the " +
-                                "phone will prompt for the six-digit passkey shown on the " +
-                                "device OLED."
-                        } else {
-                            "This persists. Any device in range will then be able to run " +
-                                "every command without authentication."
-                        },
-                        "ble pair " + mode,
-                    )
-                )
+                guarded("ble pair " + mode)
             }
             Spacer(Modifier.height(8.dp))
             PlainField("Fixed passkey (blank for random)", "", "random",
@@ -581,16 +465,7 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             }
             Wrap {
                 AssistChip(onClick = { run("ble bonds") }, label = { Text("bonds") })
-                OutlinedButton(onClick = {
-                    guarded(
-                        Confirmation(
-                            "Forget all bonds?",
-                            "Every bonded phone must pair again, and the current link is " +
-                                "dropped.",
-                            "ble unpair",
-                        )
-                    )
-                }) { Text("unpair") }
+                OutlinedButton(onClick = { guarded("ble unpair") }) { Text("unpair") }
             }
         }
 
@@ -609,10 +484,6 @@ fun ConfigureScreen(vm: MonitorViewModel) {
         Spacer(Modifier.height(24.dp))
     }
 }
-
-/** Not a dialog any more — just the (title, body, command) `guarded` used to show
- *  before running the command immediately. Kept as the shape every call site passes. */
-private data class Confirmation(val title: String, val body: String, val command: String)
 
 /**
  * Both INA219s read directly (`raw`), independent of which one the firmware has
@@ -870,13 +741,6 @@ private fun BatteryPicker(
     val current = Chemistries.byKey(currentKey)
 
     Column(Modifier.fillMaxWidth()) {
-        Text(
-            "Sets the voltage-to-SoC curve, the 0 %/100 %/full voltages and the charge " +
-                "behaviour for this chemistry. Every Fuel gauge value below can still be " +
-                "fine-tuned afterwards.",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Spacer(Modifier.height(8.dp))
         Wrap {
             Chemistries.ALL.forEach { c ->
                 FilterChip(
@@ -908,11 +772,6 @@ private fun BatteryPicker(
                     (window?.let { " — $it" } ?: ""),
                 style = MaterialTheme.typography.labelSmall,
                 fontFamily = FontFamily.Monospace,
-            )
-        } else if (currentKey == null) {
-            Text(
-                "This firmware does not report a chemistry (before 0.8.0).",
-                style = MaterialTheme.typography.labelSmall,
             )
         }
     }
