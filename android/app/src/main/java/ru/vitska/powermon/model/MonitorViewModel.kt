@@ -30,6 +30,7 @@ import ru.vitska.powermon.ble.Release
 import ru.vitska.powermon.ble.Link
 import ru.vitska.powermon.ble.Nus
 import ru.vitska.powermon.ble.Record
+import ru.vitska.powermon.ble.RawSensors
 import ru.vitska.powermon.ble.Response
 
 /** Everything the monitor screen shows, assembled from the four record types. */
@@ -159,6 +160,16 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
     private val _config = MutableStateFlow(ConfigState.EMPTY)
     val config = _config.asStateFlow()
 
+    /**
+     * Both INA219s read directly (`raw`), for deciding by eye which one carries the
+     * shunt rather than trusting whichever the firmware has already picked. Null
+     * until asked for -- unlike `config` it is not part of the connect handshake,
+     * since it is a one-shot diagnostic rather than a setting to show everywhere.
+     */
+    private val _raw = MutableStateFlow<RawSensors?>(null)
+    val raw = _raw.asStateFlow()
+    private var rawBusy = false
+
     private val _fw = MutableStateFlow(FirmwareState())
     val firmware = _fw.asStateFlow()
 
@@ -264,6 +275,7 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
         _shake.value = Handshake()
         _config.value = ConfigState.EMPTY
         _history.value = null
+        _raw.value = null
         _fw.value = FirmwareState(latest = _fw.value.latest, checked = _fw.value.checked)
         expectAfterReboot = null
         fastStamps.clear()
@@ -372,6 +384,24 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun launchRefreshConfig() = viewModelScope.launch { refreshConfig() }
+
+    /**
+     * Reads both INA219s directly (`raw`), for the Calibration screen's "both sensors"
+     * view. One shot, on request — not part of the connect handshake, and not polled.
+     */
+    fun launchRefreshRaw() {
+        if (rawBusy) return
+        rawBusy = true
+        viewModelScope.launch {
+            val r = client.send("raw")
+            _raw.value = when {
+                r != null && r.ok -> RawSensors.parse(r.lines)
+                r != null && r.exit == -2 -> RawSensors.UNSUPPORTED
+                else -> _raw.value
+            }
+            rawBusy = false
+        }
+    }
 
     /** Re-reads `hist`, quietly: it is polled, and would flood the console transcript. */
     suspend fun refreshHistory() {

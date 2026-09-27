@@ -1932,6 +1932,13 @@ static bool raw_one(const char *key, ina219_handle_t d, uint32_t *bus_uv)
     printf("%s.pga=%d\n", key, 1 << (int)smp.pga);
     printf("%s.range_uv=%ld\n", key, (long)ina219_pga_fullscale_uv(smp.pga));
     printf("%s.sat=%d\n", key, smp.saturated ? 1 : 0);
+    /* This chip's OWN conversion settings, independent of which one is presently
+     * assigned the current/voltage role -- the point of `raw` is to see both sides
+     * well enough to decide the role for yourself. */
+    printf("%s.shunt_uohm=%lu\n", key, (unsigned long)ina219_get_shunt_uohm(d));
+    printf("%s.gain_ppm=%lu\n", key, (unsigned long)ina219_get_gain_ppm(d));
+    printf("%s.offset_ua=%ld\n", key, (long)ina219_get_offset_ua(d));
+    printf("%s.sign=%s\n", key, ina219_get_invert_sign(d) ? "invert" : "normal");
     *bus_uv = smp.v_uv;
     return true;
 }

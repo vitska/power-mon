@@ -32,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import ru.vitska.powermon.ble.ConfigState
@@ -39,6 +40,7 @@ import ru.vitska.powermon.ble.Chemistries
 import ru.vitska.powermon.ble.FirmwareTarget
 import ru.vitska.powermon.ble.Link
 import ru.vitska.powermon.ble.Micro
+import ru.vitska.powermon.ble.RawSensor
 import ru.vitska.powermon.model.MonitorViewModel
 
 /**
@@ -166,8 +168,8 @@ fun ConfigureScreen(vm: MonitorViewModel) {
 
             Text("DEVICE READS NOW", style = MaterialTheme.typography.labelSmall)
             KV("Voltage", t.volts?.let { String.format("%.3f V", it) } ?: "—")
-            KV("Current", t.amps?.let { String.format("%.4f A", it) } ?: "—")
-            KV("Shunt drop", t.shuntMv?.let { String.format("%.3f mV", it) } ?: "—")
+            KV("Current", t.amps?.let { String.format("%+.4f A", it) } ?: "—")
+            KV("Shunt drop", t.shuntMv?.let { String.format("%+.3f mV", it) } ?: "—")
             if (t.saturated) {
                 Spacer(Modifier.height(6.dp))
                 Text(
@@ -183,6 +185,22 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             Spacer(Modifier.height(12.dp))
 
             Text("TRIMS IN FORCE", style = MaterialTheme.typography.labelSmall)
+            // The shunt value on its own, out of context, is exactly what read as
+            // ~0 A with a real 5.8 A flowing: it belongs here with the pole it is
+            // assumed to be on and the sign that makes it positive.
+            KV(
+                "Shunt resistance",
+                cfg.milli("shunt.uohm", 3)?.let { r ->
+                    r + " mOhm" + (cfg.str("shunt.loc")?.let { " on " + it.uppercase() } ?: "")
+                } ?: "—",
+            )
+            KV(
+                "Sign",
+                cfg.str("sense.sign")?.let {
+                    (if (it == "invert") "inverted" else "normal") +
+                        "  (+ is charging on the board's own reading)"
+                } ?: "—",
+            )
             KV("Current offset", cfg.long("cal.i_offset_ua")
                 ?.let { String.format("%+d uA", it) } ?: "—")
             KV("Current gain", cfg.gainPct("cal.i_gain_ppm")
@@ -200,6 +218,12 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                     null -> "—"
                 },
             )
+
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(12.dp))
+
+            RawSensorsPanel(vm)
 
             Spacer(Modifier.height(12.dp))
             HorizontalDivider()
@@ -608,6 +632,94 @@ fun ConfigureScreen(vm: MonitorViewModel) {
 /** Not a dialog any more — just the (title, body, command) `guarded` used to show
  *  before running the command immediately. Kept as the shape every call site passes. */
 private data class Confirmation(val title: String, val body: String, val command: String)
+
+/**
+ * Both INA219s read directly (`raw`), independent of which one the firmware has
+ * assigned to which role. This is the view for deciding "shunt loc" and the sign by
+ * eye rather than by guessing: a chip near 0 V is at ground (the negative pole), one
+ * near the pack voltage is at the positive pole, and whichever sees a real shunt
+ * voltage for a known load is the one actually wired across the shunt.
+ */
+@Composable
+private fun RawSensorsPanel(vm: MonitorViewModel) {
+    val raw by vm.raw.collectAsState()
+
+    Text("BOTH SENSORS, READ DIRECTLY", style = MaterialTheme.typography.labelSmall)
+    Text(
+        "Each INA219's own reading and its own conversion settings, whichever role " +
+            "it currently has. Apply a real load first — the sensor actually across " +
+            "the shunt is the one that shows a shunt voltage.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Spacer(Modifier.height(8.dp))
+    OutlinedButton(onClick = { vm.launchRefreshRaw() }) { Text("Read both sensors") }
+
+    val r = raw
+    when {
+        r == null -> {}
+        !r.supported -> {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "This firmware has no `raw` command (needs 0.10.2 or later).",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        else -> {
+            Spacer(Modifier.height(8.dp))
+            val (polesText, polesColor) = when (r.poles) {
+                "ok" -> "Poles agree with the firmware's assumption (0x40 positive, 0x41 negative)." to
+                    MaterialTheme.colorScheme.primary
+                "swapped" -> "Poles are SWAPPED from what the firmware assumes." to
+                    MaterialTheme.colorScheme.error
+                "single" -> "Only one sensor answered." to MaterialTheme.colorScheme.onSurfaceVariant
+                else -> "Not clear from bus voltage alone — apply a load and re-read." to
+                    MaterialTheme.colorScheme.onSurfaceVariant
+            }
+            Text(polesText, style = MaterialTheme.typography.bodySmall, color = polesColor)
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                RawSensorCard("0x40 · POSITIVE POLE", r.pos, Modifier.weight(1f))
+                RawSensorCard("0x41 · NEGATIVE POLE", r.neg, Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun RawSensorCard(label: String, s: RawSensor, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        Text(label, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+        if (!s.present) {
+            Text("not fitted", style = MaterialTheme.typography.bodySmall)
+            return@Column
+        }
+        Text(s.role ?: "—", style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary)
+        RawLine("bus", s.busV?.let { String.format("%.3f V (%s)", it, s.side) })
+        RawLine("shunt", s.shuntMv?.let { String.format("%+.3f mV", it) })
+        RawLine("current", s.currentA?.let { String.format("%+.4f A", it) })
+        RawLine("range", s.pga?.let { p -> "/" + p + " (" + s.rangeMv?.let { String.format("%.0f", it) } + " mV)" })
+        if (s.saturated) {
+            Text("SATURATED", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error)
+        }
+        Spacer(Modifier.height(4.dp))
+        RawLine("R shunt", s.shuntUohm?.let { String.format("%.3f mOhm", it / 1000.0) })
+        RawLine("gain", s.gainPpm?.let { it.toString() + " ppm" })
+        RawLine("offset", s.offsetUa?.let { it.toString() + " uA" })
+        RawLine("sign", s.sign)
+    }
+}
+
+@Composable
+private fun RawLine(label: String, value: String?) {
+    Text(
+        label + ": " + (value ?: "—"),
+        style = MaterialTheme.typography.bodySmall,
+        fontFamily = FontFamily.Monospace,
+    )
+}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
