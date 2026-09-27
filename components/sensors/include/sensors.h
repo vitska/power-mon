@@ -210,21 +210,16 @@ esp_err_t sensors_calibrate_shunt(sensors_handle_t h, int64_t known_ua,
                                   sensors_shunt_cal_t *out);
 
 /**
- * Zero-current calibration (DESIGN.md §5.5): forces PGA/1 and unity gain, averages
- * the raw current, and bakes the mean in as the offset -- no validation of spread or
- * magnitude, on the assumption the load was actually disconnected. Restores PGA,
- * autorange and gain regardless of outcome; on a read error the offset is left
- * unchanged and the error is returned.
+ * Zero-current calibration (DESIGN.md §5.5): one instant reading, no averaging, no
+ * wait -- and no validation of magnitude, on the assumption the load was actually
+ * disconnected. Bakes that reading in as the offset directly from the shunt voltage
+ * drop, at whatever gain/PGA/range is already in force; nothing else is touched or
+ * recomputed. On a read error the offset is left unchanged and the error is returned.
  */
-esp_err_t sensors_zero_current(sensors_handle_t h, uint32_t n_samples,
-                               int32_t *out_offset_ua, int32_t *out_stddev_ua,
-                               sensors_progress_cb_t progress, void *progress_ctx);
+esp_err_t sensors_zero_current(sensors_handle_t h, int32_t *out_offset_ua);
 
-/** The voltage-channel twin of sensors_zero_current(). No range to force and no
- *  spread check -- see the implementation for why. */
-esp_err_t sensors_zero_voltage(sensors_handle_t h, uint32_t n_samples,
-                               int32_t *out_offset_uv, uint32_t *out_spread_uv,
-                               sensors_progress_cb_t progress, void *progress_ctx);
+/** The voltage-channel twin of sensors_zero_current(). */
+esp_err_t sensors_zero_voltage(sensors_handle_t h, int32_t *out_offset_uv);
 
 #ifdef __cplusplus
 }

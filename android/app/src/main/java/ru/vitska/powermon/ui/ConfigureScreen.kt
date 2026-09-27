@@ -125,7 +125,7 @@ fun ConfigureScreen(vm: MonitorViewModel) {
     var calBusy by remember { mutableStateOf(false) }
     val calSet: (String) -> Unit = { cmd ->
         calBusy = true
-        calResult = "running " + cmd + " -- the board is averaging, up to ~40 s"
+        calResult = "running " + cmd
         vm.launchCommandWith(cmd) { r ->
             calBusy = false
             val text = if (r == null) "no reply -- timed out"

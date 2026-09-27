@@ -97,14 +97,12 @@ void sensor_lock_give(app_ctx_t *ctx);
 
 
 /** Blocking zero-current calibration of the CURRENT sensor (DESIGN.md §5.5): takes
- *  the sensor lock, delegates the actual averaging and offset write to
- *  sensors_zero_current(), prints progress dots, and releases the lock. The measured
- *  mean is baked in as the offset regardless of spread; a real read error leaves the
- *  offset unchanged and is returned as-is. */
-esp_err_t run_zero_calibration(app_ctx_t *ctx, uint32_t n_samples,
-                               int32_t *out_offset_ua, int32_t *out_stddev_ua);
+ *  the sensor lock, delegates the one instant read and offset write to
+ *  sensors_zero_current(), and releases the lock. The measured value is baked in as
+ *  the offset regardless of magnitude; a real read error leaves the offset unchanged
+ *  and is returned as-is. */
+esp_err_t run_zero_calibration(app_ctx_t *ctx, int32_t *out_offset_ua);
 
 /** The bus-channel counterpart of run_zero_calibration(), wrapping
  *  sensors_zero_voltage() the same way. */
-esp_err_t run_zero_voltage_calibration(app_ctx_t *ctx, uint32_t n_samples,
-                                       int32_t *out_offset_uv, uint32_t *out_spread_uv);
+esp_err_t run_zero_voltage_calibration(app_ctx_t *ctx, int32_t *out_offset_uv);

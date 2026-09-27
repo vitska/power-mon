@@ -109,45 +109,25 @@ void sensor_lock_give(app_ctx_t *ctx)
 
 /* --- zero calibration (DESIGN.md §5.5) --------------------------------------- */
 
-/* Progress dots during a long average: the console command that started this holds
- * the lock and blocks for tens of seconds, and silence with no feedback reads as a
- * hang. This is the only thing the wrapper does that sensors_zero_current() /
- * sensors_zero_voltage() do not, since a hardware component has no business calling
- * printf(). */
-static void zero_progress_dot(uint32_t index, void *ctx)
+esp_err_t run_zero_calibration(app_ctx_t *ctx, int32_t *out_offset_ua)
 {
-    (void)ctx;
-    if ((index % 32) == 0) {
-        printf(".");
-        fflush(stdout);
-    }
-}
-
-esp_err_t run_zero_calibration(app_ctx_t *ctx, uint32_t n_samples,
-                               int32_t *out_offset_ua, int32_t *out_stddev_ua)
-{
-    /* Held for the whole run: see the comment on sensor_lock. */
+    /* Held for the read: see the comment on sensor_lock. */
     if (!sensor_lock_take(ctx, 2000)) {
         ESP_LOGE(TAG, "sensor busy");
         return ESP_ERR_TIMEOUT;
     }
-    const esp_err_t err = sensors_zero_current(ctx->sensors, n_samples, out_offset_ua,
-                                               out_stddev_ua, zero_progress_dot, NULL);
-    printf("\n");
+    const esp_err_t err = sensors_zero_current(ctx->sensors, out_offset_ua);
     sensor_lock_give(ctx);
     return err;
 }
 
-esp_err_t run_zero_voltage_calibration(app_ctx_t *ctx, uint32_t n_samples,
-                                       int32_t *out_offset_uv, uint32_t *out_spread_uv)
+esp_err_t run_zero_voltage_calibration(app_ctx_t *ctx, int32_t *out_offset_uv)
 {
     if (!sensor_lock_take(ctx, 2000)) {
         ESP_LOGE(TAG, "sensor busy");
         return ESP_ERR_TIMEOUT;
     }
-    const esp_err_t err = sensors_zero_voltage(ctx->sensors, n_samples, out_offset_uv,
-                                               out_spread_uv, zero_progress_dot, NULL);
-    printf("\n");
+    const esp_err_t err = sensors_zero_voltage(ctx->sensors, out_offset_uv);
     sensor_lock_give(ctx);
     return err;
 }

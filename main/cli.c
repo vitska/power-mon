@@ -751,36 +751,21 @@ static int cmd_stats(int argc, char **argv)
 
 static int cmd_zero(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     if (!current_dev_or_complain()) {
         return 1;
-    }
-
-    uint32_t n = 256;
-    if (argc >= 2) {
-        const long v = strtol(argv[1], NULL, 10);
-        if (v < 16 || v > 4096) {
-            printf("sample count must be 16..4096\n");
-            return 1;
-        }
-        n = (uint32_t)v;
     }
 
     printf("Zero-current calibration of the CURRENT sensor (DESIGN.md 5.5).\n");
     printf("DISCONNECT THE LOAD AND THE CHARGER. The firmware cannot verify this;\n");
     printf("if current is flowing it will be baked into the offset permanently.\n");
-    printf("Collecting %lu samples at PGA/1", (unsigned long)n);
+    printf("One instant reading -- no averaging, no wait.\n");
 
-    const bool was_streaming = config()->stream_enabled;
-    config()->stream_enabled    = false;
+    int32_t   offset = 0;
+    esp_err_t err     = run_zero_calibration(s_ctx, &offset);
 
-    int32_t   offset = 0, stddev = 0;
-    esp_err_t err    = run_zero_calibration(s_ctx, n, &offset, &stddev);
-
-    config()->stream_enabled = was_streaming;
-
-    char b1[24], b2[24];
+    char b1[24];
     printf("  measured offset : %s A\n", FMT_A(b1, offset));
-    printf("  stddev          : %s A\n", FMT_A(b2, stddev));
 
     if (err != ESP_OK) {
         printf("FAILED: %s. Offset unchanged.\n", esp_err_to_name(err));
@@ -2226,8 +2211,8 @@ static int cmd_cal(int argc, char **argv)
     if (argc < 2) {
         cal_status(cd, vd);
         printf("\n");
-        printf("  cal zero i [n]        no current flowing -> current offset\n");
-        printf("  cal zero v [n]        no voltage on VBUS -> voltage offset\n");
+        printf("  cal zero i            no current flowing -> current offset\n");
+        printf("  cal zero v            no voltage on VBUS -> voltage offset\n");
         printf("  cal top i <uA>        known current, from your meter -> gain\n");
         printf("  cal top v <uV>        known voltage, from your meter -> gain\n");
         printf("  cal reset [i|v]       back to zero offset, unity gain\n");
@@ -2303,7 +2288,7 @@ static int cmd_cal(int argc, char **argv)
         return cal_shunt(argc, argv);
     }
     if ((!is_zero && !is_top) || argc < 3) {
-        printf("usage: cal <zero|top> <i|v> [value] [samples]\n");
+        printf("usage: cal <zero|top> <i|v> [value]\n");
         return 1;
     }
 
@@ -2316,32 +2301,18 @@ static int cmd_cal(int argc, char **argv)
 
     /* --- cal zero ------------------------------------------------------------- */
     if (is_zero) {
-        uint32_t n = 256;
-        if (argc >= 4) {
-            const long v = strtol(argv[3], NULL, 10);
-            if (v < 16 || v > 4096) {
-                printf("sample count must be 16..4096\n");
-                return 1;
-            }
-            n = (uint32_t)v;
-        }
-
-        const bool was_streaming = config()->stream_enabled;
-        config()->stream_enabled    = false;
-        char b1[24], b2[24];
+        char b1[24];
 
         if (chan_i) {
             printf("ZERO POINT, current channel.\n");
             printf("DISCONNECT THE LOAD AND THE CHARGER. The firmware cannot check\n");
             printf("this; any current flowing now becomes part of the offset.\n");
-            printf("Averaging %lu samples at PGA/1", (unsigned long)n);
+            printf("One instant reading -- no averaging, no wait.\n");
 
-            int32_t off = 0, sd = 0;
-            const esp_err_t err = run_zero_calibration(s_ctx, n, &off, &sd);
-            config()->stream_enabled = was_streaming;
+            int32_t off = 0;
+            const esp_err_t err = run_zero_calibration(s_ctx, &off);
 
             printf("  offset  %s A\n", FMT_A(b1, off));
-            printf("  stddev  %s A\n", FMT_A(b2, sd));
             if (err != ESP_OK) {
                 printf("FAILED: %s. Nothing changed.\n", esp_err_to_name(err));
                 return 1;
@@ -2355,16 +2326,12 @@ static int cmd_cal(int argc, char **argv)
             printf("the 3.3 V rail -- which looks exactly like a connected pack.\n");
             printf("Tie the VBUS node to GND. A voltage present now would be\n");
             printf("subtracted from every future reading.\n");
-            printf("Averaging %lu samples", (unsigned long)n);
+            printf("One instant reading -- no averaging, no wait.\n");
 
-            int32_t  off = 0;
-            uint32_t spread = 0;
-            const esp_err_t err =
-                run_zero_voltage_calibration(s_ctx, n, &off, &spread);
-            config()->stream_enabled = was_streaming;
+            int32_t off = 0;
+            const esp_err_t err = run_zero_voltage_calibration(s_ctx, &off);
 
             printf("  offset  %s V\n", FMT_V(b1, off));
-            printf("  spread  %s V\n", FMT_V(b2, (int32_t)spread));
             if (err != ESP_OK) {
                 printf("FAILED: %s. Nothing changed.\n", esp_err_to_name(err));
                 return 1;
@@ -3161,10 +3128,10 @@ void cli_start(app_ctx_t *ctx)
     register_cmd("stream",  "Toggle or set the periodic dump",              "<on|off|csv|ms>", cmd_stream);
     register_cmd("mon",     "Live repainting dashboard of the whole state",  "[refresh_ms]",   cmd_mon);
     register_cmd("stats",   "Show or reset the statistics window",          "[reset]",        cmd_stats);
-    register_cmd("zero",    "Zero-current calibration (load disconnected!)", "[samples]",     cmd_zero);
+    register_cmd("zero",    "Zero-current calibration (load disconnected!)", NULL,             cmd_zero);
     register_cmd("shunt",   "Shunt resistance, or its location in the pack", "[uohm | loc <p|n|single|auto>]", cmd_shunt);
     register_cmd("curve",   "Current/voltage conversion curve and calibration", "[i|v <offset|gain|ref|divider> <v>]", cmd_curve);
-    register_cmd("cal",     "Guided two-point calibration, saved to flash",  "<zero|top> <i|v> [value] [n] | shunt <uA> | save | forget | reset", cmd_cal);
+    register_cmd("cal",     "Guided two-point calibration, saved to flash",  "<zero|top> <i|v> [value] | shunt <uA> | save | forget | reset", cmd_cal);
     register_cmd("gain",    "Show or set the gain trim in ppm",             "[ppm]",          cmd_gain);
     register_cmd("offset",  "Show or set the current offset in uA",         "[uA]",           cmd_offset);
     register_cmd("pga",     "Show or set the PGA range",                    "<auto|1|2|4|8>", cmd_pga);

@@ -203,22 +203,18 @@ object Micro {
  * between "the device is slow" and "the client gave up on a working calibration".
  */
 object Timeouts {
-    private const val ONE_SENSOR_MS = 137L
     private const val BOTH_SENSORS_MS = 270L
 
     fun forCommand(cmd: String): Long {
         val w = cmd.trim().split(Regex("\\s+"))
         fun arg(i: Int, dflt: Long) = w.getOrNull(i)?.toLongOrNull() ?: dflt
         return when {
-            w.getOrNull(0) == "cal" && w.getOrNull(1) == "zero" && w.getOrNull(2) == "i" ->
-                arg(3, 256) * ONE_SENSOR_MS * 2 + 2_000
-            w.getOrNull(0) == "cal" && w.getOrNull(1) == "zero" ->
-                arg(3, 256) * BOTH_SENSORS_MS * 2 + 2_000
-            // `cal top i|v` are each one instant reading, not an average -- no sample
-            // count, no wait beyond an ordinary command's.
+            // `cal zero i|v` and `cal top i|v` are each one instant reading, not an
+            // average -- no sample count, no wait beyond an ordinary command's.
+            w.getOrNull(0) == "cal" && w.getOrNull(1) == "zero" -> 4_000
             w.getOrNull(0) == "cal" && w.getOrNull(1) == "top" -> 4_000
             w.getOrNull(0) == "cal" && w.getOrNull(1) == "shunt" -> 4_000
-            w.getOrNull(0) == "zero" -> arg(1, 256) * ONE_SENSOR_MS * 2 + 2_000
+            w.getOrNull(0) == "zero" -> 4_000
             w.getOrNull(0) == "detect" -> arg(1, 32) * BOTH_SENSORS_MS * 2 + 2_000
             w.getOrNull(0) == "read" -> 5_000
             // Erasing the slot is ~40 ms per 4 KB sector: ~8 s for an 800 KB image, and

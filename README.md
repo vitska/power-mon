@@ -262,7 +262,7 @@ printing; `main/fixed_fmt.h` explains the convention.
 steady, plausible, completely wrong voltage — 3.448 V on this bench. The tell is the two
 sensors disagreeing: `read` showing `pack voltage 3.448 V` beside `load voltage
 0.000 V`. Identically wired sensors that differ mean a wiring fault, not a calibration
-problem, and `cal zero v` refuses to absorb it.
+problem, not something `cal zero v` should be trusted to absorb.
 
 **Check which shunt the chip is measuring.** Most INA219 breakouts carry their own
 100 mΩ shunt across the VIN terminals. If that is the one in circuit, `shunt 100000` is
@@ -446,7 +446,7 @@ different rates, the last one wins for both.
 
 Responses are framed for machine use: an echo line, the output, `exit <n>`, then a
 `0x04` terminator. The CSV stream reaches BLE as well as USB. Commands run on a worker
-task, not the BLE host task, so a 35-second `cal zero i 512` cannot drop the link.
+task, not the BLE host task, so a slow command cannot drop the link.
 
 **Pairing** is LE Secure Connections with a six-digit passkey shown on the OLED
 (`ble pair bonded`); bonds persist. The default is `open`, which means **no pairing at

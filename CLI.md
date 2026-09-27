@@ -159,8 +159,8 @@ hard-coding one:
 | `env` | 1 forced conversion | **~12 ms** |
 | `cal top i` | 1 (instant) | **< 100 ms** |
 | `cal top v` | 1 (instant) | **< 100 ms** |
-| `cal zero i` | 256 one | **~35 s** (8.8 s at 64) |
-| `cal zero v` | 256 both | **~68 s** (8.5 s at 32) |
+| `cal zero i` | 1 (instant) | **< 100 ms** |
+| `cal zero v` | 1 (instant) | **< 100 ms** |
 | `detect` | 32 both | ~9 s, scales with the count |
 | `mon` | — | local terminal only — **refuses remotely** with `exit 1` |
 
@@ -486,8 +486,8 @@ Guided two-point flow. Everything here persists automatically.
 | Command | Args | Notes |
 |---|---|---|
 | `cal` | — | Which points are set, and whether stored |
-| `cal zero i [n]` | 16–4096, default 256 | Current offset. **Load disconnected.** ~35 s |
-| `cal zero v [n]` | 16–4096, default 256 | Voltage offset. **VBUS at ground**, not merely disconnected. ~68 s |
+| `cal zero i` | | Current offset, from **one instant reading** -- no averaging, no wait. **Load disconnected.** |
+| `cal zero v` | | Voltage offset, same -- **VBUS at ground**, not merely disconnected. |
 | `cal top i <uA>` | | Shunt resistance, sign and pole, from **one instant reading** of each sensor — no averaging, no wait |
 | `cal top v <uV>` | | Voltage gain, from **one instant reading**, taken the moment the command arrives — no averaging, no wait |
 | `cal save` | | Persist whatever is live — needed after `curve ... ref`, which solves a value but does not save it |
@@ -497,7 +497,7 @@ Guided two-point flow. Everything here persists automatically.
 | `curve i offset <uA>` / `gain <ppm>` | gain 900000–1100000 | Direct set. **Saved immediately**, like `cal` — a one-`ppm` nudge does not need a separate `cal save` |
 | `curve v offset <uV>` / `gain <ppm>` / `divider <q16>` | divider ≥ 65536 | Direct set. **Saved immediately** |
 | `curve i ref <uA> [n]` / `curve v ref <uV> [n]` | n 8–1024, default 64 | Solves gain from a meter reading at the present load — **not** saved on its own; follow with `cal save` |
-| `zero [n]` | | Older alias of `cal zero i` |
+| `zero` | | Older alias of `cal zero i` |
 | `gain [ppm]`, `offset [uA]`, `pga <auto\|1\|2\|4\|8>` | | Individual legacy accessors |
 
 Refusals a client should expect and surface verbatim — each names a physical cause:

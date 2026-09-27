@@ -558,18 +558,18 @@ typedef struct {
 
 /* Timeouts follow CLI.md's samples x per-sample x 2 + 2 s, as the phone app does. */
 static const action_def_t ACTIONS[] = {
-    [ACT_ZERO_I] = {"ZERO CURRENT", "load disconnected, ~35 s",
+    [ACT_ZERO_I] = {"ZERO CURRENT", "load disconnected",
                     "Zero the current?",
                     "THE LOAD MUST BE DISCONNECTED. With any current flowing this "
                     "poisons the offset permanently, and the firmware cannot tell. "
-                    "Averages 256 samples, about 35 seconds.",
-                    NULL, 75000},
-    [ACT_ZERO_V] = {"ZERO VOLTAGE", "VBUS tied to ground, ~70 s",
+                    "One instant reading -- no averaging, no wait.",
+                    NULL, 4000},
+    [ACT_ZERO_V] = {"ZERO VOLTAGE", "VBUS tied to ground",
                     "Zero the voltage?",
                     "VBUS must be TIED TO GROUND, not just disconnected: a floating "
-                    "input reads a real voltage and the board refuses it. Averages "
-                    "256 samples, about 70 seconds.",
-                    NULL, 142000},
+                    "input reads as a real voltage and gets baked in as the offset. "
+                    "One instant reading -- no averaging, no wait.",
+                    NULL, 4000},
     [ACT_TOP_I]  = {"MEASURED CURRENT", "type what your meter reads",
                     "Solve shunt from %s A?",
                     "The board works out the shunt resistance that makes it read this "

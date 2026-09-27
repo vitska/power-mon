@@ -145,7 +145,8 @@ usable until the CCCD write has actually completed. Commands sent before that re
 **Records route by prefix first, then to the in-flight command.** CLI.md offers the
 simpler rule "while a command is in flight, everything up to the next `0x04` belongs to
 that command", but taken literally that mis-files telemetry: the stream is asynchronous
-and `cal zero v` takes 68 seconds, which is a lot of records to swallow. `StreamParser`
+and physically interleaves with a command's own output regardless of how long it runs.
+`StreamParser`
 checks for `f,` `c,` `d,` `e,` `#` first — which is CLI.md's own fallback rule — and
 hands anything else to the pending response. Unknown *record* prefixes are dropped
 rather than treated as errors, honouring CLI.md's promise that new record types may
