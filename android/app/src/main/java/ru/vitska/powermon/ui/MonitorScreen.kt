@@ -202,11 +202,25 @@ fun Section(title: String, content: @Composable () -> Unit) {
     }
 }
 
+/**
+ * A short pair sits on one line, label left / value right. A pair too long for that
+ * (a long label, or a value with a parenthetical unit conversion) stacks instead --
+ * label above, value below -- rather than let a Row split the value mid-word across
+ * lines because there was no room left for it.
+ */
 @Composable
 fun KV(k: String, v: String) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(k, style = MaterialTheme.typography.bodyMedium)
-        Text(v, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
+    if (k.length + v.length <= 26) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(k, style = MaterialTheme.typography.bodyMedium)
+            Text(v, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
+        }
+    } else {
+        Column(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+            Text(k, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(v, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
+        }
     }
 }
 

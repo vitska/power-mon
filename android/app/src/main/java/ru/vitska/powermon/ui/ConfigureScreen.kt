@@ -194,7 +194,7 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             Text("DEVICE READS NOW", style = MaterialTheme.typography.labelSmall)
             KV("Voltage", t.volts?.let { String.format("%.3f V", it) } ?: "—")
             KV("Current", t.amps?.let { String.format("%+.4f A", it) } ?: "—")
-            KV("Shunt drop (raw, unsigned by Sign)", t.shuntMv?.let { String.format("%+.3f mV", it) } ?: "—")
+            KV("Shunt drop (raw)", t.shuntMv?.let { String.format("%+.3f mV", it) } ?: "—")
             if (t.saturated) {
                 Spacer(Modifier.height(6.dp))
                 Text(
