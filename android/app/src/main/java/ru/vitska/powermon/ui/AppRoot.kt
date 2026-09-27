@@ -19,6 +19,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -61,6 +62,9 @@ fun AppRoot(canScan: Boolean, vm: MonitorViewModel = viewModel()) {
     Scaffold(
         topBar = {
             TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                ),
                 title = {
                     Column {
                         Text(name ?: "power-mon", style = MaterialTheme.typography.titleMedium)
@@ -93,7 +97,7 @@ fun AppRoot(canScan: Boolean, vm: MonitorViewModel = viewModel()) {
             )
         },
         bottomBar = {
-            NavigationBar {
+            NavigationBar(containerColor = MaterialTheme.colorScheme.background) {
                 NavigationBarItem(
                     selected = tab == 0,
                     onClick = { tab = 0 },

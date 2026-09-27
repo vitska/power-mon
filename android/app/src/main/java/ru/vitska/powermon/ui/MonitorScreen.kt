@@ -201,15 +201,13 @@ private fun Metric(label: String, value: String, modifier: Modifier = Modifier) 
  */
 @Composable
 fun Section(title: String, content: @Composable () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+    Column(Modifier.fillMaxWidth()) {
         Text(
             title.uppercase(),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.primary,
         )
-        Spacer(Modifier.height(4.dp))
         content()
-        Spacer(Modifier.height(6.dp))
         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
     }
 }
