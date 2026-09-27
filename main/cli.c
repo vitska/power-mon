@@ -2551,68 +2551,43 @@ static int cmd_cal(int argc, char **argv)
         return cal_shunt(argc - 1, sargv);
     }
 
+    /*
+     * One instant reading, not an average: chan_i never reaches here (redirected to
+     * cal_shunt() above), so this is the voltage channel only. curve_solve_gain()
+     * scales linearly -- old_gain * ref / measured -- so the reading this solves
+     * from is, by construction, exactly `ref` immediately afterward. Averaging a
+     * changing input across many seconds is what used to make that not visibly
+     * true; a single instant sample removes the gap between "what this solved
+     * from" and "what the next reading shows" entirely, and removes the wait.
+     */
     if (argc < 4) {
-        printf("usage: cal top %s <%s> [samples]\n", argv[2], chan_i ? "uA" : "uV");
-        printf("Apply a steady, known %s and read it on your meter first.\n",
-               chan_i ? "current" : "voltage");
-        printf("Aim for 50-80%% of the working maximum: a top point near the\n");
-        printf("bottom of the range makes the slope more sensitive to noise.\n");
+        printf("usage: cal top v <uV>\n");
+        printf("Read the meter and send that value now -- this uses one instant\n");
+        printf("reading, taken the moment the command arrives.\n");
         return 1;
     }
-
     const long ref = strtol(argv[3], NULL, 10);
-    uint32_t   n   = 64;
-    if (argc >= 5) {
-        const long ns = strtol(argv[4], NULL, 10);
-        if (ns < 8 || ns > 1024) {
-            printf("sample count must be 8..1024\n");
-            return 1;
-        }
-        n = (uint32_t)ns;
-    }
 
-    const bool was_streaming = config()->stream_enabled;
-    config()->stream_enabled    = false;
-
-    printf("TOP POINT, %s channel. Averaging %lu samples",
-           chan_i ? "current" : "voltage", (unsigned long)n);
-
-    int64_t  si = 0, sv = 0;
-    uint32_t got = 0;
-    bool     sat = false;
-    const esp_err_t err = curve_average(n, &si, &sv, &got, &sat);
-
-    config()->stream_enabled = was_streaming;
-
-    if (err != ESP_OK || got == 0) {
-        printf("read failed: %s\n", esp_err_to_name(err));
+    if (!sensor_lock_take(s_ctx, 2000)) {
+        printf("sensor busy -- try again\n");
         return 1;
     }
-    (void)sat; /* no validation: the reading is used as-is, range limit or not */
+    power_sample_t s;
+    const esp_err_t err = sensors_read_blocking(s_ctx->sensors, &s);
+    sensor_lock_give(s_ctx);
+
+    if (err != ESP_OK || !s.v_valid) {
+        printf("read failed: %s\n", err == ESP_OK ? "no voltage reading" : esp_err_to_name(err));
+        return 1;
+    }
 
     uint32_t want = 0;
-    bool     ok;
-    if (chan_i) {
-        ok = curve_solve_gain(si / (int64_t)got, ref, 10000,
-                              ina219_get_gain_ppm(cd), &want, "uA");
-        if (ok) {
-            ESP_ERROR_CHECK(ina219_set_gain_ppm(cd, want));
-        }
-    } else {
-        ok = curve_solve_gain(sv / (int64_t)got, ref, 500000,
-                              ina219_get_vbus_gain_ppm(vd), &want, "uV");
-        if (ok) {
-            ESP_ERROR_CHECK(ina219_set_vbus_gain_ppm(vd, want));
-        }
-    }
-    if (!ok) {
+    if (!curve_solve_gain((int64_t)s.v_pack_uv, ref, 0, ina219_get_vbus_gain_ppm(vd), &want, "uV")) {
         printf("nothing changed.\n");
         return 1;
     }
-
+    ESP_ERROR_CHECK(ina219_set_vbus_gain_ppm(vd, want));
     stats_reset(history_window());
-    printf("Applied. Verify at a THIRD point -- a two-point fit always passes\n");
-    printf("through its own two points: stats reset, change the load, stats.\n");
     cal_autosave();
     cal_status(cd, vd);
     return 0;

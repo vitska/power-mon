@@ -214,6 +214,9 @@ object Timeouts {
                 arg(3, 256) * ONE_SENSOR_MS * 2 + 2_000
             w.getOrNull(0) == "cal" && w.getOrNull(1) == "zero" ->
                 arg(3, 256) * BOTH_SENSORS_MS * 2 + 2_000
+            // `cal top v` is one instant reading, not an average -- no sample count,
+            // no wait beyond an ordinary command's.
+            w.getOrNull(0) == "cal" && w.getOrNull(1) == "top" && w.getOrNull(2) == "v" -> 4_000
             w.getOrNull(0) == "cal" && (w.getOrNull(1) == "top" || w.getOrNull(1) == "vpath") ->
                 arg(4, 64) * BOTH_SENSORS_MS * 2 + 2_000
             w.getOrNull(0) == "zero" -> arg(1, 256) * ONE_SENSOR_MS * 2 + 2_000

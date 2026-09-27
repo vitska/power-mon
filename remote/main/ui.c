@@ -580,8 +580,9 @@ static const action_def_t ACTIONS[] = {
     [ACT_TOP_V]  = {"MEASURED VOLTAGE", "at rest, from your meter",
                     "Set voltage gain from %s V?",
                     "Take the meter reading with NO LOAD: under load the harness drop "
-                    "makes the solved gain wrong. At least 0.5 V. About 17 seconds.",
-                    "V", 37000},
+                    "makes the solved gain wrong. One instant reading -- no averaging, "
+                    "no wait; applied and saved right away.",
+                    "V", 4000},
 };
 
 #define SET_ROW_Y(i) (24 + (i) * 31)

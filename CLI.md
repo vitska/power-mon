@@ -489,7 +489,7 @@ Guided two-point flow. Everything here persists automatically.
 | `cal zero i [n]` | 16–4096, default 256 | Current offset. **Load disconnected.** ~35 s |
 | `cal zero v [n]` | 16–4096, default 256 | Voltage offset. **VBUS at ground**, not merely disconnected. ~68 s |
 | `cal top i <uA> [n]` | n 8–1024, default 64 | Current gain from a meter reading. ~17 s |
-| `cal top v <uV> [n]` | | Voltage gain. Use a reading taken **at rest** |
+| `cal top v <uV>` | | Voltage gain, from **one instant reading**, taken the moment the command arrives — no averaging, no wait. Read the meter and send that value **at rest** |
 | `cal vpath <uV>` | | Harness resistance, from a **loaded** terminal reading. Needs ≥ 0.5 A |
 | `cal save` | | Persist whatever is live — needed after `curve ... ref`, which solves a value but does not save it |
 | `cal forget` | | Erase the stored calibration |

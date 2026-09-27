@@ -317,7 +317,8 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                         "Set the voltage gain from " + v + " V?",
                         "Take this reading with no load. Under load the harness drop " +
                             "makes the solved gain wrong — that is what the harness " +
-                            "field below is for. About 17 s.",
+                            "field below is for. Uses one instant reading, applied and " +
+                            "saved right away.",
                         "cal top v " + Micro.volts(v),
                     )
                 )
