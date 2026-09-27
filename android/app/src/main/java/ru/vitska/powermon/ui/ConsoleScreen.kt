@@ -1,12 +1,12 @@
 package ru.vitska.powermon.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -46,25 +46,31 @@ fun ConsoleScreen(vm: MonitorViewModel) {
     var wrap by remember { mutableStateOf(true) }
     val listState = rememberLazyListState()
 
+    // Group each response under the sent command that produced it, so alternating
+    // exchanges can be shaded -- not the raw line index, which would band a single
+    // multi-line response in stripes.
+    val indexed = remember(lines) {
+        var exchange = -1
+        lines.map { l ->
+            if (l.startsWith("> ")) exchange++
+            Pair(l, exchange)
+        }
+    }
+
     LaunchedEffect(lines.size) {
         if (lines.isNotEmpty()) listState.animateScrollToItem(lines.size - 1)
     }
 
     Column(Modifier.fillMaxSize().padding(12.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("wrap", style = MaterialTheme.typography.labelMedium)
-            Switch(checked = wrap, onCheckedChange = { wrap = it })
-        }
-
         Card(Modifier.fillMaxWidth().weight(1f)) {
             SelectionContainer {
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize().padding(10.dp),
                 ) {
-                    items(lines) { l ->
+                    items(indexed) { (l, exchange) ->
                         val sent = l.startsWith("> ")
-                        ConsoleLine(l, sent, wrap)
+                        ConsoleLine(l, sent, wrap, exchange)
                     }
                 }
             }
@@ -81,6 +87,9 @@ fun ConsoleScreen(vm: MonitorViewModel) {
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(8.dp))
+            Text("wrap", style = MaterialTheme.typography.labelSmall)
+            Switch(checked = wrap, onCheckedChange = { wrap = it })
+            Spacer(Modifier.width(8.dp))
             Button(
                 onClick = {
                     val c = entry.trim()
@@ -95,12 +104,18 @@ fun ConsoleScreen(vm: MonitorViewModel) {
     }
 }
 
-/** A sent command is bold and in the accent color, with a blank line above it so each
- *  exchange reads as its own block; a response line is plain. */
+/** A sent command is bold and in the accent color; each command-and-response exchange
+ *  alternates a faint background tint from the previous one, so a long transcript reads
+ *  as separate blocks instead of one undifferentiated wall of monospace. */
 @Composable
-private fun ConsoleLine(text: String, sent: Boolean, wrap: Boolean) {
-    if (sent) Spacer(Modifier.height(6.dp))
-    val content: @Composable () -> Unit = {
+private fun ConsoleLine(text: String, sent: Boolean, wrap: Boolean, exchange: Int) {
+    val band = if (exchange % 2 == 0) {
+        MaterialTheme.colorScheme.surface
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+    }
+    @Composable
+    fun line(modifier: Modifier) {
         Text(
             text,
             fontFamily = FontFamily.Monospace,
@@ -110,11 +125,14 @@ private fun ConsoleLine(text: String, sent: Boolean, wrap: Boolean) {
             softWrap = wrap,
             overflow = if (wrap) TextOverflow.Clip else TextOverflow.Visible,
             maxLines = if (wrap) Int.MAX_VALUE else 1,
+            modifier = modifier,
         )
     }
     if (wrap) {
-        content()
+        line(Modifier.fillMaxWidth().background(band))
     } else {
-        Row(Modifier.horizontalScroll(rememberScrollState())) { content() }
+        Row(Modifier.fillMaxWidth().background(band).horizontalScroll(rememberScrollState())) {
+            line(Modifier)
+        }
     }
 }
