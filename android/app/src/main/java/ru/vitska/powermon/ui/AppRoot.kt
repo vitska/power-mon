@@ -1,11 +1,16 @@
 package ru.vitska.powermon.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Build
@@ -16,8 +21,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -31,8 +34,10 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ru.vitska.powermon.ble.Link
 import ru.vitska.powermon.ble.Nus
@@ -101,42 +106,26 @@ fun AppRoot(canScan: Boolean, vm: MonitorViewModel = viewModel()) {
             )
         },
         bottomBar = {
-          Column {
             val au by vm.appUpdate.collectAsState()
-            Row(Modifier.fillMaxWidth().padding(end = 8.dp, top = 2.dp), horizontalArrangement = Arrangement.End) {
+            Box(Modifier.fillMaxWidth()) {
+                CompactTabBar(
+                    tab = tab,
+                    onSelect = { tab = it },
+                    items = listOf(
+                        Triple("Monitor", Icons.Filled.Info, 0),
+                        Triple("Configure", Icons.Filled.Build, 1),
+                        Triple("Console", Icons.Filled.Terminal, 2),
+                        Triple("Firmware", Icons.Filled.SystemUpdate, 3),
+                    ),
+                )
+                // In the bar's own corner, not a row of its own -- so it adds no height.
                 Text(
                     "v" + au.currentVersion,
-                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 9.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 4.dp, bottom = 2.dp),
                 )
             }
-            NavigationBar(containerColor = MaterialTheme.colorScheme.background) {
-                NavigationBarItem(
-                    selected = tab == 0,
-                    onClick = { tab = 0 },
-                    icon = { Icon(Icons.Filled.Info, null) },
-                    label = { Text("Monitor") },
-                )
-                NavigationBarItem(
-                    selected = tab == 1,
-                    onClick = { tab = 1 },
-                    icon = { Icon(Icons.Filled.Build, null) },
-                    label = { Text("Configure") },
-                )
-                NavigationBarItem(
-                    selected = tab == 2,
-                    onClick = { tab = 2 },
-                    icon = { Icon(Icons.Filled.Terminal, null) },
-                    label = { Text("Console") },
-                )
-                NavigationBarItem(
-                    selected = tab == 3,
-                    onClick = { tab = 3 },
-                    icon = { Icon(Icons.Filled.SystemUpdate, null) },
-                    label = { Text("Firmware") },
-                )
-            }
-          }
         },
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
@@ -151,5 +140,38 @@ fun AppRoot(canScan: Boolean, vm: MonitorViewModel = viewModel()) {
 
     if (showDevices) {
         DeviceSheet(vm) { showDevices = false; vm.stopScan() }
+    }
+}
+
+/**
+ * A plain Row standing in for Material3's NavigationBar, which reserves a fixed 80dp
+ * regardless of content -- more than a 4-tab switcher needs, and not something its own
+ * API lets a caller shrink. This one is as tall as its icon+label actually are, so the
+ * screen above it keeps more of the height for values worth looking at.
+ */
+@Composable
+private fun CompactTabBar(
+    tab: Int,
+    onSelect: (Int) -> Unit,
+    items: List<Triple<String, androidx.compose.ui.graphics.vector.ImageVector, Int>>,
+) {
+    Row(
+        Modifier.fillMaxWidth().height(52.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+    ) {
+        items.forEach { (label, icon, index) ->
+            val selected = tab == index
+            val color = if (selected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+            Column(
+                Modifier.weight(1f).fillMaxHeight()
+                    .clickable { onSelect(index) },
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Icon(icon, contentDescription = label, tint = color, modifier = Modifier.size(20.dp))
+                Text(label, color = color, fontSize = 10.sp)
+            }
+        }
     }
 }
