@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
@@ -107,7 +108,10 @@ fun AppRoot(canScan: Boolean, vm: MonitorViewModel = viewModel()) {
         },
         bottomBar = {
             val au by vm.appUpdate.collectAsState()
-            Box(Modifier.fillMaxWidth()) {
+            // Material3's NavigationBar reserved space above the system's own
+            // gesture/button bar automatically; a plain Row does not, so without this
+            // the tab bar draws underneath the system buttons instead of above them.
+            Box(Modifier.fillMaxWidth().navigationBarsPadding()) {
                 CompactTabBar(
                     tab = tab,
                     onSelect = { tab = it },
