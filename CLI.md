@@ -13,9 +13,9 @@ Protocol version **3**. Check it with `ver` before anything else.
 
 > **Changed in 3:** telemetry is split into three groups with independent rates, each
 > emitted as its own prefixed record — `f` fast, `c` calculated, `e` environmental. The
-> single wide CSV row of protocol 2 is gone. Up to **three BLE centrals** may connect at
-> once; a command's reply is unicast to the client that sent it, while the stream is
-> broadcast to every subscriber.
+> single wide CSV row of protocol 2 is gone. **Multiple BLE centrals** may connect at
+> once (see §1 for the current limit); a command's reply is unicast to the client that
+> sent it, while the stream is broadcast to every subscriber.
 >
 > **Changed in 2:** the CSV stream gained temperature, humidity and pressure, and `env`
 > was added.
@@ -34,7 +34,7 @@ Protocol version **3**. Check it with `ver` before anything else.
 | RX — write commands here | `6E400002-B5A3-F393-E0A9-E50E24DCCA9E` — Write, Write-No-Response |
 | TX — subscribe for output | `6E400003-B5A3-F393-E0A9-E50E24DCCA9E` — Notify |
 | OTA — firmware image data | `6E400004-B5A3-F393-E0A9-E50E24DCCA9E` — Write (with response) only. Not part of Nordic's NUS; see §6 "Firmware update" |
-| Connections | **up to 3 at once** |
+| Connections | **up to 9 at once** (the NimBLE/hardware ceiling on this chip) |
 | Preferred ATT MTU | 512 |
 
 The 128-bit service UUID is in the **scan response**, not the advertisement — a

@@ -34,9 +34,11 @@
 extern "C" {
 #endif
 
-/** Concurrent centrals. Each costs a connection slot in NimBLE and ~200 bytes here;
- *  three covers a phone, a laptop and something forgotten in a drawer. */
-#define BLE_MAX_CONNS 3
+/** Concurrent centrals. Each costs a connection slot in NimBLE and ~200 bytes here.
+ *  9 is the hardware/NimBLE ceiling on this chip (BT_NIMBLE_MAX_CONNECTIONS's Kconfig
+ *  range for ESP32-C6 is 1..9) -- not a policy choice, so there is nothing left to
+ *  raise past it. */
+#define BLE_MAX_CONNS 9
 
 /**
  * Called from the worker task, never from the NimBLE host task, so a handler may block
