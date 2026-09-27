@@ -1,8 +1,11 @@
 package ru.vitska.powermon.ui
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Build
@@ -29,6 +32,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ru.vitska.powermon.ble.Link
 import ru.vitska.powermon.ble.Nus
@@ -97,6 +101,15 @@ fun AppRoot(canScan: Boolean, vm: MonitorViewModel = viewModel()) {
             )
         },
         bottomBar = {
+          Column {
+            val au by vm.appUpdate.collectAsState()
+            Row(Modifier.fillMaxWidth().padding(end = 8.dp, top = 2.dp), horizontalArrangement = Arrangement.End) {
+                Text(
+                    "v" + au.currentVersion,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             NavigationBar(containerColor = MaterialTheme.colorScheme.background) {
                 NavigationBarItem(
                     selected = tab == 0,
@@ -123,6 +136,7 @@ fun AppRoot(canScan: Boolean, vm: MonitorViewModel = viewModel()) {
                     label = { Text("Firmware") },
                 )
             }
+          }
         },
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {

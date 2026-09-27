@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Where FileProvider is allowed to hand out content:// URIs from. The downloaded
+     APK is written to the app's own cache dir before the install intent is fired. -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="updates" path="." />
+</paths>

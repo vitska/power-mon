@@ -26,6 +26,10 @@
     <!-- Firmware updates: the release check and download from GitHub. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- App self-update: installing the downloaded APK. Android still shows its own
+         "allow installs from this app" prompt the first time regardless. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 
     <application
@@ -44,5 +48,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Hands the downloaded APK a content:// URI for the install intent; a
+             file:// URI is refused by FileUriExposedException on API 24+. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

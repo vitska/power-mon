@@ -47,6 +47,7 @@ fun FirmwareScreen(vm: MonitorViewModel) {
     val link by vm.link.collectAsState()
     val fw by vm.firmware.collectAsState()
     val shake by vm.handshake.collectAsState()
+    val au by vm.appUpdate.collectAsState()
     val context = LocalContext.current
 
     var confirmFlash by remember { mutableStateOf<String?>(null) }
@@ -55,6 +56,8 @@ fun FirmwareScreen(vm: MonitorViewModel) {
     // Keyed on the target: connecting to a remote display after a monitor (or back)
     // needs the other release series.
     LaunchedEffect(fw.target, fw.checked) { if (!fw.checked && !fw.checking) vm.checkLatest() }
+    // Needs only a network connection, not a board -- checked once regardless of link.
+    LaunchedEffect(Unit) { if (!au.checked && !au.checking) vm.checkAppUpdate() }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
             uri: Uri? ->
@@ -86,6 +89,28 @@ fun FirmwareScreen(vm: MonitorViewModel) {
         fw.error?.let { Warn(it) }
         fw.notice?.let {
             Section("Done") { Text(it) }
+        }
+
+        Section("This app") {
+            KV("version", au.currentVersion)
+            when {
+                au.checking -> Text("checking github.com/${FirmwareReleases.REPO}...")
+                au.latest != null -> KV("latest release", au.latest!!.tag)
+                au.checked -> Text("No app release published yet.")
+                else -> Text("Not checked.")
+            }
+            au.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (au.isNewer) {
+                    Button(onClick = { vm.downloadAndInstallUpdate() }, enabled = !au.downloading) {
+                        Text(if (au.downloading) "Downloading…" else "Update to ${au.latest!!.tag}")
+                    }
+                }
+                OutlinedButton(onClick = { vm.checkAppUpdate() }, enabled = !au.checking) {
+                    Text("Check again")
+                }
+            }
         }
 
         Section(if (fw.target == FirmwareTarget.REMOTE) "On the remote display" else "On the board") {

@@ -201,6 +201,77 @@ object FirmwareReleases {
         }
 }
 
+/**
+ * A published release of this app itself: tag `app-vX.Y.Z`, asset
+ * `battery-monitor-X.Y.Z.apk` (tools/release.ps1 -App). Not a [Release] -- there is no
+ * BLE device it targets, and the asset filename carries its own version rather than
+ * being fixed, so it needs its own small parse instead of reusing [FirmwareTarget].
+ */
+data class AppRelease(val tag: String, val version: FwVersion?, val assetUrl: String, val size: Long)
+
+/** Same GitHub repo as [FirmwareReleases], the `app-v` series instead. */
+object AppReleases {
+    private const val TAG_PREFIX = "app-v"
+    private val ASSET_RE = Regex("""^battery-monitor-.*\.apk$""")
+
+    fun latest(): AppRelease? {
+        val c = open("https://api.github.com/repos/${FirmwareReleases.REPO}/releases?per_page=30")
+        c.setRequestProperty("Accept", "application/vnd.github+json")
+        return try {
+            if (c.responseCode != 200) {
+                throw java.io.IOException("GitHub answered HTTP ${c.responseCode}")
+            }
+            val list = org.json.JSONArray(c.inputStream.bufferedReader().readText())
+            (0 until list.length())
+                .map { list.getJSONObject(it) }
+                .filter { !it.optBoolean("draft") && !it.optBoolean("prerelease") }
+                .mapNotNull { parse(it) }
+                .maxWithOrNull(compareBy(nullsFirst()) { it.version })
+        } finally {
+            c.disconnect()
+        }
+    }
+
+    fun download(r: AppRelease): ByteArray {
+        val c = open(r.assetUrl)
+        c.setRequestProperty("Accept", "application/octet-stream")
+        return try {
+            if (c.responseCode != 200) throw java.io.IOException("download: HTTP ${c.responseCode}")
+            c.inputStream.readBytes()
+        } finally {
+            c.disconnect()
+        }
+    }
+
+    private fun parse(j: JSONObject): AppRelease? {
+        val tag = j.optString("tag_name")
+        if (!tag.startsWith(TAG_PREFIX) || tag.getOrNull(TAG_PREFIX.length)?.isDigit() != true) {
+            return null
+        }
+        val assets = j.optJSONArray("assets") ?: return null
+        for (i in 0 until assets.length()) {
+            val a = assets.getJSONObject(i)
+            val name = a.optString("name")
+            if (ASSET_RE.matches(name)) {
+                return AppRelease(
+                    tag = tag,
+                    version = FwVersion.parse(tag.removePrefix(TAG_PREFIX)),
+                    assetUrl = a.getString("browser_download_url"),
+                    size = a.optLong("size"),
+                )
+            }
+        }
+        return null
+    }
+
+    private fun open(url: String): HttpURLConnection =
+        (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 10_000
+            readTimeout = 30_000
+            instanceFollowRedirects = true
+        }
+}
+
 /** What the device's `ota status` said. Keys as CLI.md §6 lists them. */
 data class OtaStatus(val raw: Map<String, String>) {
     val version: String? get() = raw["version"]

@@ -1,8 +1,11 @@
 package ru.vitska.powermon.model
 
 import android.app.Application
+import android.content.Intent
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -16,6 +19,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import ru.vitska.powermon.ble.AppRelease
+import ru.vitska.powermon.ble.AppReleases
 import ru.vitska.powermon.ble.BatmonClient
 import ru.vitska.powermon.ble.ConfigState
 import ru.vitska.powermon.ble.DeviceStore
@@ -118,6 +123,24 @@ data class FirmwareState(
     val notice: String? = null,
 )
 
+/** The app's own update state -- separate from [FirmwareState], which is about the
+ *  connected board and needs a device; this needs only a network connection. */
+data class AppUpdateState(
+    val currentVersion: String = "",
+    val latest: AppRelease? = null,
+    val checking: Boolean = false,
+    val checked: Boolean = false,
+    val downloading: Boolean = false,
+    val error: String? = null,
+) {
+    val isNewer: Boolean
+        get() {
+            val cur = ru.vitska.powermon.ble.FwVersion.parse(currentVersion)
+            val lat = latest?.version
+            return lat != null && (cur == null || lat > cur)
+        }
+}
+
 /** One row in the device picker: a board this phone knows about, has just seen, or both. */
 data class DeviceEntry(
     val address: String,
@@ -172,6 +195,13 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _fw = MutableStateFlow(FirmwareState())
     val firmware = _fw.asStateFlow()
+
+    private val _appUpdate = MutableStateFlow(
+        AppUpdateState(currentVersion = runCatching {
+            app.packageManager.getPackageInfo(app.packageName, 0).versionName ?: "?"
+        }.getOrDefault("?"))
+    )
+    val appUpdate = _appUpdate.asStateFlow()
 
     /** The monitor's 48 h SoC history; null until read on this connection. */
     private val _history = MutableStateFlow<SocHistory?>(null)
@@ -448,6 +478,51 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
 
     fun updateFromFile(bytes: ByteArray) = startUpdate("checking the file") {
         FirmwareImage.parse(bytes, _fw.value.target)
+    }
+
+    /** Asks GitHub for the newest app-vX.Y.Z release. Off the main thread. */
+    fun checkAppUpdate() = viewModelScope.launch {
+        _appUpdate.value = _appUpdate.value.copy(checking = true, error = null)
+        val result = runCatching { withContext(Dispatchers.IO) { AppReleases.latest() } }
+        _appUpdate.value = _appUpdate.value.copy(
+            checking = false,
+            checked = result.isSuccess,
+            latest = result.getOrNull(),
+            error = result.exceptionOrNull()?.let { "release check failed: ${it.message}" },
+        )
+    }
+
+    /**
+     * Downloads the checked release's APK to the app's own cache dir and hands it to
+     * the system installer via a FileProvider content:// URI -- the actual install
+     * still needs the user's confirmation in that system UI, same as sideloading any
+     * APK; this only gets them to that screen without a browser detour.
+     */
+    fun downloadAndInstallUpdate() {
+        val rel = _appUpdate.value.latest ?: return
+        if (_appUpdate.value.downloading) return
+        viewModelScope.launch {
+            _appUpdate.value = _appUpdate.value.copy(downloading = true, error = null)
+            try {
+                val app = getApplication<Application>()
+                val bytes = withContext(Dispatchers.IO) { AppReleases.download(rel) }
+                val file = withContext(Dispatchers.IO) {
+                    val dir = File(app.cacheDir, "updates").apply { mkdirs() }
+                    File(dir, "battery-monitor-${rel.tag}.apk").apply { writeBytes(bytes) }
+                }
+                val uri = FileProvider.getUriForFile(app, "${app.packageName}.fileprovider", file)
+                app.startActivity(
+                    Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(uri, "application/vnd.android.package-archive")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                )
+            } catch (e: Exception) {
+                _appUpdate.value = _appUpdate.value.copy(error = e.message ?: e.toString())
+            } finally {
+                _appUpdate.value = _appUpdate.value.copy(downloading = false)
+            }
+        }
     }
 
     fun cancelUpdate() {
