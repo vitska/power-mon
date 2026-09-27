@@ -291,10 +291,10 @@ fun ConfigureScreen(vm: MonitorViewModel) {
 
             Text("KNOWN VALUES", style = MaterialTheme.typography.labelSmall)
             Text(
-                "Enter what your meter reads and tap Set -- applied immediately. For " +
-                    "current the board solves the shunt resistance from it, so the " +
-                    "shunt's value need not be known; for voltage it solves the gain " +
-                    "from one instant reading.",
+                "Enter what your meter reads and tap Set -- one instant reading, " +
+                    "applied and saved immediately, no averaging or wait. For current " +
+                    "the board solves the shunt resistance from it, so the shunt's " +
+                    "value need not be known; for voltage it solves the gain.",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(8.dp))
@@ -304,20 +304,11 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                 signed = true,
                 showHint = false,
             ) { v ->
-                // The command solves the shunt resistance from this reading (firmware
-                // `cal top i`): the resistance is whatever the measured current says.
-                // No pre-check here — whatever value is entered is sent as-is.
-                guarded(
-                    Confirmation(
-                        "Solve the shunt resistance from " + v + " A?",
-                        "The board reads the raw shunt voltage on both sensors, uses " +
-                            "the one that sees the current, and sets resistance, " +
-                            "direction and sensor so it reads " + v + " A. Nothing " +
-                            "set before matters. Keep the current steady; the more " +
-                            "current, the more exact. About 20 s.",
-                        "cal top i " + Micro.amps(v),
-                    )
-                )
+                // Instant, silent: one reading of each sensor, taken and applied and
+                // saved the moment Set is tapped (firmware `cal top i`) -- the same
+                // shape as Measured voltage below, now that both are one-shot reads
+                // rather than an average worth confirming first.
+                silent("cal top i " + Micro.amps(v))
             }
             MicroField(
                 "Measured voltage", "V", "",

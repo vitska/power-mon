@@ -194,11 +194,11 @@ typedef struct {
 
 /**
  * Auto-detects which pole's INA219 is actually wired across the shunt -- whichever
- * reads the larger raw shunt voltage under this known current -- then solves that
- * device's resistance directly from the measured value, never from a fixed or
- * configured shunt. Sets mode (only when both poles answered), sign, shunt
- * resistance, offset (carried over from any existing zero point on the same chip)
- * and unity gain.
+ * reads the larger raw shunt voltage under this known current, from one instant
+ * reading of each pole, no averaging -- then solves that device's resistance
+ * directly from the measured value, never from a fixed or configured shunt. Sets
+ * mode (only when both poles answered), sign, shunt resistance, offset (carried
+ * over from any existing zero point on the same chip) and unity gain.
  *
  * Returns ESP_ERR_INVALID_ARG for a zero known current, ESP_ERR_NOT_FOUND if neither
  * pole answered, ESP_ERR_INVALID_SIZE if the computed resistance is below the
@@ -206,8 +206,7 @@ typedef struct {
  * in with what was computed so the caller can report it, but nothing was applied:
  * mode, sign, offset and gain are all left exactly as they were.
  */
-esp_err_t sensors_calibrate_shunt(sensors_handle_t h, int64_t known_ua, uint32_t n_samples,
-                                  sensors_progress_cb_t progress, void *progress_ctx,
+esp_err_t sensors_calibrate_shunt(sensors_handle_t h, int64_t known_ua,
                                   sensors_shunt_cal_t *out);
 
 /**

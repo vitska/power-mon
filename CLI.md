@@ -157,7 +157,7 @@ hard-coding one:
 | `ver`, `help`, and every setter | — | **< 100 ms** |
 | `read` | 1 both | **0.4 s** |
 | `env` | 1 forced conversion | **~12 ms** |
-| `cal top i` | 64 both | **~17 s** |
+| `cal top i` | 1 (instant) | **< 100 ms** |
 | `cal top v` | 1 (instant) | **< 100 ms** |
 | `cal zero i` | 256 one | **~35 s** (8.8 s at 64) |
 | `cal zero v` | 256 both | **~68 s** (8.5 s at 32) |
@@ -488,7 +488,7 @@ Guided two-point flow. Everything here persists automatically.
 | `cal` | — | Which points are set, and whether stored |
 | `cal zero i [n]` | 16–4096, default 256 | Current offset. **Load disconnected.** ~35 s |
 | `cal zero v [n]` | 16–4096, default 256 | Voltage offset. **VBUS at ground**, not merely disconnected. ~68 s |
-| `cal top i <uA> [n]` | n 8–1024, default 64 | Current gain from a meter reading. ~17 s |
+| `cal top i <uA>` | | Shunt resistance, sign and pole, from **one instant reading** of each sensor — no averaging, no wait |
 | `cal top v <uV>` | | Voltage gain, from **one instant reading**, taken the moment the command arrives — no averaging, no wait |
 | `cal save` | | Persist whatever is live — needed after `curve ... ref`, which solves a value but does not save it |
 | `cal forget` | | Erase the stored calibration |

@@ -513,8 +513,7 @@ bool sensors_solve_gain_ppm(int64_t measured, int64_t reference, uint32_t old_pp
     return true;
 }
 
-esp_err_t sensors_calibrate_shunt(sensors_handle_t h, int64_t known_ua, uint32_t n_samples,
-                                  sensors_progress_cb_t progress, void *progress_ctx,
+esp_err_t sensors_calibrate_shunt(sensors_handle_t h, int64_t known_ua,
                                   sensors_shunt_cal_t *out)
 {
     ESP_RETURN_ON_FALSE(h && out, ESP_ERR_INVALID_ARG, TAG, "null");
@@ -528,28 +527,29 @@ esp_err_t sensors_calibrate_shunt(sensors_handle_t h, int64_t known_ua, uint32_t
     ina219_handle_t pos = h->pos;
     ina219_handle_t neg = h->neg;
 
-    int64_t  sum_p = 0, sum_n = 0;
+    /*
+     * One instant reading per pole, not an average: this solves linearly from
+     * whatever the shunt reads right now -- old_gain * ref / measured, in effect --
+     * so there is nothing an average would improve that a moment's read does not
+     * already give exactly. Averaging a changing input across many seconds is what
+     * used to make the reading this solved from drift from what the next sample
+     * showed, the same reason cal top v dropped its average.
+     */
+    int64_t  v_p = 0, v_n = 0;
     uint32_t got_p = 0, got_n = 0;
     bool     sat_p = false, sat_n = false;
-    for (uint32_t i = 0; i < n_samples; i++) {
-        ina219_sample_t smp;
-        if (pos && ina219_read_blocking(pos, &smp) == ESP_OK) {
-            sum_p += smp.v_shunt_uv;
-            got_p++;
-            sat_p |= smp.saturated;
-        }
-        if (neg && ina219_read_blocking(neg, &smp) == ESP_OK) {
-            sum_n += smp.v_shunt_uv;
-            got_n++;
-            sat_n |= smp.saturated;
-        }
-        if (progress) {
-            progress(i, progress_ctx);
-        }
+    ina219_sample_t smp;
+    if (pos && ina219_read_blocking(pos, &smp) == ESP_OK) {
+        v_p = smp.v_shunt_uv;
+        got_p = 1;
+        sat_p = smp.saturated;
+    }
+    if (neg && ina219_read_blocking(neg, &smp) == ESP_OK) {
+        v_n = smp.v_shunt_uv;
+        got_n = 1;
+        sat_n = smp.saturated;
     }
 
-    const int64_t v_p = got_p ? sum_p / (int64_t)got_p : 0;
-    const int64_t v_n = got_n ? sum_n / (int64_t)got_n : 0;
     const int64_t a_p = v_p < 0 ? -v_p : v_p;
     const int64_t a_n = v_n < 0 ? -v_n : v_n;
 

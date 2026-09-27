@@ -1199,15 +1199,6 @@ static void average_progress_dot(uint32_t index, void *ctx)
     }
 }
 
-/* Same, at the cadence cal_shunt()'s dual-sensor read used to print inline. */
-static void shunt_progress_dot(uint32_t index, void *ctx)
-{
-    (void)ctx;
-    if ((index & 7) == 7) {
-        printf(".");
-    }
-}
-
 /* Averages n samples so a one-point gain solve is not decided by a single reading.
  * Thin wrapper: takes the sensor lock and prints progress/failure, sensors_average()
  * does the actual reading. */
@@ -2130,13 +2121,14 @@ static void cal_status(ina219_handle_t cd, ina219_handle_t vd)
 }
 
 /*
- * `cal top i <uA> [n]` (alias `cal shunt`): everything about the current channel from
- * one known current. Nothing that was configured before is trusted -- not the shunt
- * resistance, not which pole's sensor carries the current, not the sign -- because a
- * known current and the raw shunt voltages are enough to determine all three:
+ * `cal top i <uA>` (alias `cal shunt`): everything about the current channel from one
+ * known current, one instant reading -- no averaging, no wait. Nothing that was
+ * configured before is trusted -- not the shunt resistance, not which pole's sensor
+ * carries the current, not the sign -- because a known current and the raw shunt
+ * voltages are enough to determine all three:
  *
- *   1. Average the raw shunt voltage on BOTH INA219s. That is what each chip actually
- *      sees across its inputs, before any setting is applied (10 uV per count).
+ *   1. Read the raw shunt voltage on BOTH INA219s, right now. That is what each chip
+ *      actually sees across its inputs, before any setting is applied (10 uV/count).
  *   2. The chip that sees the current is the one with the larger voltage: make it the
  *      current sensor, on whichever pole it is.
  *   3. Resistance = that voltage / the known current.
@@ -2146,14 +2138,13 @@ static void cal_status(ina219_handle_t cd, ina219_handle_t vd)
  * Gain goes back to 1.0. A zero point taken earlier on the same chip stays valid: its
  * offset is kept as a voltage and rescaled to the new resistance.
  */
-#define CAL_SHUNT_MIN_UV 30 /* averaged; three counts -- below that, no current is seen */
-
 static int cal_shunt(int argc, char **argv)
 {
     if (argc < 3) {
-        printf("usage: cal top i <uA> [samples]\n");
-        printf("Let a steady, known current flow and give the meter's reading.\n");
-        printf("Positive is charging. The more current, the more exact.\n");
+        printf("usage: cal top i <uA>\n");
+        printf("Let a steady, known current flow and give the meter's reading now --\n");
+        printf("this uses one instant reading of each sensor, taken the moment the\n");
+        printf("command arrives. Positive is charging.\n");
         return 1;
     }
     if (no_sensors()) {
@@ -2165,29 +2156,13 @@ static int cal_shunt(int argc, char **argv)
         printf("the current is micro-amps, a whole number: 5800000 for 5.8 A\n");
         return 1;
     }
-    uint32_t n = 64;
-    if (argc >= 4 && argv[3]) {
-        const long ns = strtol(argv[3], NULL, 10);
-        if (ns < 8 || ns > 1024) {
-            printf("sample count must be 8..1024\n");
-            return 1;
-        }
-        n = (uint32_t)ns;
-    }
-    const bool was_streaming = config()->stream_enabled;
-    config()->stream_enabled    = false;
     if (!sensor_lock_take(s_ctx, 2000)) {
-        config()->stream_enabled = was_streaming;
         printf("sensor busy -- try again\n");
         return 1;
     }
-    printf("KNOWN CURRENT %ld uA. Reading both sensors, %lu samples", ref, (unsigned long)n);
     sensors_shunt_cal_t cal;
-    const esp_err_t err = sensors_calibrate_shunt(s_ctx->sensors, ref, n,
-                                                  shunt_progress_dot, NULL, &cal);
+    const esp_err_t err = sensors_calibrate_shunt(s_ctx->sensors, ref, &cal);
     sensor_lock_give(s_ctx);
-    config()->stream_enabled = was_streaming;
-    printf("\n");
 
     if (err == ESP_ERR_INVALID_ARG) {
         printf("the known current is exactly zero -- nothing to divide by.\n");
@@ -2253,8 +2228,8 @@ static int cmd_cal(int argc, char **argv)
         printf("\n");
         printf("  cal zero i [n]        no current flowing -> current offset\n");
         printf("  cal zero v [n]        no voltage on VBUS -> voltage offset\n");
-        printf("  cal top i <uA> [n]    known current, from your meter -> gain\n");
-        printf("  cal top v <uV> [n]    known voltage, from your meter -> gain\n");
+        printf("  cal top i <uA>        known current, from your meter -> gain\n");
+        printf("  cal top v <uV>        known voltage, from your meter -> gain\n");
         printf("  cal reset [i|v]       back to zero offset, unity gain\n");
         printf("  cal save              write to flash (zero/top do this for you)\n");
         printf("  cal forget            erase the stored calibration\n");
@@ -2413,10 +2388,9 @@ static int cmd_cal(int argc, char **argv)
      * the measured current (cal_shunt), whatever resistance is configured: the shunt's
      * real value is what the meter reading determines, and a +/-10 % gain trim around
      * a guessed resistance refused exactly the case it is needed for -- a shunt of
-     * unknown value. `cal top i <uA> [n]` is `cal shunt <uA> [n]`. */
+     * unknown value. `cal top i <uA>` is `cal shunt <uA>`. */
     if (chan_i) {
-        char *sargv[4] = {argv[0], (char *)"shunt", argc >= 4 ? argv[3] : NULL,
-                          argc >= 5 ? argv[4] : NULL};
+        char *sargv[3] = {argv[0], (char *)"shunt", argc >= 4 ? argv[3] : NULL};
         return cal_shunt(argc - 1, sargv);
     }
 
@@ -3190,7 +3164,7 @@ void cli_start(app_ctx_t *ctx)
     register_cmd("zero",    "Zero-current calibration (load disconnected!)", "[samples]",     cmd_zero);
     register_cmd("shunt",   "Shunt resistance, or its location in the pack", "[uohm | loc <p|n|single|auto>]", cmd_shunt);
     register_cmd("curve",   "Current/voltage conversion curve and calibration", "[i|v <offset|gain|ref|divider> <v>]", cmd_curve);
-    register_cmd("cal",     "Guided two-point calibration, saved to flash",  "<zero|top> <i|v> [value] [n] | shunt <uA> [n] | save | forget | reset", cmd_cal);
+    register_cmd("cal",     "Guided two-point calibration, saved to flash",  "<zero|top> <i|v> [value] [n] | shunt <uA> | save | forget | reset", cmd_cal);
     register_cmd("gain",    "Show or set the gain trim in ppm",             "[ppm]",          cmd_gain);
     register_cmd("offset",  "Show or set the current offset in uA",         "[uA]",           cmd_offset);
     register_cmd("pga",     "Show or set the PGA range",                    "<auto|1|2|4|8>", cmd_pga);

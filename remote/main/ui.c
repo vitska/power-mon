@@ -574,9 +574,9 @@ static const action_def_t ACTIONS[] = {
                     "Solve shunt from %s A?",
                     "The board works out the shunt resistance that makes it read this "
                     "current -- the shunt's value need not be known. Same direction as "
-                    "the board measures; at least 10 mA, and the more the better. "
-                    "Averages 64 samples, about 17 seconds.",
-                    "A", 37000},
+                    "the board measures. One instant reading -- no averaging, no wait; "
+                    "applied and saved right away.",
+                    "A", 4000},
     [ACT_TOP_V]  = {"MEASURED VOLTAGE", "type what your meter reads",
                     "Set voltage gain from %s V?",
                     "One instant reading -- no averaging, no wait; applied and saved "
