@@ -345,13 +345,15 @@ static uint32_t soc_from_ocv(uint32_t ocv_uv)
  * the deadband as the threshold, such a pack never rested, never re-synced, and a
  * wrong count stayed wrong indefinitely.
  *
- * C/400: 110 mA on 44 Ah. At that rate the I·R term is well under a millivolt after
- * compensation, and polarisation is a few millivolts -- a fraction of a percent of SoC.
+ * C/110: 0.4 A on 44 Ah, averaged over ~10 s (CLASS_TAU_S). Below it the pack is
+ * SETTLING whatever the direction -- the small, noisy currents of an idle installation
+ * are not a charge or a discharge worth leaving the settle countdown for. The I·R
+ * compensation still applies at that current, so OCV stays usable.
  */
 static uint32_t rest_current_ua(void)
 {
-    const uint32_t c400 = s_fg.cfg.design_capacity_uah / 400;
-    return c400 > s_fg.cfg.i_deadband_ua ? c400 : s_fg.cfg.i_deadband_ua;
+    const uint32_t c110 = s_fg.cfg.design_capacity_uah / 110;
+    return c110 > s_fg.cfg.i_deadband_ua ? c110 : s_fg.cfg.i_deadband_ua;
 }
 
 /*

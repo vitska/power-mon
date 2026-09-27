@@ -38,7 +38,7 @@ Verified against a 12 V / 44 A·h flooded lead-acid battery.
   to flash and restored at boot.
 - **Fuel gauge**: coulomb counting with I·R-compensated OCV re-anchoring, Peukert
   compensation, capacity learning, full/empty/rest anchors.
-  - It counts as resting below C/400 (110 mA on 44 Ah), not below the 3 mA
+  - It counts as resting (SETTLING) below C/110 (0.4 A on 44 Ah, 10 s average), not below the 3 mA
     deadband. A pack that powers its own monitor never stops drawing a few mA, and still
     has to re-sync.
   - The empty anchor must hold for 10 s.
