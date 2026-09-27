@@ -194,7 +194,7 @@ private fun Metric(label: String, value: String, modifier: Modifier = Modifier) 
 @Composable
 fun Section(title: String, content: @Composable () -> Unit) {
     Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp)) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
             Text(title, style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.height(6.dp))
             content()
@@ -221,6 +221,28 @@ fun KV(k: String, v: String) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(v, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
         }
+    }
+}
+
+/**
+ * Two label/value cells per row, each taking half the width -- for a block of short
+ * read-only facts (device readings, trims, status), so the screen's full width is
+ * used instead of one narrow column of rows down the middle.
+ */
+@Composable
+fun KVGrid(vararg pairs: Pair<String, String>) {
+    pairs.toList().chunked(2).forEach { row ->
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            row.forEach { (k, v) ->
+                Column(Modifier.weight(1f)) {
+                    Text(k, style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(v, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+            if (row.size == 1) Spacer(Modifier.weight(1f))
+        }
+        Spacer(Modifier.height(8.dp))
     }
 }
 

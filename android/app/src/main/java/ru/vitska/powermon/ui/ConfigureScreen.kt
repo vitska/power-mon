@@ -160,7 +160,7 @@ fun ConfigureScreen(vm: MonitorViewModel) {
     }
 
     Column(
-        Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
+        Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         if (link != Link.Ready) {
@@ -192,9 +192,11 @@ fun ConfigureScreen(vm: MonitorViewModel) {
 
         Section("Calibration") {
             Text("DEVICE READS NOW", style = MaterialTheme.typography.labelSmall)
-            KV("Voltage", t.volts?.let { String.format("%.3f V", it) } ?: "—")
-            KV("Current", t.amps?.let { String.format("%+.4f A", it) } ?: "—")
-            KV("Shunt drop (raw)", t.shuntMv?.let { String.format("%+.3f mV", it) } ?: "—")
+            KVGrid(
+                "Voltage" to (t.volts?.let { String.format("%.3f V", it) } ?: "—"),
+                "Current" to (t.amps?.let { String.format("%+.4f A", it) } ?: "—"),
+                "Shunt drop (raw)" to (t.shuntMv?.let { String.format("%+.3f mV", it) } ?: "—"),
+            )
             if (t.saturated) {
                 Spacer(Modifier.height(6.dp))
                 Text(
@@ -210,20 +212,17 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             Spacer(Modifier.height(12.dp))
 
             Text("TRIMS IN FORCE", style = MaterialTheme.typography.labelSmall)
-            KV(
-                "Shunt resistance",
-                cfg.milli("shunt.uohm", 3)?.let { r ->
+            KVGrid(
+                "Shunt resistance" to (cfg.milli("shunt.uohm", 3)?.let { r ->
                     r + " mOhm" + (cfg.str("shunt.loc")?.let { " on " + it.uppercase() } ?: "")
-                } ?: "—",
+                } ?: "—"),
+                "Sign" to (cfg.str("sense.sign")?.let { if (it == "invert") "inverted" else "normal" } ?: "—"),
+                "Current offset" to (cfg.long("cal.i_offset_ua")?.let { String.format("%+d uA", it) } ?: "—"),
+                "Voltage offset" to (cfg.long("cal.v_offset_uv")?.let { String.format("%+d uV", it) } ?: "—"),
             )
-            KV("Sign", cfg.str("sense.sign")?.let { if (it == "invert") "inverted" else "normal" } ?: "—")
-            KV("Current offset", cfg.long("cal.i_offset_ua")
-                ?.let { String.format("%+d uA", it) } ?: "—")
             KV("Current gain", cfg.gainPct("cal.i_gain_ppm")
                 ?.let { it + "  (" + cfg.str("cal.i_gain_ppm") + " ppm)" } ?: "—")
             GainStepper("i", cfg.long("cal.i_gain_ppm"), quietSet)
-            KV("Voltage offset", cfg.long("cal.v_offset_uv")
-                ?.let { String.format("%+d uV", it) } ?: "—")
             KV("Voltage gain", cfg.gainPct("cal.v_gain_ppm")
                 ?.let { it + "  (" + cfg.str("cal.v_gain_ppm") + " ppm)" } ?: "—")
             GainStepper("v", cfg.long("cal.v_gain_ppm"), quietSet)
@@ -312,9 +311,11 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             Choice("sense pgamax", listOf("1", "2", "4", "8"),
                 cfg.str("sense.pgamax")) { set("sense pgamax " + it) }
             Spacer(Modifier.height(4.dp))
-            KV("Roles", cfg.str("shunt.roles") ?: "—")
-            KV("Active range", cfg.str("sense.pga")?.let { "/" + it } ?: "—")
-            KV("Autorange", cfg.bool("sense.autorange")?.let { if (it) "on" else "off" } ?: "—")
+            KVGrid(
+                "Roles" to (cfg.str("shunt.roles") ?: "—"),
+                "Active range" to (cfg.str("sense.pga")?.let { "/" + it } ?: "—"),
+                "Autorange" to (cfg.bool("sense.autorange")?.let { if (it) "on" else "off" } ?: "—"),
+            )
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = { guarded("detect") }) { Text("detect") }
         }
@@ -400,12 +401,11 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                 set("soc set " + Micro.permille(it))
             }
             Spacer(Modifier.height(4.dp))
-            KV("Learned capacity", cfg.micro("soc.learned_uah", 2)?.let { it + " Ah" } ?: "—")
-            KV("Integration deadband", cfg.micro("soc.deadband_ua", 3)?.let { it + " A" } ?: "—")
-            KV(
-                "SoC source",
-                when (cfg.bool("soc.voltage_only")) {
-                    true -> "VOLTAGE only — no count behind it"
+            KVGrid(
+                "Learned capacity" to (cfg.micro("soc.learned_uah", 2)?.let { it + " Ah" } ?: "—"),
+                "Integration deadband" to (cfg.micro("soc.deadband_ua", 3)?.let { it + " A" } ?: "—"),
+                "SoC source" to when (cfg.bool("soc.voltage_only")) {
+                    true -> "VOLTAGE only"
                     false -> "counted"
                     null -> "—"
                 },
@@ -418,20 +418,16 @@ fun ConfigureScreen(vm: MonitorViewModel) {
         }
 
         Section("Display") {
-            KV(
-                "Panel",
-                when (cfg.bool("disp.present")) {
+            KVGrid(
+                "Panel" to when (cfg.bool("disp.present")) {
                     true -> if (cfg.bool("disp.on") == true) "on" else "blanked"
                     false -> "none fitted"
                     null -> "—"
                 },
-            )
-            KV(
-                "Screen",
-                cfg.str("disp.screen")?.let { sc ->
+                "Screen" to (cfg.str("disp.screen")?.let { sc ->
                     if (sc == "auto") "auto-cycling " + (cfg.str("disp.screens") ?: "")
                     else "pinned to " + sc
-                } ?: "—",
+                } ?: "—"),
             )
             Spacer(Modifier.height(8.dp))
             Wrap {
@@ -446,14 +442,13 @@ fun ConfigureScreen(vm: MonitorViewModel) {
         }
 
         Section("BLE and pairing") {
-            KV("Name", cfg.str("ble.name") ?: "—")
-            KV(
-                "Links",
-                cfg.str("ble.conns")?.let { c ->
-                    c + " connected, " + (cfg.str("ble.subs") ?: "?") + " subscribed"
-                } ?: "—",
+            KVGrid(
+                "Name" to (cfg.str("ble.name") ?: "—"),
+                "Links" to (cfg.str("ble.conns")?.let { c ->
+                    c + " connected, " + (cfg.str("ble.subs") ?: "?") + " sub"
+                } ?: "—"),
+                "Bonds" to (cfg.str("ble.bonds") ?: "—"),
             )
-            KV("Bonds", cfg.str("ble.bonds") ?: "—")
             Spacer(Modifier.height(8.dp))
             Choice("ble pair", listOf("open", "bonded"), cfg.str("ble.pair")) { mode ->
                 guarded("ble pair " + mode)
