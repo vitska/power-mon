@@ -55,8 +55,11 @@ static struct {
     int64_t  last_t_us;
     int64_t  idle_since_us;  /* 0 = not idle */
     int64_t  full_since_us;  /* 0 = full condition not currently held */
+    int64_t  full_sum_ua;    /* current summed over the full-hold window */
+    uint32_t full_n;
     int64_t  empty_since_us; /* 0 = empty condition not currently held */
     uint32_t s_since_anchor;
+    int64_t  anchor_rem_us;  /* sub-second remainder carried into s_since_anchor */
 
     int64_t  q_since_full_uas;  /* unclamped, for capacity learning */
     bool     have_full_anchor;
@@ -555,33 +558,52 @@ void fg_update(const power_sample_t *s)
         }
     }
 
-    if (dt > 0) {
-        const uint32_t secs = (uint32_t)(dt / 1000000);
-        if (s_fg.s_since_anchor != UINT32_MAX) {
-            s_fg.s_since_anchor += secs;
-        }
+    /* Sub-second remainder carried, not dropped: samples arrive every ~100 ms, and
+     * truncating each dt to whole seconds added 0 every time -- "last anchor" stayed
+     * at 0 s forever. */
+    if (dt > 0 && s_fg.s_since_anchor != UINT32_MAX) {
+        s_fg.anchor_rem_us  += dt;
+        s_fg.s_since_anchor += (uint32_t)(s_fg.anchor_rem_us / 1000000);
+        s_fg.anchor_rem_us  %= 1000000;
     }
 
     /* --- full detection: absorption voltage AND taper current (§5.4 A) -------- */
     const bool charging = s->i_ua > (int32_t)s_fg.cfg.i_deadband_ua;
-    if (s->v_valid && charging && s->v_pack_uv >= s_fg.cfg.v_full_uv &&
-        (uint32_t)s->i_ua <= s_fg.cfg.i_taper_ua) {
+    if (charging && s_fg.state == FG_EMPTY) {
+        s_fg.state = FG_COUNTING; /* charge is going in: no longer at the empty point */
+    }
+    /*
+     * The taper is judged on the MEAN current over the hold window, not on every
+     * sample. A CV charger's current ripples, and with the taper checked per sample a
+     * single reading above it restarted the 60 s window -- at 1.39 A against a
+     * 1.47 A taper the ripple did that often enough that full never latched and SoC
+     * sat near 0 % at 14.8 V.
+     */
+    if (s->v_valid && charging && s->v_pack_uv >= s_fg.cfg.v_full_uv) {
         if (s_fg.full_since_us == 0) {
             s_fg.full_since_us = now;
-        } else if ((now - s_fg.full_since_us) >=
-                   (int64_t)s_fg.cfg.t_full_hold_s * 1000000) {
-            /* Three conditions together, held: this is the strongest anchor a gauge
-             * gets, so it snaps rather than blends. */
-            s_fg.charge_uas     = capacity_uas();
-            s_fg.rem_frac       = 0;
-            s_fg.state          = FG_FULL;
-            s_fg.s_since_anchor = 0;
-            s_fg.voltage_only   = false;
-            s_fg.dirty          = true;
-            /* Open a learning window: from a known-full pack, the charge that comes
-             * out before the empty anchor IS the capacity. */
-            s_fg.q_since_full_uas = 0;
-            s_fg.have_full_anchor = true;
+            s_fg.full_sum_ua   = 0;
+            s_fg.full_n        = 0;
+        }
+        s_fg.full_sum_ua += s->i_ua;
+        s_fg.full_n++;
+        if ((now - s_fg.full_since_us) >= (int64_t)s_fg.cfg.t_full_hold_s * 1000000) {
+            const int64_t mean_ua = s_fg.full_sum_ua / (int64_t)s_fg.full_n;
+            if (mean_ua <= (int64_t)s_fg.cfg.i_taper_ua) {
+                /* Three conditions together, held: this is the strongest anchor a
+                 * gauge gets, so it snaps rather than blends. */
+                s_fg.charge_uas     = capacity_uas();
+                s_fg.rem_frac       = 0;
+                s_fg.state          = FG_FULL;
+                s_fg.s_since_anchor = 0;
+                s_fg.voltage_only   = false;
+                s_fg.dirty          = true;
+                /* Open a learning window: from a known-full pack, the charge that
+                 * comes out before the empty anchor IS the capacity. */
+                s_fg.q_since_full_uas = 0;
+                s_fg.have_full_anchor = true;
+            }
+            s_fg.full_since_us = 0; /* judge the next window afresh */
         }
     } else {
         s_fg.full_since_us = 0;
