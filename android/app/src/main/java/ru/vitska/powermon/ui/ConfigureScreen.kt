@@ -96,6 +96,25 @@ fun ConfigureScreen(vm: MonitorViewModel) {
         Unit
     }
 
+    /**
+     * Like [set], but only surfaces a failure -- not the command's own output on
+     * success. For a stepper tapped repeatedly (the gain fine-tune below): the new
+     * value already shows in the field it changed once `refreshConfig` returns, and
+     * `curve`'s own reply is a dump of every current/voltage term, which is exactly
+     * what buries that field under "Last response" after every single tap.
+     */
+    val quietSet: (String) -> Unit = { cmd ->
+        vm.launchCommandWith(cmd) { r ->
+            if (r == null) {
+                last = "no reply -- timed out"
+            } else if (!r.ok) {
+                last = "exit " + r.exit + "\n" + r.text
+            }
+            vm.launchRefreshConfig()
+        }
+        Unit
+    }
+
     /*
      * Calibration answers are shown where the calibration is, not only in "Last
      * response" at the top of the screen: the device's refusals name the physical
@@ -198,12 +217,12 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                 ?.let { String.format("%+d uA", it) } ?: "—")
             KV("Current gain", cfg.gainPct("cal.i_gain_ppm")
                 ?.let { it + "  (" + cfg.str("cal.i_gain_ppm") + " ppm)" } ?: "—")
-            GainStepper("i", cfg.long("cal.i_gain_ppm"), set)
+            GainStepper("i", cfg.long("cal.i_gain_ppm"), quietSet)
             KV("Voltage offset", cfg.long("cal.v_offset_uv")
                 ?.let { String.format("%+d uV", it) } ?: "—")
             KV("Voltage gain", cfg.gainPct("cal.v_gain_ppm")
                 ?.let { it + "  (" + cfg.str("cal.v_gain_ppm") + " ppm)" } ?: "—")
-            GainStepper("v", cfg.long("cal.v_gain_ppm"), set)
+            GainStepper("v", cfg.long("cal.v_gain_ppm"), quietSet)
             KV("Harness path", cfg.milli("shunt.vpath_uohm", 3)?.let { it + " mOhm" } ?: "—")
             KV(
                 "Stored in flash",
