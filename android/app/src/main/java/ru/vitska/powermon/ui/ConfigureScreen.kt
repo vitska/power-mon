@@ -299,9 +299,10 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             )
             Spacer(Modifier.height(8.dp))
             MicroField(
-                "Measured current now", "A", "1.959",
+                "Measured current now", "A", "",
                 prefill = t.amps?.let { String.format("%.4f", it) },
                 signed = true,
+                showHint = false,
             ) { v ->
                 // The command solves the shunt resistance from this reading (firmware
                 // `cal top i`): the resistance is whatever the measured current says.
@@ -319,8 +320,9 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                 )
             }
             MicroField(
-                "Measured voltage", "V", "12.44",
+                "Measured voltage", "V", "",
                 prefill = t.volts?.let { String.format("%.3f", it) },
+                showHint = false,
             ) { v ->
                 // Instant, silent: applied and saved the moment Set is tapped (firmware
                 // "cal top v" is one reading, no averaging); the field above shows the
@@ -783,17 +785,38 @@ private fun MicroField(
     current: String? = null,
     prefill: String? = null,
     signed: Boolean = false,
+    showHint: Boolean = true,
     onSet: (Double) -> Unit,
 ) {
     var text by remember { mutableStateOf("") }
     val v = text.replace(',', '.').toDoubleOrNull()
     Column(Modifier.fillMaxWidth()) {
+        // Always visible and always freshly formatted from the live telemetry state on
+        // every recomposition -- not a snapshot taken once when the field got focus, so
+        // it keeps moving with the device whatever is typed below and whether Set has
+        // been pressed. Above the field, not below it, so the keyboard covering the
+        // field never covers this too.
+        if (prefill != null) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "live: " + prefill + " " + unit,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontFamily = FontFamily.Monospace,
+                )
+                if (text.isEmpty()) {
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = { text = prefill }) { Text("use") }
+                }
+            }
+        }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it },
                 label = { Text(if (unit.isBlank()) label else label + " (" + unit + ")") },
-                placeholder = { Text(current ?: hint) },
+                placeholder = if (showHint) {
+                    { Text(current ?: hint) }
+                } else null,
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 modifier = Modifier.weight(1f),
@@ -809,20 +832,6 @@ private fun MicroField(
             Button(onClick = { v?.let(onSet) }, enabled = v != null) { Text("Set") }
         }
         Current(current, current?.let { it + " " + unit })
-        // Always visible, whatever is typed and whether Set has been pressed -- this is
-        // what "does it match?" gets checked against, so it must not vanish the moment
-        // you start typing or the moment you tap Set.
-        if (prefill != null) {
-            if (text.isEmpty()) {
-                TextButton(onClick = { text = prefill }) { Text("device reads " + prefill + " " + unit + " now") }
-            } else {
-                Text(
-                    "device reads " + prefill + " " + unit + " now",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                )
-            }
-        }
     }
 }
 
