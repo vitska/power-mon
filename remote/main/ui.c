@@ -175,20 +175,25 @@ static int rssi_bars(int8_t dbm)
 #define GY 162
 #define GW 284
 #define GH 74
-#define GBAND 4 /* rows at the bottom of the graph given to the state band */
-
 /* The gauge-state colour, the same one the mode label uses, from the monitor's
- * one-letter code (fg_state_code()). 0 = draw nothing. */
+ * one-letter code (fg_state_code()). A point with no state draws plain green. */
 static uint16_t state_colour(char c)
 {
     switch (c) {
-    case 'C': case 'A': return C_GREEN;
     case 'F':           return C_CYAN;
     case 'D':           return C_ORANGE;
     case 'E':           return C_RED;
     case 'S': case 'R': return C_GREY;
-    default:            return 0;
+    case 'C': case 'A':
+    default:            return C_GREEN;
     }
+}
+
+/* The fill under the line: the line colour at about a third of its brightness. */
+static uint16_t dim565(uint16_t c)
+{
+    return (uint16_t)(((((c >> 11) & 31) / 3) << 11) | ((((c >> 5) & 63) / 3) << 5) |
+                      ((c & 31) / 3));
 }
 
 /*
@@ -230,7 +235,14 @@ static void draw_graph(void)
         last = c;
     }
 
-    const uint16_t bg = C_PANEL, grid = C_DIM, line = C_GREEN, fill = RGB(20, 70, 35);
+    /* Each column's line and fill take the colour of the gauge's state there, so the
+     * curve itself says when the pack was charging, full, discharging or resting. */
+    static uint16_t lcol[GW], fcol[GW];
+    for (int c = 0; c < GW; c++) {
+        lcol[c] = state_colour(scol[c]);
+        fcol[c] = dim565(lcol[c]);
+    }
+    const uint16_t bg = C_PANEL, grid = C_DIM;
     uint16_t *buf = lcd_strip();
     const int rows = LCD_STRIP_PX / GW;
     for (int y0 = 0; y0 < GH; y0 += rows) {
@@ -242,13 +254,8 @@ static void draw_graph(void)
                 uint16_t px = (gridln && (c & 3) == 0) ? grid : bg;
                 const int yc = ycol[c];
                 if (yc >= 0) {
-                    if (y == yc || y == yc + 1) px = line;
-                    else if (y > yc)            px = fill;
-                }
-                /* The gauge's state along the bottom, as a timeline under the SoC. */
-                if (y >= GH - GBAND) {
-                    const uint16_t sc = state_colour(scol[c]);
-                    if (sc) px = sc;
+                    if (y == yc || y == yc + 1) px = lcol[c];
+                    else if (y > yc)            px = fcol[c];
                 }
                 buf[r * GW + c] = px;
             }
