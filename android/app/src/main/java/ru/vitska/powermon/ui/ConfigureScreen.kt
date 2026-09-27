@@ -144,6 +144,17 @@ fun ConfigureScreen(vm: MonitorViewModel) {
         if (c.command.startsWith("cal ")) calSet(c.command) else set(c.command)
     }
 
+    /**
+     * Fire-and-forget: sends the command, silently re-reads config, shows nothing --
+     * not "running...", not the result, not a failure. For the two instant voltage
+     * actions (measured voltage, terminal voltage), which apply and save the moment
+     * they are sent; the field's own value is the only feedback there is.
+     */
+    val silent: (String) -> Unit = { cmd ->
+        vm.launchCommandWith(cmd) { vm.launchRefreshConfig() }
+        Unit
+    }
+
     LaunchedEffect(link) {
         if (link == Link.Ready && !cfg.supported) vm.refreshConfig()
     }
@@ -312,30 +323,16 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                 "Measured voltage AT REST", "V", "12.44",
                 prefill = t.volts?.let { String.format("%.3f", it) },
             ) { v ->
-                guarded(
-                    Confirmation(
-                        "Set the voltage gain from " + v + " V?",
-                        "Take this reading with no load. Under load the harness drop " +
-                            "makes the solved gain wrong — that is what the harness " +
-                            "field below is for. Uses one instant reading, applied and " +
-                            "saved right away.",
-                        "cal top v " + Micro.volts(v),
-                    )
-                )
+                // Instant, silent: applied and saved the moment it is sent (firmware
+                // "cal top v" is one reading, no averaging); the field above shows the
+                // result once refreshConfig() returns, so there is nothing else to show.
+                silent("cal top v " + Micro.volts(v))
             }
             MicroField(
                 "Terminal voltage UNDER LOAD", "V", "12.10",
                 prefill = t.volts?.let { String.format("%.3f", it) },
             ) { v ->
-                guarded(
-                    Confirmation(
-                        "Solve harness resistance from " + v + " V?",
-                        "Needs at least 0.5 A flowing, and the reading must be taken at " +
-                            "the battery terminals rather than at the board. This is what " +
-                            "separates a wiring drop from a gain error.",
-                        "cal vpath " + Micro.volts(v),
-                    )
-                )
+                silent("cal vpath " + Micro.volts(v))
             }
 
             calResult?.let { res ->
