@@ -11,8 +11,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -21,8 +21,11 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.vitska.powermon.ble.Chemistries
@@ -191,37 +194,40 @@ private fun Metric(label: String, value: String, modifier: Modifier = Modifier) 
     }
 }
 
+/**
+ * A labelled group: no card, no elevation, no margin of its own -- just a heading and
+ * its rows, flush with the screen background, closed off by a hairline divider. Groups
+ * butt against each other instead of floating as separate panels with gaps between.
+ */
 @Composable
 fun Section(title: String, content: @Composable () -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
-            Text(title, style = MaterialTheme.typography.titleSmall)
-            Spacer(Modifier.height(6.dp))
-            content()
-        }
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Text(
+            title.uppercase(),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(Modifier.height(4.dp))
+        content()
+        Spacer(Modifier.height(6.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
     }
 }
 
-/**
- * A short pair sits on one line, label left / value right. A pair too long for that
- * (a long label, or a value with a parenthetical unit conversion) stacks instead --
- * label above, value below -- rather than let a Row split the value mid-word across
- * lines because there was no room left for it.
- */
+/** "label: value", one line, the value in the accent colour -- label and value read as
+ *  a single glance instead of two lines to scan. */
+@Composable
+private fun kvText(k: String, v: String) = buildAnnotatedString {
+    withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)) { append(k) }
+    append(": ")
+    withStyle(SpanStyle(color = MaterialTheme.colorScheme.primary, fontFamily = FontFamily.Monospace)) {
+        append(v)
+    }
+}
+
 @Composable
 fun KV(k: String, v: String) {
-    if (k.length + v.length <= 26) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(k, style = MaterialTheme.typography.bodyMedium)
-            Text(v, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
-        }
-    } else {
-        Column(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-            Text(k, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(v, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
-        }
-    }
+    Text(kvText(k, v), style = MaterialTheme.typography.bodyMedium)
 }
 
 /**
@@ -234,15 +240,12 @@ fun KVGrid(vararg pairs: Pair<String, String>) {
     pairs.toList().chunked(2).forEach { row ->
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             row.forEach { (k, v) ->
-                Column(Modifier.weight(1f)) {
-                    Text(k, style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(v, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
-                }
+                Text(kvText(k, v), style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f))
             }
             if (row.size == 1) Spacer(Modifier.weight(1f))
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(6.dp))
     }
 }
 

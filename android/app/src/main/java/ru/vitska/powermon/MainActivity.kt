@@ -55,18 +55,21 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val dark = isSystemInDarkTheme()
-            // The same instrument palette as the project's other documents: cool
-            // blue-grey neutrals with a signal-amber accent.
+            // A BMS-instrument palette: near-black so a group's own background never
+            // shows as a separate panel, live values in signal green, negative/alarm
+            // states in red -- readable at a glance, the way a bench meter is.
             val scheme = if (dark) {
                 darkColorScheme(
-                    primary = Color(0xFFE9A13B),
-                    background = Color(0xFF10141A),
-                    surface = Color(0xFF171D25),
-                    error = Color(0xFFE8837A),
+                    primary = Color(0xFF34D174),
+                    background = Color(0xFF000000),
+                    surface = Color(0xFF000000),
+                    surfaceVariant = Color(0xFF17191C),
+                    onSurfaceVariant = Color(0xFF9AA0A6),
+                    error = Color(0xFFFF5449),
                 )
             } else {
                 lightColorScheme(
-                    primary = Color(0xFF9C5D00),
+                    primary = Color(0xFF16794A),
                     background = Color(0xFFF4F6F8),
                     surface = Color(0xFFFFFFFF),
                     error = Color(0xFFA3322B),

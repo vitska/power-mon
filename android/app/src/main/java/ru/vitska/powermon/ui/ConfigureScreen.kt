@@ -161,7 +161,7 @@ fun ConfigureScreen(vm: MonitorViewModel) {
 
     Column(
         Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(0.dp),
     ) {
         if (link != Link.Ready) {
             Warn("Not connected. Nothing on this screen can be read or set until a board is.")
