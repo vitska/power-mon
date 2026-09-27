@@ -350,6 +350,23 @@ static uint32_t soc_from_ocv(uint32_t ocv_uv)
  * are not a charge or a discharge worth leaving the settle countdown for. The I·R
  * compensation still applies at that current, so OCV stays usable.
  */
+/*
+ * The taper current full detection actually uses: the configured one, scaled by the
+ * LEARNED capacity against the nameplate it was set for. A charger's current tapers in
+ * proportion to what the battery really holds, so a 45 Ah battery worn to 4 Ah reaches
+ * full at about a tenth of the nameplate's taper -- judged against the nameplate
+ * figure, it would latch FULL while still charging hard. The configured value keeps
+ * its meaning as a C-rate (design / 30 by default).
+ */
+static uint32_t taper_current_ua(void)
+{
+    const uint32_t design = s_fg.cfg.design_capacity_uah;
+    if (design == 0) {
+        return s_fg.cfg.i_taper_ua;
+    }
+    return (uint32_t)(((uint64_t)s_fg.cfg.i_taper_ua * s_fg.full_capacity_uah) / design);
+}
+
 static uint32_t rest_current_ua(void)
 {
     const uint32_t c110 = s_fg.cfg.design_capacity_uah / 110;
@@ -790,7 +807,7 @@ void fg_update(const power_sample_t *s)
         if ((now - s_fg.full_since_us) >= (int64_t)s_fg.cfg.t_full_hold_s * 1000000) {
             const int64_t mean_ua = s_fg.full_sum_ua / (int64_t)s_fg.full_n;
             s_fg.full_since_us = 0; /* judge the next window afresh */
-            if (mean_ua <= (int64_t)s_fg.cfg.i_taper_ua) {
+            if (mean_ua <= (int64_t)taper_current_ua()) {
                 ref_point(1000);
                 s_fg.charge_uas     = capacity_uas();
                 s_fg.rem_frac       = 0;
@@ -922,6 +939,7 @@ void fg_get(fg_status_t *out)
     }
     out->state             = s_fg.state;
     out->rest_current_ua   = rest_current_ua();
+    out->taper_current_ua  = taper_current_ua();
     out->t_full_s          = s_fg.t_full_s;
     out->t_empty_s         = s_fg.t_empty_s;
     out->settle_s          = s_fg.settle_s;

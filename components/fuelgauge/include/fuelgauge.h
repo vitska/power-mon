@@ -195,6 +195,8 @@ typedef struct {
     uint32_t   ref_soc_permille;    /**< SoC at that reference point */
     int64_t    q_since_ref_uas;     /**< effective charge since it (negative = drawn) */
     uint32_t   rest_current_ua;     /**< below this |i| the pack counts as resting */
+    uint32_t   taper_current_ua;    /**< full-detection taper in force: the configured
+                                         one scaled by learned / design capacity */
     /* Estimates, computed here so every client shows the same number. -1 = not
      * applicable in the present state. Seconds. */
     int32_t    t_full_s;            /**< CHARGE/ABSORB: until full; FULL: 0 */

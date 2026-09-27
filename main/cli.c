@@ -1730,7 +1730,9 @@ static void soc_show(void)
     printf("0%% at        %s V (resting OCV)\n", FMT_V(b1, c.v_0pct_uv));
     printf("100%% at      %s V (resting OCV)\n", FMT_V(b2, c.v_100pct_uv));
     printf("full at      %s V with charge current below %s A\n",
-           FMT_V(b3, c.v_full_uv), FMT_A(b1, c.i_taper_ua));
+           FMT_V(b3, c.v_full_uv), FMT_A(b1, st.taper_current_ua));
+    printf("             (taper %s A set for the nameplate, scaled to learned capacity)\n",
+           FMT_A(b2, c.i_taper_ua));
     printf("R internal   %lu uOhm   deadband %s A\n",
            (unsigned long)c.r_int_uohm, FMT_A(b2, c.i_deadband_ua));
     printf("rest         %lu s below %s A, then SoC re-syncs to resting voltage\n",
@@ -2782,6 +2784,7 @@ static int cmd_config(int argc, char **argv)
         printf("soc.vfull_uv=%lu\n", (unsigned long)c.v_full_uv);
         printf("soc.rint_uohm=%lu\n", (unsigned long)c.r_int_uohm);
         printf("soc.taper_ua=%lu\n", (unsigned long)c.i_taper_ua);
+        printf("soc.taper_eff_ua=%lu\n", (unsigned long)st.taper_current_ua);
         printf("soc.rest_s=%lu\n", (unsigned long)c.t_rest_s);
         printf("soc.peukert_q8=%u\n", (unsigned)c.peukert_q8);
         printf("soc.irated_ua=%lu\n", (unsigned long)c.i_rated_ua);

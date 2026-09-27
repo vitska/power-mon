@@ -246,6 +246,7 @@ soc.v100_uv=12700000
 soc.vfull_uv=14400000
 soc.rint_uohm=8000
 soc.taper_ua=2200000
+soc.taper_eff_ua=2200000
 soc.rest_s=600
 soc.peukert_q8=294
 soc.irated_ua=2200000
@@ -602,7 +603,7 @@ lead-acid while charging) needs the divider (`curve v divider`).
 | `soc v0 <uV>` / `v100 <uV>` | v0 < v100 | Resting-OCV endpoints of the SoC map |
 | `soc vfull <uV>` | ≥ v100 | Absorption voltage for full detection |
 | `soc rint <uOhm>` | | Battery internal resistance, for I·R → OCV |
-| `soc taper <uA>` | | Charge current below which full can latch |
+| `soc taper <uA>` | | Charge current below which full can latch, set for the nameplate capacity. The value in force is it scaled by learned / design capacity -- `soc.taper_eff_ua` in `config` |
 | `soc rest <s>` | | Idle time before OCV is trusted |
 | `soc peukert <q8>` | 256–512 | k; 256 = disabled |
 | `soc irated <uA>` | | Rate the nameplate capacity assumes |
