@@ -2774,6 +2774,7 @@ static int cmd_config(int argc, char **argv)
         printf("soc.depth_permille=%u\n", (unsigned)c.learn_min_depth_permille);
         printf("soc.deadband_ua=%lu\n", (unsigned long)c.i_deadband_ua);
         printf("soc.permille=%lu\n", (unsigned long)st.soc_permille);
+        printf("soc.state=%s\n", fg_state_str(st.state));
         printf("soc.voltage_only=%d\n", st.voltage_only ? 1 : 0);
     }
 

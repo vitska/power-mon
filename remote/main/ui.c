@@ -9,8 +9,8 @@
  *   | STATE OF CHARGE            |  12.432 V                 |
  *   |  72.4 %                    |  -0.0089 A                |
  *   |  [#########-------]        |  -0.110 W                 |
- *   | TIME TO EMPTY              |  DISCHARGING              |
- *   |  3d 04h                    |  RESTING  FLOODED 6S      |
+ *   | TIME TO EMPTY              |  DISCHARGE   (device state)|
+ *   |  3d 04h                    |  FLOODED 6S               |
  *   +----------------------------+---------------------------+ 148
  *   | SOC 48 h              24.1C 46.2% 1003.5hPa      100      |
  *   |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~    50      |  tap: 1 h / 6 h / 24 h
@@ -341,30 +341,36 @@ static void main_draw(const link_model_t *m)
     }
 
     /*
-     * Which one to show (charging vs discharging) follows the INSTANTANEOUS current,
-     * the same signal the CHARGING/DISCHARGING label below uses -- so the two never
-     * contradict each other. Only the MAGNITUDE uses the ~1 min average, and only
-     * when that average agrees on direction; right after a load or charger is
-     * switched, the average is still catching up (60 s time constant) and would
-     * otherwise show "TIME TO EMPTY" for a few seconds after charging has started.
+     * Which estimate to show is decided by the DEVICE's state, the same value the mode
+     * label below shows -- the firmware's state machine is the one authority on
+     * whether the pack is charging, discharging or at rest, so the two never
+     * contradict each other or the monitor. Current supplies only the rate: the ~1 min
+     * average when it agrees on direction, else the instantaneous value (the average
+     * lags a load or charger switching by its 60 s time constant).
      */
     const float i_now  = m->amps;
     const float i_avg  = m->amps_avg;
     const float cap    = m->capacity_mah / 1000.0f;
     const char *label  = "TIME ESTIMATE";
+    const bool  to_full  = strcmp(m->mode, "CHARGE") == 0 || strcmp(m->mode, "ABSORB") == 0;
+    const bool  to_empty = strcmp(m->mode, "DISCHARGE") == 0;
     if (!live || !m->have_calc) {
         snprintf(b, sizeof(b), "--");
-    } else if (strcmp(m->mode, "FULL") == 0 && i_now > -0.005f) {
+    } else if (strcmp(m->mode, "FULL") == 0) {
         snprintf(b, sizeof(b), "full");
-    } else if (i_now > 0.005f && cap > 0) {
+    } else if (strcmp(m->mode, "EMPTY") == 0) {
+        snprintf(b, sizeof(b), "empty");
+    } else if (to_full) {
         label = "TIME TO FULL";
         const float rate = (i_avg > 0.005f) ? i_avg : i_now;
         const float left = cap - m->charge_ah;
-        fmt_duration(b, sizeof(b), left > 0 ? left / rate : 0);
-    } else if (i_now < -0.005f) {
+        if (rate > 0.005f && cap > 0) fmt_duration(b, sizeof(b), left > 0 ? left / rate : 0);
+        else                          snprintf(b, sizeof(b), "--");
+    } else if (to_empty) {
         label = "TIME TO EMPTY";
         const float rate = (i_avg < -0.005f) ? -i_avg : -i_now;
-        fmt_duration(b, sizeof(b), m->charge_ah / rate);
+        if (rate > 0.005f) fmt_duration(b, sizeof(b), m->charge_ah / rate);
+        else               snprintf(b, sizeof(b), "--");
     } else {
         snprintf(b, sizeof(b), "idle");
     }
@@ -381,24 +387,23 @@ static void main_draw(const link_model_t *m)
     else                      snprintf(b, sizeof(b), "-- W");
     field(&f_w, 178, 78, 140, 2, vc, C_BLACK, b);
 
-    const char *mode;
-    uint16_t    mc;
-    if (!live)                              { mode = "--";          mc = C_GREY;   }
-    else if (strcmp(m->mode, "FULL") == 0)  { mode = "FULL";        mc = C_CYAN;   }
-    else if (strcmp(m->mode, "EMPTY") == 0) { mode = "EMPTY";       mc = C_RED;    }
-    else if (m->amps > 0.005f)              { mode = "CHARGING";    mc = C_GREEN;  }
-    else if (m->amps < -0.005f)             { mode = "DISCHARGING"; mc = C_ORANGE; }
-    else                                    { mode = "IDLE";        mc = C_GREY;   }
+    /* The device's own state, shown as sent -- not re-derived here from current. */
+    const char *mode = (live && m->mode[0]) ? m->mode : "--";
+    uint16_t    mc   = C_GREY;
+    if      (!live)                                                          mc = C_GREY;
+    else if (strcmp(m->mode, "FULL") == 0)                                   mc = C_CYAN;
+    else if (strcmp(m->mode, "EMPTY") == 0)                                  mc = C_RED;
+    else if (strcmp(m->mode, "CHARGE") == 0 || strcmp(m->mode, "ABSORB") == 0) mc = C_GREEN;
+    else if (strcmp(m->mode, "DISCHARGE") == 0)                              mc = C_ORANGE;
     field(&f_mode, 178, 104, 140, 2, mc, C_BLACK, mode);
 
-    char chem[32] = "", sub[64];
+    char sub[64] = "";
     if (m->chem[0]) {
-        snprintf(chem, sizeof(chem), " %s %dS", m->chem, m->cells);
-        for (char *p = chem; *p; p++) {
+        snprintf(sub, sizeof(sub), "%s %dS", m->chem, m->cells);
+        for (char *p = sub; *p; p++) {
             if (*p >= 'a' && *p <= 'z') *p -= 32;
         }
     }
-    snprintf(sub, sizeof(sub), "%s%s", live && m->have_calc ? m->mode : "", chem);
     field(&f_sub, 178, 126, 140, 1, C_GREY, C_BLACK, sub);
 
     /* Graph label, or why there is nothing to show; the environment on the right. */

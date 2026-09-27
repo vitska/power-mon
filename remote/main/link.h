@@ -34,7 +34,7 @@ typedef struct {
     /* Telemetry. The have_ flags say whether a value has arrived on this link. */
     bool     have_fast, have_calc;
     float    volts, amps, watts, soc_pct, charge_ah;
-    char     mode[12];         /* the gauge state: COUNTING, RESTING, FULL, ... */
+    char     mode[12];         /* the device's gauge state, as sent: CHARGE, FULL, REST... */
     float    amps_avg;         /* ~1 minute moving average, for time estimates */
     uint32_t capacity_mah;     /* learned capacity, else design, from `config` */
     char     chem[12];         /* battery.chem, "" on firmware before 0.8.0 */

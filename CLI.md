@@ -276,7 +276,7 @@ exactly as you skip unknown telemetry records: new settings appear here without 
 protocol bump, and only a change to an existing key's *meaning* is breaking.
 
 Some keys are state rather than settings, included because a client showing a setting
-usually wants them in the same breath: `soc.permille`, `soc.voltage_only`,
+usually wants them in the same breath: `soc.permille`, `soc.state`, `soc.voltage_only`,
 `soc.learned_uah`, `shunt.roles`, `sense.pga`, `cal.stored`, `ble.conns`, `ble.bonds`,
 `profile.pair_us`.
 
@@ -403,7 +403,7 @@ records.
 | `watts` | volts × amps |
 | `soc_pct` | state of charge, one decimal |
 | `charge_ah` | accumulated charge, 3 decimals |
-| `state` | `UNKNOWN` \| `CHARGE` \| `ABSORB` \| `FULL` \| `DISCHARGE` \| `EMPTY` \| `SETTLING` \| `REST` |
+| `state` | `UNKNOWN` \| `CHARGE` \| `ABSORB` \| `FULL` \| `DISCHARGE` \| `EMPTY` \| `SETTLING` \| `REST`  The fuel gauge's state machine, which lives on the device: **show it as sent, do not re-derive it from `amps`** -- the thresholds and hold times that decide it are the firmware's. Also in `config` as `soc.state`, for the moment before the first `c` record. |
 | `ocv_v` | I·R-compensated open-circuit estimate — what the SoC map actually uses |
 | `peukert` | the discharge multiplier in force right now; `1.000` while charging |
 | `shunt_mv` | raw shunt drop before any scaling — the wiring diagnostic |

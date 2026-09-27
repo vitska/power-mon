@@ -45,6 +45,9 @@ fun MonitorScreen(vm: MonitorViewModel, onPickDevice: () -> Unit = {}) {
     val scanning by vm.scanning.collectAsState()
     val cfg by vm.config.collectAsState()
     val history by vm.history.collectAsState()
+    // The device's own state-machine state, as sent: the `c` stream record, or the
+    // `config` read on connect until the first record arrives. Never re-derived here.
+    val state = t.state.takeIf { it != "—" } ?: cfg.str("soc.state") ?: "—"
 
     Column(
         Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
@@ -125,10 +128,15 @@ fun MonitorScreen(vm: MonitorViewModel, onPickDevice: () -> Unit = {}) {
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(8.dp))
-            Text(
-                "${f(t.chargeAh, 2)} Ah   ·   ${t.state}",
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("${f(t.chargeAh, 2)} Ah   ·   ", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    state,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = stateColor(state),
+                )
+            }
         }
 
         if (link == Link.Ready) {
@@ -149,7 +157,7 @@ fun MonitorScreen(vm: MonitorViewModel, onPickDevice: () -> Unit = {}) {
             KV("OCV estimate", f(t.ocvV, 3, " V"))
             KV("Peukert factor", f(t.peukert, 3))
             KV("Charge", f(t.chargeAh, 3, " Ah"))
-            KV("State", t.state)
+            KV("State", state)
         }
 
         Section("Diagnostics") {
@@ -178,6 +186,16 @@ fun MonitorScreen(vm: MonitorViewModel, onPickDevice: () -> Unit = {}) {
 
 /** A bordered cell, not a filled card: an outline is enough to mark the grid, and a
  *  flat colour box read as its own separate panel against the near-black screen. */
+/** Same colours as the remote display uses for the same states. */
+@Composable
+private fun stateColor(state: String): androidx.compose.ui.graphics.Color = when (state) {
+    "FULL" -> androidx.compose.ui.graphics.Color(0xFF4DD0E1)
+    "EMPTY" -> MaterialTheme.colorScheme.error
+    "CHARGE", "ABSORB" -> MaterialTheme.colorScheme.primary
+    "DISCHARGE" -> androidx.compose.ui.graphics.Color(0xFFFFA726)
+    else -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
 @Composable
 private fun Metric(label: String, value: String, modifier: Modifier = Modifier) {
     Column(

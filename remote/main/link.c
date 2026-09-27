@@ -166,6 +166,7 @@ static void reset_link_model(void)
     s.model.secure    = false;
     s.model.firmware[0] = '\0';
     s.model.chem[0]     = '\0';
+    s.model.mode[0]     = '\0';   /* the last board's state is not this one's */
     s.model.have_env    = false;
     s.model.have_rssi   = false;
     s.hist.count        = 0;     /* another board: its history, not the last one's */
@@ -293,6 +294,10 @@ static void on_line(char *line)
             snprintf(s.model.chem, sizeof(s.model.chem), "%s", v);
         } else if (strcmp(k, "battery.cells") == 0) {
             s.model.cells = atoi(v);
+        } else if (strcmp(k, "soc.state") == 0 && !s.model.have_calc) {
+            /* The device's state before the first `c` record arrives; the stream
+             * takes over from there. */
+            snprintf(s.model.mode, sizeof(s.model.mode), "%s", v);
         }
         s.model.capacity_mah = s.cap_learned_mah ? s.cap_learned_mah : s.cap_design_mah;
     } else if (strncmp(line, "protocol ", 9) == 0) {
