@@ -49,6 +49,11 @@ sealed interface Record {
         val state: String,
         val ocvV: Double,
         val peukert: Double,
+        /** The device's own estimates, seconds; null = not applicable in its present
+         *  state, or firmware before 0.11.3 that does not send them. */
+        val tFullS: Long? = null,
+        val tEmptyS: Long? = null,
+        val settleS: Long? = null,
     ) : Record
 
     data class Diag(
@@ -173,6 +178,9 @@ class StreamParser(
                 state = f.getOrNull(5) ?: "UNKNOWN",
                 ocvV = num(6) ?: 0.0,
                 peukert = num(7) ?: 1.0,
+                tFullS = num(8)?.toLong(),
+                tEmptyS = num(9)?.toLong(),
+                settleS = num(10)?.toLong(),
             )
             "d" -> Record.Diag(
                 ms,

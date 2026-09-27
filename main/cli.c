@@ -1680,7 +1680,11 @@ static void soc_show(void)
     printf("SoC          %s %%%s\n",
            fixed_fmt(b1, sizeof(b1), st.soc_permille, 10, 1),
            st.voltage_only ? "  (from VOLTAGE only -- no count behind it yet)" : "");
-    printf("state        %s\n", fg_state_str(st.state));
+    printf("state        %s", fg_state_str(st.state));
+    if      (st.t_full_s  >= 0) printf("   full in %ld min", (long)(st.t_full_s / 60));
+    else if (st.t_empty_s >= 0) printf("   empty in %ld min", (long)(st.t_empty_s / 60));
+    else if (st.settle_s  >= 0) printf("   rested in %ld s", (long)st.settle_s);
+    printf("\n");
     printf("charge       %s Ah of %s Ah\n",
            fixed_fmt(b1, sizeof(b1), st.charge_uas / 3600, 1000000, 3),
            fixed_fmt(b2, sizeof(b2), st.full_capacity_uah, 1000000, 1));

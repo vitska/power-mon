@@ -353,11 +353,11 @@ parser can either use them or skip them on that one character.
 
 ```
 #f,ms,volts,amps
-#c,ms,watts,soc_pct,charge_ah,state,ocv_v,peukert
+#c,ms,watts,soc_pct,charge_ah,state,ocv_v,peukert,t_full_s,t_empty_s,settle_s
 #d,ms,shunt_mv,pga,sat
 #e,ms,temp_c,humid_pct,press_hpa
 f,7073,13.113,-0.0006
-c,7213,-0.007,90.2,39.696,REST,13.117,1.000
+c,7213,-0.007,90.2,39.696,REST,13.117,1.000,,,
 d,19203,0.030,/1 (+/-40mV),0
 e,7033,26.97,48.9,1001.64
 ```
@@ -405,6 +405,9 @@ records.
 | `charge_ah` | accumulated charge, 3 decimals |
 | `state` | `UNKNOWN` \| `CHARGE` \| `ABSORB` \| `FULL` \| `DISCHARGE` \| `EMPTY` \| `SETTLING` \| `REST`  The fuel gauge's state machine, which lives on the device: **show it as sent, do not re-derive it from `amps`** -- the thresholds and hold times that decide it are the firmware's. Also in `config` as `soc.state`, for the moment before the first `c` record. |
 | `ocv_v` | I·R-compensated open-circuit estimate — what the SoC map actually uses |
+| `t_full_s` | seconds until full, while `CHARGE`/`ABSORB`; `0` in `FULL`; **empty** otherwise |
+| `t_empty_s` | seconds until empty, while `DISCHARGE` (Peukert-scaled rate); `0` in `EMPTY`; **empty** otherwise |
+| `settle_s` | seconds until a `SETTLING` pack counts as rested; **empty** otherwise |
 | `peukert` | the discharge multiplier in force right now; `1.000` while charging |
 | `shunt_mv` | raw shunt drop before any scaling — the wiring diagnostic |
 | `pga` | active range, e.g. `/8 (+/-320mV)`. Contains spaces and parentheses but **no comma**, so the field count is stable |

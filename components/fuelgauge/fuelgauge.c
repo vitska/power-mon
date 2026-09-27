@@ -38,6 +38,17 @@ static const char *TAG = "fg";
  * VBUS, and it must not anchor anything. */
 #define EMPTY_FLOOR_Q8 186 /* 0.73 */
 
+/* State decisions run on a ~10 s average of the current, not on single samples, and
+ * with hysteresis: a directional state is entered above TWICE the rest current and
+ * left only below it. A current hovering near the rest threshold -- a monitor's own
+ * draw, a trickle, sensor noise -- therefore stays SETTLING and its countdown keeps
+ * running, instead of flipping CHARGE/SETTLING/DISCHARGE and restarting it. */
+#define CLASS_TAU_S 10
+/* The time estimate uses a slower ~60 s average, so a load switching on for a moment
+ * does not make "time to empty" jump. */
+#define EST_TAU_S   60
+#define EST_MAX_S   (99 * 24 * 3600) /* past this an estimate says nothing */
+
 static struct {
     fg_config_t cfg;
 
@@ -53,6 +64,10 @@ static struct {
     bool       voltage_only;
 
     int64_t  last_t_us;
+    bool     filt_init;
+    int64_t  i_class_ua;     /* ~10 s average: what the state machine decides on */
+    int64_t  i_est_ua;       /* ~60 s average: the rate the time estimate uses */
+    int32_t  t_full_s, t_empty_s, settle_s; /* -1 = not applicable */
     int64_t  idle_since_us;  /* SETTLING/REST: when the settle timer last (re)started */
     int64_t  full_since_us;  /* ABSORB: 0 = full-hold window not running */
     int64_t  full_sum_ua;    /* current summed over the full-hold window */
@@ -421,6 +436,7 @@ esp_err_t fg_save(void)
 esp_err_t fg_init(void)
 {
     memset(&s_fg, 0, sizeof(s_fg));
+    s_fg.t_full_s = s_fg.t_empty_s = s_fg.settle_s = -1;
     s_fg.cfg               = FG_CONFIG_LEAD_ACID_12V_44AH();
     s_fg.full_capacity_uah = s_fg.cfg.design_capacity_uah;
     s_fg.state             = FG_UNKNOWN;
@@ -719,15 +735,34 @@ void fg_update(const power_sample_t *s)
      * small the current, and a charger tapering below the rest threshold must still
      * reach FULL. FULL and EMPTY are sticky while the direction that produced them
      * continues; resting after either goes through SETTLING like any other rest. */
-    const int32_t ri = (int32_t)rest_current_ua();
+    /* Filtered currents, first-order: x += (i - x) * dt / (tau + dt). Seeded from the
+     * first sample so a fresh boot does not start from zero. */
+    if (!s_fg.filt_init) {
+        s_fg.i_class_ua = s_fg.i_est_ua = s->i_ua;
+        s_fg.filt_init  = true;
+    } else if (dt > 0 && dt < DEAD_GAP_US) {
+        const int64_t ct = (int64_t)CLASS_TAU_S * 1000000, et = (int64_t)EST_TAU_S * 1000000;
+        s_fg.i_class_ua += ((s->i_ua - s_fg.i_class_ua) * dt) / (ct + dt);
+        s_fg.i_est_ua   += ((s->i_ua - s_fg.i_est_ua) * dt) / (et + dt);
+    }
+
+    const int64_t ri = rest_current_ua();
+    const int64_t fi = s_fg.i_class_ua;
+    const bool was_chg = s_fg.state == FG_CHARGE || s_fg.state == FG_ABSORB ||
+                         s_fg.state == FG_FULL;
+    const bool was_dsg = s_fg.state == FG_DISCHARGE || s_fg.state == FG_EMPTY;
+    /* Hysteresis: stay in a direction down to the rest current, enter one only above
+     * twice it. */
+    const bool chg_now = fi > (was_chg ? ri : 2 * ri);
+    const bool dsg_now = fi < -(was_dsg ? ri : 2 * ri);
     const bool at_absorb = s->v_valid && s->v_pack_uv >= s_fg.cfg.v_full_uv &&
-                           s->i_ua > (int32_t)s_fg.cfg.i_deadband_ua;
+                           fi > (int64_t)s_fg.cfg.i_deadband_ua;
     fg_state_t next;
     if (at_absorb) {
         next = (s_fg.state == FG_FULL) ? FG_FULL : FG_ABSORB;
-    } else if (s->i_ua > ri) {
+    } else if (chg_now) {
         next = (s_fg.state == FG_FULL) ? FG_FULL : FG_CHARGE;
-    } else if (s->i_ua < -ri) {
+    } else if (dsg_now) {
         next = (s_fg.state == FG_EMPTY) ? FG_EMPTY : FG_DISCHARGE;
     } else {
         next = (s_fg.state == FG_REST) ? FG_REST : FG_SETTLING;
@@ -822,6 +857,47 @@ void fg_update(const power_sample_t *s)
         break;
     }
 
+    /* --- time estimates ----------------------------------------------------------
+     *
+     * Chosen by the state, so they can never contradict it: to full while charging,
+     * to empty while discharging, the settling countdown while settling, nothing at
+     * rest. The rate is the ~60 s average; a discharge rate is Peukert-scaled, since
+     * that is the rate at which the count actually falls. */
+    s_fg.t_full_s = s_fg.t_empty_s = s_fg.settle_s = -1;
+    const int64_t dband = s_fg.cfg.i_deadband_ua;
+    switch (s_fg.state) {
+    case FG_FULL:
+        s_fg.t_full_s = 0;
+        break;
+    case FG_EMPTY:
+        s_fg.t_empty_s = 0;
+        break;
+    case FG_CHARGE:
+    case FG_ABSORB:
+        if (s_fg.i_est_ua > dband) {
+            int64_t left = capacity_uas() - s_fg.charge_uas;
+            if (left < 0) left = 0;
+            const int64_t t = left / s_fg.i_est_ua;
+            s_fg.t_full_s = (int32_t)(t > EST_MAX_S ? EST_MAX_S : t);
+        }
+        break;
+    case FG_DISCHARGE:
+        if (s_fg.i_est_ua < -dband) {
+            const uint32_t pf = s_fg.peukert_factor_q16 ? s_fg.peukert_factor_q16 : (1u << 16);
+            const int64_t  rate = ((-s_fg.i_est_ua) * (int64_t)pf) >> 16;
+            const int64_t  t = rate > 0 ? s_fg.charge_uas / rate : EST_MAX_S;
+            s_fg.t_empty_s = (int32_t)(t > EST_MAX_S ? EST_MAX_S : t);
+        }
+        break;
+    case FG_SETTLING: {
+        const int64_t left = (int64_t)s_fg.cfg.t_rest_s - (now - s_fg.idle_since_us) / 1000000;
+        s_fg.settle_s = (int32_t)(left > 0 ? left : 0);
+        break;
+    }
+    default:
+        break;
+    }
+
     /* --- persistence policy (§6.3) ------------------------------------------- */
     if (s_fg.dirty) {
         const uint32_t soc = soc_from_charge();
@@ -844,6 +920,9 @@ void fg_get(fg_status_t *out)
     }
     out->state             = s_fg.state;
     out->rest_current_ua   = rest_current_ua();
+    out->t_full_s          = s_fg.t_full_s;
+    out->t_empty_s         = s_fg.t_empty_s;
+    out->settle_s          = s_fg.settle_s;
     out->soc_permille      = soc_from_charge();
     out->charge_uas        = s_fg.charge_uas;
     out->full_capacity_uah = s_fg.full_capacity_uah;

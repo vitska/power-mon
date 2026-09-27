@@ -137,6 +137,19 @@ fun MonitorScreen(vm: MonitorViewModel, onPickDevice: () -> Unit = {}) {
                     color = stateColor(state),
                 )
             }
+            // The device's own estimate, as sent -- never computed here.
+            val est = when {
+                state == "FULL" || state == "EMPTY" -> null
+                t.tFullS != null -> "full in " + duration(t.tFullS!!)
+                t.tEmptyS != null -> "empty in " + duration(t.tEmptyS!!)
+                t.settleS != null ->
+                    "rested in " + String.format("%d:%02d", t.settleS!! / 60, t.settleS!! % 60)
+                else -> null
+            }
+            if (est != null) {
+                Text(est, style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = FontFamily.Monospace)
+            }
         }
 
         if (link == Link.Ready) {
@@ -195,6 +208,10 @@ internal fun stateColor(state: String): androidx.compose.ui.graphics.Color = whe
     "DISCHARGE" -> androidx.compose.ui.graphics.Color(0xFFFFA726)
     else -> MaterialTheme.colorScheme.onSurfaceVariant
 }
+
+/** "1d 02:03:04", the same format the remote display uses. */
+private fun duration(s: Long): String =
+    String.format("%dd %02d:%02d:%02d", s / 86400, s % 86400 / 3600, s % 3600 / 60, s % 60)
 
 /** The history's one-letter state codes (fg_state_code() on the device). */
 internal fun stateName(code: Char): String? = when (code) {

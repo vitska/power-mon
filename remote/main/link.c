@@ -169,6 +169,8 @@ static void reset_link_model(void)
     s.model.firmware[0] = '\0';
     s.model.chem[0]     = '\0';
     s.model.mode[0]     = '\0';   /* the last board's state is not this one's */
+    s.model.have_est    = false;
+    s.model.t_full_s = s.model.t_empty_s = s.model.settle_s = -1;
     s.model.have_env    = false;
     s.model.have_rssi   = false;
     s.hist.count        = 0;     /* another board: its history, not the last one's */
@@ -202,7 +204,7 @@ static int split(char *line, char **f, int max)
 
 static void on_line(char *line)
 {
-    char *f[10];
+    char *f[12];
 
     if (line[0] == 'f' && line[1] == ',') {
         /* f,ms,volts,amps */
@@ -226,13 +228,20 @@ static void on_line(char *line)
         return;
     }
     if (line[0] == 'c' && line[1] == ',') {
-        /* c,ms,watts,soc_pct,charge_ah,state,ocv_v,peukert */
-        if (split(line, f, 10) < 6) return;
+        /* c,ms,watts,soc_pct,charge_ah,state,ocv_v,peukert,t_full_s,t_empty_s,settle_s
+         * -- the three estimates empty when not applicable, absent from firmware
+         * before 0.11.3. */
+        const int n = split(line, f, 12);
+        if (n < 6) return;
         lock();
         s.model.watts     = strtof(f[2], NULL);
         s.model.soc_pct   = strtof(f[3], NULL);
         s.model.charge_ah = strtof(f[4], NULL);
         snprintf(s.model.mode, sizeof(s.model.mode), "%s", f[5]);
+        s.model.have_est  = n >= 11;
+        s.model.t_full_s  = (n >= 9  && f[8][0])  ? strtol(f[8], NULL, 10)  : -1;
+        s.model.t_empty_s = (n >= 10 && f[9][0])  ? strtol(f[9], NULL, 10)  : -1;
+        s.model.settle_s  = (n >= 11 && f[10][0]) ? strtol(f[10], NULL, 10) : -1;
         s.model.have_calc    = true;
         s.model.last_data_us = esp_timer_get_time();
         unlock();

@@ -35,6 +35,10 @@ typedef struct {
     bool     have_fast, have_calc;
     float    volts, amps, watts, soc_pct, charge_ah;
     char     mode[12];         /* the device's gauge state, as sent: CHARGE, FULL, REST... */
+    /* The device's own estimates, seconds, -1 = not applicable (have_est false: the
+     * monitor's firmware predates them). */
+    bool     have_est;
+    int32_t  t_full_s, t_empty_s, settle_s;
     float    amps_avg;         /* ~1 minute moving average, for time estimates */
     uint32_t capacity_mah;     /* learned capacity, else design, from `config` */
     char     chem[12];         /* battery.chem, "" on firmware before 0.8.0 */

@@ -195,6 +195,11 @@ typedef struct {
     uint32_t   ref_soc_permille;    /**< SoC at that reference point */
     int64_t    q_since_ref_uas;     /**< effective charge since it (negative = drawn) */
     uint32_t   rest_current_ua;     /**< below this |i| the pack counts as resting */
+    /* Estimates, computed here so every client shows the same number. -1 = not
+     * applicable in the present state. Seconds. */
+    int32_t    t_full_s;            /**< CHARGE/ABSORB: until full; FULL: 0 */
+    int32_t    t_empty_s;           /**< DISCHARGE: until empty; EMPTY: 0 */
+    int32_t    settle_s;            /**< SETTLING: until the voltage counts as rested */
     uint32_t   peukert_factor_q16;  /**< the multiplier in use right now, for display */
 } fg_status_t;
 

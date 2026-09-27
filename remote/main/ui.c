@@ -371,38 +371,30 @@ static void main_draw(const link_model_t *m)
     }
 
     /*
-     * Which estimate to show is decided by the DEVICE's state, the same value the mode
-     * label below shows -- the firmware's state machine is the one authority on
-     * whether the pack is charging, discharging or at rest, so the two never
-     * contradict each other or the monitor. Current supplies only the rate: the ~1 min
-     * average when it agrees on direction, else the instantaneous value (the average
-     * lags a load or charger switching by its 60 s time constant).
+     * The estimate is the MONITOR's, computed in its firmware from its own state and
+     * averaged current, and shown here as sent -- so it always agrees with the mode
+     * label and with the phone app. Monitor firmware before 0.11.3 sends none.
      */
-    const float i_now  = m->amps;
-    const float i_avg  = m->amps_avg;
-    const float cap    = m->capacity_mah / 1000.0f;
-    const char *label  = "TIME ESTIMATE";
-    const bool  to_full  = strcmp(m->mode, "CHARGE") == 0 || strcmp(m->mode, "ABSORB") == 0;
-    const bool  to_empty = strcmp(m->mode, "DISCHARGE") == 0;
-    if (!live || !m->have_calc) {
+    const char *label = "TIME ESTIMATE";
+    if (!live || !m->have_calc || !m->have_est) {
         snprintf(b, sizeof(b), "--");
     } else if (strcmp(m->mode, "FULL") == 0) {
         snprintf(b, sizeof(b), "full");
     } else if (strcmp(m->mode, "EMPTY") == 0) {
         snprintf(b, sizeof(b), "empty");
-    } else if (to_full) {
+    } else if (m->t_full_s >= 0) {
         label = "TIME TO FULL";
-        const float rate = (i_avg > 0.005f) ? i_avg : i_now;
-        const float left = cap - m->charge_ah;
-        if (rate > 0.005f && cap > 0) fmt_duration(b, sizeof(b), left > 0 ? left / rate : 0);
-        else                          snprintf(b, sizeof(b), "--");
-    } else if (to_empty) {
+        fmt_duration(b, sizeof(b), m->t_full_s / 3600.0f);
+    } else if (m->t_empty_s >= 0) {
         label = "TIME TO EMPTY";
-        const float rate = (i_avg < -0.005f) ? -i_avg : -i_now;
-        if (rate > 0.005f) fmt_duration(b, sizeof(b), m->charge_ah / rate);
-        else               snprintf(b, sizeof(b), "--");
+        fmt_duration(b, sizeof(b), m->t_empty_s / 3600.0f);
+    } else if (m->settle_s >= 0) {
+        label = "SETTLING, RESTED IN";
+        snprintf(b, sizeof(b), "%ld:%02ld", (long)(m->settle_s / 60), (long)(m->settle_s % 60));
+    } else if (strcmp(m->mode, "REST") == 0) {
+        snprintf(b, sizeof(b), "rested");
     } else {
-        snprintf(b, sizeof(b), "idle");
+        snprintf(b, sizeof(b), "--");
     }
     field(&f_tlabel, 6, 116, 164, 1, C_GREY, C_BLACK, label);
     field(&f_time, 6, 128, 164, 2, live ? C_WHITE : C_GREY, C_BLACK, b);

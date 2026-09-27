@@ -187,7 +187,7 @@ static void emit_headers(app_ctx_t *ctx)
     }
     ctx->stream_csv_header_done = true;
     if (config()->rate_fast_ms) stream_emit("#f,ms,volts,amps");
-    if (config()->rate_calc_ms) stream_emit("#c,ms,watts,soc_pct,charge_ah,state,ocv_v,peukert");
+    if (config()->rate_calc_ms) stream_emit("#c,ms,watts,soc_pct,charge_ah,state,ocv_v,peukert,t_full_s,t_empty_s,settle_s");
     if (config()->rate_diag_ms) stream_emit("#d,ms,shunt_mv,pga,sat");
     if (config()->rate_env_ms)  stream_emit("#e,ms,temp_c,humid_pct,press_hpa");
 }
@@ -206,15 +206,22 @@ static void emit_calc(const power_sample_t *s)
     fg_status_t fg;
     fg_get(&fg);
 
-    char line[160], bp[24], bsoc[24], bq[24], bo[24], bk[24];
-    snprintf(line, sizeof(line), "c,%lu,%s,%s,%s,%s,%s,%s",
+    /* Estimates are appended, empty when not applicable in the present state: a
+     * client that predates them reads the first eight fields as before. */
+    char tf[12] = "", te[12] = "", ts[12] = "";
+    if (fg.t_full_s  >= 0) snprintf(tf, sizeof(tf), "%ld", (long)fg.t_full_s);
+    if (fg.t_empty_s >= 0) snprintf(te, sizeof(te), "%ld", (long)fg.t_empty_s);
+    if (fg.settle_s  >= 0) snprintf(ts, sizeof(ts), "%ld", (long)fg.settle_s);
+
+    char line[192], bp[24], bsoc[24], bq[24], bo[24], bk[24];
+    snprintf(line, sizeof(line), "c,%lu,%s,%s,%s,%s,%s,%s,%s,%s,%s",
              (unsigned long)(s->t_us / 1000),
              FMT_W(bp, s->p_uw),
              fixed_fmt(bsoc, sizeof(bsoc), fg.soc_permille, 10, 1),
              fixed_fmt(bq, sizeof(bq), fg.charge_uas / 3600, 1000000, 3),
              fg_state_str(fg.state),
              FMT_V(bo, fg.ocv_uv),
-             fixed_fmt(bk, sizeof(bk), fg.peukert_factor_q16, 65536, 3));
+             fixed_fmt(bk, sizeof(bk), fg.peukert_factor_q16, 65536, 3), tf, te, ts);
     stream_emit(line);
 }
 

@@ -57,6 +57,10 @@ data class Telemetry(
     /** Measured from record timestamps, not assumed — CLI.md guarantees no duplicates. */
     val fastHz: Double? = null,
     val lastFastMs: Long? = null,
+    /** Computed on the device from its own state; shown as sent (CLI.md §5). */
+    val tFullS: Long? = null,
+    val tEmptyS: Long? = null,
+    val settleS: Long? = null,
 )
 
 data class Handshake(
@@ -340,6 +344,7 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
             is Record.Calc -> _tel.value.copy(
                 watts = r.watts, socPct = r.socPct, chargeAh = r.chargeAh,
                 state = r.state, ocvV = r.ocvV, peukert = r.peukert,
+                tFullS = r.tFullS, tEmptyS = r.tEmptyS, settleS = r.settleS,
             )
             is Record.Diag -> _tel.value.copy(
                 shuntMv = r.shuntMv, pga = r.pga, saturated = r.saturated,
