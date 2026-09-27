@@ -47,10 +47,6 @@ typedef struct {
     int32_t  v_offset_uv;
     uint32_t v_gain_ppm;
     uint32_t v_divider_q16;
-    /** Harness resistance between the battery terminals and the sense point. Large
-     *  enough on this hardware (two 100 mOhm shunts in the path) that it is a
-     *  first-class setting rather than a trim. */
-    uint32_t r_vpath_uohm;
     ina219_vbus_comp_t vbus_comp;
     ina219_pga_t       pga_max;
     sensors_mode_t     install_mode;

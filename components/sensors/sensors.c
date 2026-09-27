@@ -35,10 +35,6 @@ struct sensors_ctx_t {
     uint32_t pass;             /* counts sensors_read() calls, drives the divisors */
     uint32_t v_pack_uv_cache;  /* last good pack voltage, for passes that skip it */
     bool     v_cache_valid;
-    /* Last current that actually read back. The harness correction needs a current,
-     * and the voltage divisor fires on passes where the current read was NOT ready
-     * -- which is most of them, since the tick polls faster than the ADC converts. */
-    int32_t  last_i_ua;
     uint32_t v_load_uv_cache;
     int32_t  idle_offset_cache;
 };
@@ -211,25 +207,6 @@ static void fill_diagnostics(sensors_handle_t h, power_sample_t *out)
     }
 }
 
-/*
- * Correct a measured bus voltage back to the battery terminals. Uses the current from
- * the SAME pass -- the drop is instantaneous, so pairing a fresh voltage with a stale
- * current would smear the correction across a load step, which is exactly where it
- * matters most.
- */
-static uint32_t vpath_correct(sensors_handle_t h, uint32_t v_uv, int32_t i_ua)
-{
-    if (h->cfg.r_vpath_uohm == 0) {
-        return v_uv;
-    }
-    const int64_t drop = ((int64_t)i_ua * (int64_t)h->cfg.r_vpath_uohm) / 1000000;
-    int64_t       v    = (int64_t)v_uv - drop;
-    if (v < 0) {
-        v = 0;
-    }
-    return (uint32_t)v;
-}
-
 esp_err_t sensors_read(sensors_handle_t h, power_sample_t *out)
 {
     ESP_RETURN_ON_FALSE(h && out, ESP_ERR_INVALID_ARG, TAG, "null");
@@ -256,10 +233,9 @@ esp_err_t sensors_read(sensors_handle_t h, power_sample_t *out)
         out->pga        = cs.pga;
         out->saturated  = cs.saturated;
         out->i_valid    = true;
-        h->last_i_ua    = cs.i_ua;
         if (h->cur_dev == h->volt_dev) {
-            /* SINGLE mode: same device, comp applied */
-            h->v_pack_uv_cache = vpath_correct(h, cs.v_uv, cs.i_ua);
+            /* SINGLE mode: same device */
+            h->v_pack_uv_cache = cs.v_uv;
             h->v_cache_valid   = true;
             out->v_is_fresh    = true;
         }
@@ -270,18 +246,7 @@ esp_err_t sensors_read(sensors_handle_t h, power_sample_t *out)
     if (h->volt_dev != h->cur_dev && (h->pass % h->cfg.voltage_divisor) == 0) {
         ina219_sample_t vs;
         if (ina219_read(h->volt_dev, &vs) == ESP_OK) {
-            /*
-             * Correct with a current we actually measured. This pass's current if it
-             * read back, else the last one that did -- NEVER cs, which is
-             * uninitialised whenever the current read returned NOT_FINISHED. That
-             * multiplied stack garbage by the path resistance and clamped the pack
-             * voltage to zero, published it as valid, and left it in the cache for
-             * the next good sample to inherit; the fuel gauge then saw a pack at 0 V
-             * under load and latched its empty anchor. Invisible until a non-zero
-             * vpath existed, because vpath_correct() returns early at 0 uOhm.
-             */
-            const int32_t i_corr = out->i_valid ? cs.i_ua : h->last_i_ua;
-            h->v_pack_uv_cache = vpath_correct(h, vs.v_uv, i_corr);
+            h->v_pack_uv_cache = vs.v_uv;
             h->v_cache_valid   = true;
             out->v_is_fresh    = true;
         }
@@ -304,20 +269,6 @@ esp_err_t sensors_read(sensors_handle_t h, power_sample_t *out)
         return cerr; /* propagate NOT_FINISHED / range discard / bus error verbatim */
     }
     return ESP_OK;
-}
-
-esp_err_t sensors_set_r_vpath_uohm(sensors_handle_t h, uint32_t uohm)
-{
-    if (!h) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    h->cfg.r_vpath_uohm = uohm;
-    return ESP_OK;
-}
-
-uint32_t sensors_get_r_vpath_uohm(sensors_handle_t h)
-{
-    return h ? h->cfg.r_vpath_uohm : 0;
 }
 
 esp_err_t sensors_read_blocking(sensors_handle_t h, power_sample_t *out)
@@ -344,15 +295,11 @@ esp_err_t sensors_read_blocking(sensors_handle_t h, power_sample_t *out)
         ESP_RETURN_ON_ERROR(ina219_read_blocking(h->volt_dev, &vs), TAG, "voltage");
         out->idle_offset_ua = vs.i_ua;
     }
-    out->v_pack_uv   = vpath_correct(h, vs.v_uv, cs.i_ua);
+    out->v_pack_uv   = vs.v_uv;
     out->v_valid     = true;
     out->v_is_fresh  = true;
-    /* Cache the CORRECTED value: sensors_read() publishes this cache directly on the
-     * passes that skip the voltage device, so caching the raw reading here made a
-     * blocking read leave an uncorrected voltage to be served as a corrected one. */
     h->v_pack_uv_cache = out->v_pack_uv;
     h->v_cache_valid   = true;
-    h->last_i_ua       = cs.i_ua;
 
     out->p_uw = (int32_t)(((int64_t)out->i_ua * (int64_t)out->v_pack_uv) / 1000000);
     return ESP_OK;

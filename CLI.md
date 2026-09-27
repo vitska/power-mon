@@ -157,7 +157,8 @@ hard-coding one:
 | `ver`, `help`, and every setter | — | **< 100 ms** |
 | `read` | 1 both | **0.4 s** |
 | `env` | 1 forced conversion | **~12 ms** |
-| `cal top i\|v`, `cal vpath` | 64 both | **~17 s** |
+| `cal top i` | 64 both | **~17 s** |
+| `cal top v` | 1 (instant) | **< 100 ms** |
 | `cal zero i` | 256 one | **~35 s** (8.8 s at 64) |
 | `cal zero v` | 256 both | **~68 s** (8.5 s at 32) |
 | `detect` | 32 both | ~9 s, scales with the count |
@@ -221,7 +222,6 @@ stream.diag_ms=1000
 stream.env_ms=10000
 shunt.loc=single
 shunt.roles=resolved
-shunt.vpath_uohm=36000
 sensors.pos=1
 sensors.neg=0
 profile=fast
@@ -398,7 +398,7 @@ records.
 | field | meaning |
 |---|---|
 | `ms` | milliseconds since boot. **Not a wall clock** — the device has no idea what time it is. Stamp arrival time on the client. |
-| `volts` | pack voltage, calibrated and harness-corrected |
+| `volts` | pack voltage, calibrated |
 | `amps` | current, > 0 charging |
 | `watts` | volts × amps |
 | `soc_pct` | state of charge, one decimal |
@@ -489,8 +489,7 @@ Guided two-point flow. Everything here persists automatically.
 | `cal zero i [n]` | 16–4096, default 256 | Current offset. **Load disconnected.** ~35 s |
 | `cal zero v [n]` | 16–4096, default 256 | Voltage offset. **VBUS at ground**, not merely disconnected. ~68 s |
 | `cal top i <uA> [n]` | n 8–1024, default 64 | Current gain from a meter reading. ~17 s |
-| `cal top v <uV>` | | Voltage gain, from **one instant reading**, taken the moment the command arrives — no averaging, no wait. Read the meter and send that value **at rest** |
-| `cal vpath <uV>` | | Harness resistance, from a **loaded** terminal reading. Needs ≥ 0.5 A |
+| `cal top v <uV>` | | Voltage gain, from **one instant reading**, taken the moment the command arrives — no averaging, no wait |
 | `cal save` | | Persist whatever is live — needed after `curve ... ref`, which solves a value but does not save it |
 | `cal forget` | | Erase the stored calibration |
 | `cal reset [i\|v]` | | Clear live **and** stored trims |

@@ -577,11 +577,10 @@ static const action_def_t ACTIONS[] = {
                     "the board measures; at least 10 mA, and the more the better. "
                     "Averages 64 samples, about 17 seconds.",
                     "A", 37000},
-    [ACT_TOP_V]  = {"MEASURED VOLTAGE", "at rest, from your meter",
+    [ACT_TOP_V]  = {"MEASURED VOLTAGE", "type what your meter reads",
                     "Set voltage gain from %s V?",
-                    "Take the meter reading with NO LOAD: under load the harness drop "
-                    "makes the solved gain wrong. One instant reading -- no averaging, "
-                    "no wait; applied and saved right away.",
+                    "One instant reading -- no averaging, no wait; applied and saved "
+                    "right away.",
                     "V", 4000},
 };
 

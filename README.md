@@ -34,8 +34,8 @@ Verified against a 12 V / 44 A·h flooded lead-acid battery.
 ## What works today
 
 - **Dual INA219**, one per pole, with roles derived from the install mode (§2.10).
-- **Calibration**: guided two-point flow (`cal zero` / `cal top`), harness-drop
-  correction, all of it written to flash and restored at boot.
+- **Calibration**: guided two-point flow (`cal zero` / `cal top`), all of it written
+  to flash and restored at boot.
 - **Fuel gauge**: coulomb counting with I·R-compensated OCV re-anchoring, Peukert
   compensation, capacity learning, full/empty/rest anchors.
   - It counts as resting below C/400 (110 mA on 44 Ah), not below the 3 mA
@@ -86,11 +86,13 @@ length; the short version:
    the discharge cutoff and absorption setpoint — the *operating* window. Used as a
    linear SoC map they read a rested 12.7 V battery as 53 %. So `v_0pct` / `v_100pct`
    hold the **resting-OCV** window and `v_full` drives full detection, separately.
-3. **A current-dependent voltage error is not gain.** Two breakout shunts in series put
-   ~0.4 V between the VBUS reference and the battery terminals under load. Absorbing
-   that into a gain trim is right at one current and wrong everywhere else, so there is
-   now an explicit harness-resistance term (`cal vpath`), distinct from the battery's
-   internal resistance.
+3. **A separate harness-resistance term (`cal vpath`) was tried and removed.** It solved
+   `r = (v_true − v_measured) / (−i)` from one loaded reading — a division that blows up
+   into a nonsense resistance (and then a wildly wrong voltage on every later sample,
+   since the correction runs on live current) whenever it's solved at a small current, and
+   nothing guarded against that once per-field validation was dropped. Voltage
+   calibration is back to a single linear equation: `cal top v <uV>` solves gain from one
+   instant reading, nothing else.
 
 ## Build
 
@@ -309,7 +311,6 @@ see [CLI.md](CLI.md) for the framing a programmatic client needs.
 | `options` | Everything currently set, in one place |
 | `soc [...]` | State of charge, endpoints, Peukert, capacity learning |
 | `cal <zero\|top> <i\|v>` | Guided two-point calibration, saved to flash |
-| `cal vpath <uV>` | Harness resistance, from a loaded terminal reading |
 | `curve` | Every conversion term numerically |
 | `shunt [uohm \| loc <p\|n\|single\|auto>]` | Resistance, or which lead it is in |
 | `sense` | Sign, bus-voltage compensation, PGA ceiling |
@@ -472,7 +473,7 @@ main/
   Kconfig.projbuild     pins, shunt, display, BLE
 components/
   ina219/               register-level driver, PGA auto-ranging, raw→SI, trims
-  sensors/              dual-sensor roles, harness-drop correction
+  sensors/              dual-sensor roles, pole auto-detection
   fuelgauge/            counting, anchors, Peukert, capacity learning
   bme280/               BME280/BMP280, chip-ID probe, Bosch integer compensation
 tools/

@@ -49,7 +49,6 @@ static const char *TAG = "config";
 #define K_MODE   "mode"
 #define K_PGAMAX "pgamax"
 #define K_VBCOMP "vbcomp"
-#define K_VPATH  "vpath"
 #define K_PROF   "prof"
 #define K_CADC   "cadc"
 #define K_GAUGE  "gauge"
@@ -90,7 +89,6 @@ void config_defaults(void)
         .v_offset_uv   = 0,
         .v_gain_ppm    = 1000000u,
         .v_divider_q16 = 65536u,
-        .r_vpath_uohm  = 0,
         .vbus_comp     = INA219_VBUS_COMP_ADD_SHUNT,
         .pga_max       = INA219_PGA_4,
         .install_mode  = SENSORS_MODE_AUTO,
@@ -177,7 +175,6 @@ esp_err_t config_apply(void)
     ina219_set_vbus_divider_q16(vd, s_cfg.v_divider_q16);
     ina219_set_pga_max(cd, s_cfg.pga_max);
     ina219_set_vbus_comp(vd, s_cfg.vbus_comp);
-    sensors_set_r_vpath_uohm(s_ctx->sensors, s_cfg.r_vpath_uohm);
 
     /* Averaging before profile: set_profile() re-applies the config register, so
      * doing it second is what makes the restored averaging reach the part. */
@@ -210,7 +207,6 @@ esp_err_t config_capture_and_commit(void)
     s_cfg.v_offset_uv   = ina219_get_vbus_offset_uv(vd);
     s_cfg.v_gain_ppm    = ina219_get_vbus_gain_ppm(vd);
     s_cfg.v_divider_q16 = ina219_get_vbus_divider_q16(vd);
-    s_cfg.r_vpath_uohm  = sensors_get_r_vpath_uohm(s_ctx->sensors);
     s_cfg.vbus_comp     = ina219_get_vbus_comp(vd);
     s_cfg.pga_max       = ina219_get_pga_max(cd);
     s_cfg.install_mode  = sensors_get_mode(s_ctx->sensors);
@@ -254,7 +250,6 @@ esp_err_t config_commit(void)
     if (err == ESP_OK) err = nvs_set_i32(h, K_VOFF,   s_cfg.v_offset_uv);
     if (err == ESP_OK) err = nvs_set_u32(h, K_VGAIN,  s_cfg.v_gain_ppm);
     if (err == ESP_OK) err = nvs_set_u32(h, K_VDIV,   s_cfg.v_divider_q16);
-    if (err == ESP_OK) err = nvs_set_u32(h, K_VPATH,  s_cfg.r_vpath_uohm);
     if (err == ESP_OK) err = nvs_set_u8 (h, K_VBCOMP, (uint8_t)s_cfg.vbus_comp);
     if (err == ESP_OK) err = nvs_set_u8 (h, K_PGAMAX, (uint8_t)s_cfg.pga_max);
     if (err == ESP_OK) err = nvs_set_u8 (h, K_MODE,   (uint8_t)s_cfg.install_mode);
@@ -306,7 +301,6 @@ static void read_all(nvs_handle_t h)
     if (nvs_get_i32(h, K_VOFF,   &i32) == ESP_OK) s_cfg.v_offset_uv = i32;
     if (nvs_get_u32(h, K_VGAIN,  &u32) == ESP_OK) s_cfg.v_gain_ppm = u32;
     if (nvs_get_u32(h, K_VDIV,   &u32) == ESP_OK) s_cfg.v_divider_q16 = u32;
-    if (nvs_get_u32(h, K_VPATH,  &u32) == ESP_OK) s_cfg.r_vpath_uohm = u32;
     if (nvs_get_u8 (h, K_VBCOMP, &u8)  == ESP_OK) s_cfg.vbus_comp = (ina219_vbus_comp_t)u8;
     if (nvs_get_u8 (h, K_PGAMAX, &u8)  == ESP_OK) s_cfg.pga_max = (ina219_pga_t)u8;
     if (nvs_get_u8 (h, K_MODE,   &u8)  == ESP_OK) s_cfg.install_mode = (sensors_mode_t)u8;
@@ -383,9 +377,9 @@ esp_err_t config_load(void)
         return ESP_ERR_NVS_NOT_FOUND;
     }
     ESP_LOGI(TAG, "restored: shunt %lu uOhm, i gain %lu ppm, v gain %lu ppm, "
-                  "vpath %lu uOhm, cap %lu uAh",
+                  "cap %lu uAh",
              (unsigned long)s_cfg.shunt_uohm, (unsigned long)s_cfg.i_gain_ppm,
-             (unsigned long)s_cfg.v_gain_ppm, (unsigned long)s_cfg.r_vpath_uohm,
+             (unsigned long)s_cfg.v_gain_ppm,
              (unsigned long)s_cfg.gauge.design_capacity_uah);
     return aerr;
 }

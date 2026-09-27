@@ -120,9 +120,7 @@ and left alone. The panel is laid out in the order the work happens:
    offset is subtracted before the gain is applied, so solving a gain against an
    uncorrected offset bakes the offset into it.
 3. **Known values** — type what the meter reads and the device solves the gain: current
-   now, voltage *at rest*, and terminal voltage *under load* (`cal vpath`, which
-   separates a harness drop from a gain error). Each field offers the device's live
-   reading as a starting point to type over.
+   and voltage, each from one instant reading, applied immediately on Set.
 4. **Save, refresh, erase** — and the device's own `cal` output underneath, re-read after
    every action rather than inferred from what the command said.
 

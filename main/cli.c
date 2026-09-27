@@ -1186,8 +1186,6 @@ static void curve_show(ina219_handle_t cd, ina219_handle_t vd)
            ina219_get_vbus_comp(vd) == INA219_VBUS_COMP_NONE   ? "off" :
            ina219_get_vbus_comp(vd) == INA219_VBUS_COMP_ADD_SHUNT ? "add shunt"
                                                                  : "subtract shunt");
-    printf("  vpath    %lu uOhm  (harness drop, corrected per sample)\n",
-           (unsigned long)sensors_get_r_vpath_uohm(s_ctx->sensors));
 }
 
 /* Averages n samples so a one-point gain solve is not decided by a single reading. */
@@ -2332,77 +2330,12 @@ static int cmd_cal(int argc, char **argv)
         printf("  cal top i <uA> [n]    known current, from your meter -> gain\n");
         printf("  cal top v <uV> [n]    known voltage, from your meter -> gain\n");
         printf("  cal reset [i|v]       back to zero offset, unity gain\n");
-        printf("  cal vpath <uV>        harness drop, from a LOADED terminal reading\n");
         printf("  cal save              write to flash (zero/top do this for you)\n");
         printf("  cal forget            erase the stored calibration\n");
         printf("\n");
         printf("Values are MICRO-units: 2.0134 A is 2013400, 12.6543 V is 12654300.\n");
         printf("Do zero before top on each channel; gain is solved assuming the\n");
         printf("offset is already correct.\n");
-        return 0;
-    }
-
-    /* --- cal vpath ------------------------------------------------------------ */
-    /*
-     * Solve the harness resistance from ONE loaded reading:
-     *
-     *     r_vpath = (v_true − v_measured) / (−i)
-     *
-     * This is the fix for a voltage error that only appears under load. Absorbing such
-     * an error into gain looks right at the calibration current and is wrong at every
-     * other one -- it over-reads at rest by the same drop it was hiding. Measured once
-     * here, the correction then tracks the current sample by sample.
-     */
-    if (strcmp(argv[1], "vpath") == 0) {
-        if (argc < 3) {
-            printf("usage: cal vpath <uV measured AT THE BATTERY TERMINALS>\n");
-            printf("Apply a steady load first -- the bigger the better, since the\n");
-            printf("drop being measured is proportional to it. At least 0.5 A.\n");
-            return 1;
-        }
-        const long ref_uv = strtol(argv[2], NULL, 10);
-
-        const bool was_streaming = config()->stream_enabled;
-        config()->stream_enabled    = false;
-
-        int64_t  si = 0, sv = 0;
-        uint32_t got = 0;
-        bool     sat = false;
-        printf("Averaging 64 samples");
-        const esp_err_t err = curve_average(64, &si, &sv, &got, &sat);
-        config()->stream_enabled = was_streaming;
-
-        (void)sat;
-        if (err != ESP_OK || got == 0) {
-            printf("read failed: %s\n", esp_err_to_name(err));
-            return 1;
-        }
-
-        const int64_t i_ua   = si / (int64_t)got;
-        const int64_t v_meas = sv / (int64_t)got;
-        char b1[24], b2[24], b3[24];
-
-        /* No validation: whatever current is flowing and whatever the entered
-         * reference is, the value is solved and stored as-is. Zero current alone
-         * cannot be divided by. */
-        if (i_ua == 0) {
-            printf("no current flowing -- nothing to divide by.\n");
-            return 1;
-        }
-
-        /* r = (v_true - v_meas) / (-i). Discharge is i<0, so a v_true above v_meas
-         * gives a positive resistance, as it must. */
-        const int64_t num = (ref_uv - v_meas) * 1000000;
-        const int64_t r   = num / (-i_ua);
-
-        printf("measured %s V at %s A, true %s V\n", FMT_V(b1, (uint32_t)v_meas),
-               FMT_A(b2, (int32_t)i_ua), FMT_V(b3, (uint32_t)ref_uv));
-
-        ESP_ERROR_CHECK(sensors_set_r_vpath_uohm(s_ctx->sensors, (uint32_t)r));
-        printf("vpath %ld uOhm -- %s V of correction at this current\n", (long)r,
-               FMT_V(b1, (uint32_t)(ref_uv - v_meas)));
-        printf("The voltage now tracks load instead of being right at one current.\n");
-        cal_autosave();
         return 0;
     }
 
@@ -2926,8 +2859,6 @@ static int cmd_config(int argc, char **argv)
         printf("shunt.roles=%s\n",
                sensors_get_role_state(s_ctx->sensors) == SENSORS_ROLE_RESOLVED
                    ? "resolved" : "unresolved");
-        printf("shunt.vpath_uohm=%lu\n",
-               (unsigned long)sensors_get_r_vpath_uohm(s_ctx->sensors));
         printf("sensors.pos=%d\n", sensors_have_pos(s_ctx->sensors) ? 1 : 0);
         printf("sensors.neg=%d\n", sensors_have_neg(s_ctx->sensors) ? 1 : 0);
     }

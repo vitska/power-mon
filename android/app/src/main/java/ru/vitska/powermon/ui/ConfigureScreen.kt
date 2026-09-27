@@ -234,7 +234,6 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             KV("Voltage gain", cfg.gainPct("cal.v_gain_ppm")
                 ?.let { it + "  (" + cfg.str("cal.v_gain_ppm") + " ppm)" } ?: "—")
             GainStepper("v", cfg.long("cal.v_gain_ppm"), quietSet)
-            KV("Harness path", cfg.milli("shunt.vpath_uohm", 3)?.let { it + " mOhm" } ?: "—")
             KV(
                 "Stored in flash",
                 when (cfg.bool("cal.stored")) {

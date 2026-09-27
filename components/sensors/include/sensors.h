@@ -53,22 +53,6 @@ typedef struct {
 
     uint8_t  voltage_divisor;   /**< read pack voltage every Nth sample (§4.5) */
     uint8_t  diagnostic_divisor;/**< read load voltage / idle offset every Nth sample */
-
-    /*
-     * Resistance between where VBUS is referenced and the battery terminals: the other
-     * sensor's shunt, the wiring, the connectors. Everything the measurement sits
-     * behind but the battery does not.
-     *
-     *     v_terminal = v_measured − i × r_vpath
-     *
-     * This is NOT the battery's internal resistance and must not be confused with it.
-     * r_vpath is a property of the harness and corrects a MEASUREMENT to the terminals;
-     * the gauge's r_int is a property of the cell and corrects the terminal voltage to
-     * OCV. They are applied in that order, and conflating them is how a bench ends up
-     * with a "gain" error that only appears under load (§2.10.5's r_wiring, made
-     * corrective rather than merely diagnostic).
-     */
-    uint32_t r_vpath_uohm;
 } sensors_config_t;
 
 #define SENSORS_CONFIG_DEFAULT()                 \
@@ -162,10 +146,6 @@ bool sensors_have_pos(sensors_handle_t h);
 ina219_handle_t sensors_pos_dev(sensors_handle_t h);
 ina219_handle_t sensors_neg_dev(sensors_handle_t h);
 bool sensors_have_neg(sensors_handle_t h);
-
-/** Harness resistance between the VBUS reference and the battery terminals. */
-esp_err_t sensors_set_r_vpath_uohm(sensors_handle_t h, uint32_t uohm);
-uint32_t  sensors_get_r_vpath_uohm(sensors_handle_t h);
 
 const char *sensors_mode_str(sensors_mode_t m);
 
