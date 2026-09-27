@@ -167,6 +167,7 @@ static void reset_link_model(void)
     s.model.firmware[0] = '\0';
     s.model.chem[0]     = '\0';
     s.model.have_env    = false;
+    s.model.have_rssi   = false;
     s.hist.count        = 0;     /* another board: its history, not the last one's */
     s.hist.supported    = false;
     s.hist.seq++;
@@ -397,6 +398,19 @@ static void link_task(void *arg)
         if (!(xEventGroupGetBits(s.ev) & EV_READY) || s.want_passkey) {
             continue;
         }
+
+        /* A local read of the radio's own report, not a round trip to the board: safe
+         * to do every pass through this ~1 Hz loop regardless of what else it does. */
+        if (s.conn != BLE_HS_CONN_HANDLE_NONE) {
+            int8_t rssi = 0;
+            if (ble_gap_conn_rssi(s.conn, &rssi) == 0) {
+                lock();
+                s.model.rssi_dbm  = rssi;
+                s.model.have_rssi = true;
+                unlock();
+            }
+        }
+
         if (s.need_handshake) {
             /* CLI.md §7: identify, read the settings worth showing, start telemetry.
              * Only `ver` succeeding ends the handshake; a refusal for lack of pairing

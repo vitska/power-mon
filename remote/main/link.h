@@ -48,6 +48,9 @@ typedef struct {
 
     uint32_t rx_packets;       /* notifications received, ever: for the activity light */
     uint32_t tx_packets;       /* commands written, ever */
+
+    bool    have_rssi;         /* false until the first read comes back */
+    int8_t  rssi_dbm;          /* this connection's RSSI, read locally every ~2 s */
 } link_model_t;
 
 typedef struct {

@@ -15,19 +15,29 @@ monitor's SoC history over the last 12, 24 or 48 hours, with the board's tempera
 humidity and pressure on the line above it. **Tap the graph** to change the span, and
 **tap the header** for Settings.
 
-- The time estimate uses a one-minute moving average of the current, so a load switching
-  on and off doesn't make it jump by days.
+- **Which one shows (to empty vs. to full) follows the instantaneous current**, the same
+  reading the CHARGING/DISCHARGING label uses, so the two never disagree. The *duration*
+  uses a one-minute moving average when it agrees on direction, so a load switching on
+  and off doesn't make the number itself jump around; right after the direction changes,
+  it falls back to the instantaneous reading rather than showing a stale, wrong-signed
+  estimate for the ~60 s the average takes to catch up.
   - *To empty* is remaining charge ÷ current.
   - *To full* is (capacity − charge) ÷ current, using the learned capacity from `config`.
     It is optimistic near the end of a charge, when the current tapers.
-  - Currents under 5 mA read as idle, and anything past 99 days as `>99d`.
+  - Currents under 5 mA read as idle. The format is exact, `Dd HH:MM:SS` (e.g.
+    `0d 03:14:07`), with no cap on days -- an implausible estimate from a near-zero
+    current is then visibly implausible rather than rounded away.
 - Values turn grey when no telemetry has arrived for 5 seconds.
-- **Communications, top right.** A Bluetooth icon in the link-state colour: blue while
-  searching, yellow while connecting or in setup, orange while pairing, green when live.
-  - It flashes white on every notification received and yellow on every command sent. At
-    10 Hz telemetry it flickers steadily, and when it stops, the data has stopped.
+- **Communications, top right.** A Bluetooth icon, always blue, flashes white on every
+  notification received and yellow on every command sent. At 10 Hz telemetry it flickers
+  steadily, and when it stops, the data has stopped. The link's state itself is the
+  status text's colour instead (blue while searching, yellow while connecting or in
+  setup, orange while pairing or with no data).
   - Beside it is the packet rate, e.g. `LIVE 9/s` or `PAIRED 9/s`. A stalled stream shows
     `0/s`, where a resting battery's unchanging numbers alone would not show it.
+  - A five-bar signal-strength antenna sits between the status text and the icon, from
+    this connection's own RSSI (read locally every second, not a round trip to the
+    board): 5 bars ≥ −60 dBm down to 1 bar at −100 dBm.
 
 **Settings** (tap the header). Five rows:
 

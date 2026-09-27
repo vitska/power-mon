@@ -82,19 +82,19 @@ static void field(field_t *f, int x, int y, int w, int scale, uint16_t fg, uint1
     lcd_text_field(x, y, w, text, scale, fg, bg);
 }
 
+/* "0d 00:00:00", always -- days is a plain integer with no cap, so an implausible
+ * estimate from a near-zero current is visibly implausible ("41d 03:00:00") rather
+ * than hidden behind a rounded-off ">99d". */
 static void fmt_duration(char *out, size_t n, float hours)
 {
-    if (!(hours >= 0) || hours > 99 * 24) {
-        snprintf(out, n, ">99d");
-    } else if (hours >= 24) {
-        const int h = (int)hours;
-        snprintf(out, n, "%dd %02dh", h / 24, h % 24);
-    } else if (hours >= 1) {
-        const int m = (int)(hours * 60);
-        snprintf(out, n, "%dh %02dm", m / 60, m % 60);
-    } else {
-        snprintf(out, n, "%dm", (int)(hours * 60 + 0.5f));
+    if (!(hours >= 0)) {
+        snprintf(out, n, "--");
+        return;
     }
+    const long total_s = (long)(hours * 3600.0f + 0.5f);
+    const long d        = total_s / 86400;
+    const long rem      = total_s % 86400;
+    snprintf(out, n, "%ldd %02ld:%02ld:%02ld", d, rem / 3600, (rem % 3600) / 60, rem % 60);
 }
 
 /* --- the Bluetooth activity icon ---------------------------------------------------- */
@@ -132,6 +132,41 @@ static void bt_icon(uint16_t color)
         }
     }
     lcd_blit(BT_X, BT_Y, BT_W, BT_H, px);
+}
+
+/* --- the signal-strength antenna ------------------------------------------------------ */
+
+/* Five ascending bars, classic phone-status-bar shape, immediately left of the
+ * Bluetooth icon. `bars` (0..5) are filled blue; the rest stay dim outlines, so the
+ * five-bar frame is always visible and only the fill changes. */
+#define ANT_X    283
+#define ANT_Y    4
+#define ANT_MAXH 13
+#define ANT_BAR_W 2
+#define ANT_GAP   1
+
+static void ant_icon(int bars)
+{
+    if (bars < 0) bars = 0;
+    if (bars > 5) bars = 5;
+    for (int i = 0; i < 5; i++) {
+        const int h = 3 + i * ((ANT_MAXH - 3) * 2 / 8); /* 3,5,8,10,13 */
+        const int x = ANT_X + i * (ANT_BAR_W + ANT_GAP);
+        lcd_fill(x, ANT_Y, ANT_BAR_W, ANT_MAXH - h, C_HEADER);
+        lcd_fill(x, ANT_Y + ANT_MAXH - h, ANT_BAR_W, h, i < bars ? C_BLUE : C_DIM);
+    }
+}
+
+/* RSSI to a bar count. These are BLE link thresholds, not Wi-Fi's -- a subscribed,
+ * working link is routinely -70 to -85 dBm, so the scale is shifted down accordingly. */
+static int rssi_bars(int8_t dbm)
+{
+    if (dbm >= -60) return 5;
+    if (dbm >= -70) return 4;
+    if (dbm >= -80) return 3;
+    if (dbm >= -90) return 2;
+    if (dbm >= -100) return 1;
+    return 0;
 }
 
 /* --- the dashboard ----------------------------------------------------------------- */
@@ -226,6 +261,7 @@ static void main_draw(const link_model_t *m)
     static int     bar_last = -2;
     static uint16_t bar_col;
     static uint16_t icon_last = 1;
+    static int      bars_last = -1;
     static uint32_t seen_rx, seen_tx, rate_base;
     static int64_t  flash_until, rate_t;
     static uint16_t flash_col;
@@ -259,10 +295,11 @@ static void main_draw(const link_model_t *m)
     char status[24];
     if (m->state == LINK_READY) snprintf(status, sizeof(status), "%s %d/s", st, rate);
     else                        snprintf(status, sizeof(status), "%s", st);
-    field(&f_status, 222, 8, 74, 1, sc, C_HEADER, status);
+    field(&f_status, 200, 8, 80, 1, sc, C_HEADER, status);
 
-    /* The icon: the link state's colour, flashing white for every notification that
-     * arrives and yellow for every command sent. At 10 Hz telemetry it flickers
+    /* The icon is always Bluetooth-blue -- state lives in the status text's colour
+     * above, not in the icon -- and flashes white for every notification that
+     * arrives, yellow for every command sent. At 10 Hz telemetry it flickers
      * steadily; when it stops, so has the data. */
     if (m->tx_packets != seen_tx) {
         seen_tx     = m->tx_packets;
@@ -273,10 +310,16 @@ static void main_draw(const link_model_t *m)
         flash_until = now + 60 * 1000;
     }
     seen_rx = m->rx_packets;
-    const uint16_t ic = now < flash_until ? flash_col : sc;
+    const uint16_t ic = now < flash_until ? flash_col : C_BLUE;
     if (s_full || icon_last != ic) {
         bt_icon(ic);
         icon_last = ic;
+    }
+
+    const int bars = m->have_rssi ? rssi_bars(m->rssi_dbm) : 0;
+    if (s_full || bars_last != bars) {
+        ant_icon(bars);
+        bars_last = bars;
     }
 
     /* State of charge. */
@@ -297,22 +340,31 @@ static void main_draw(const link_model_t *m)
         bar_col  = soc_c;
     }
 
-    /* Time to empty / full, from the ~1 min average current rather than the latest
-     * sample: a load switching on and off would otherwise make it jump by days. */
-    const float i     = m->amps_avg;
-    const float cap   = m->capacity_mah / 1000.0f;
-    const char *label = "TIME ESTIMATE";
+    /*
+     * Which one to show (charging vs discharging) follows the INSTANTANEOUS current,
+     * the same signal the CHARGING/DISCHARGING label below uses -- so the two never
+     * contradict each other. Only the MAGNITUDE uses the ~1 min average, and only
+     * when that average agrees on direction; right after a load or charger is
+     * switched, the average is still catching up (60 s time constant) and would
+     * otherwise show "TIME TO EMPTY" for a few seconds after charging has started.
+     */
+    const float i_now  = m->amps;
+    const float i_avg  = m->amps_avg;
+    const float cap    = m->capacity_mah / 1000.0f;
+    const char *label  = "TIME ESTIMATE";
     if (!live || !m->have_calc) {
         snprintf(b, sizeof(b), "--");
-    } else if (strcmp(m->mode, "FULL") == 0 && i > -0.005f) {
+    } else if (strcmp(m->mode, "FULL") == 0 && i_now > -0.005f) {
         snprintf(b, sizeof(b), "full");
-    } else if (i < -0.005f) {
-        label = "TIME TO EMPTY";
-        fmt_duration(b, sizeof(b), m->charge_ah / -i);
-    } else if (i > 0.005f && cap > 0) {
+    } else if (i_now > 0.005f && cap > 0) {
         label = "TIME TO FULL";
+        const float rate = (i_avg > 0.005f) ? i_avg : i_now;
         const float left = cap - m->charge_ah;
-        fmt_duration(b, sizeof(b), left > 0 ? left / i : 0);
+        fmt_duration(b, sizeof(b), left > 0 ? left / rate : 0);
+    } else if (i_now < -0.005f) {
+        label = "TIME TO EMPTY";
+        const float rate = (i_avg < -0.005f) ? -i_avg : -i_now;
+        fmt_duration(b, sizeof(b), m->charge_ah / rate);
     } else {
         snprintf(b, sizeof(b), "idle");
     }
@@ -927,9 +979,12 @@ void ui_run(void)
             next_log = now + 30LL * 1000000;
             link_hist_t lh;
             link_history(&lh);
-            ESP_LOGI("ui", "%s %s: %.1f %% %.3f V %.4f A (avg %.4f) %s, cap %lu mAh, %s %dS",
+            ESP_LOGI("ui", "%s %s: %.1f %% %.3f V %.4f A (avg %.4f) %s, cap %lu mAh, %s %dS, "
+                           "rssi %s%d dBm (%d bars)",
                      m.name, fresh ? "live" : "no data", m.soc_pct, m.volts, m.amps,
-                     m.amps_avg, m.mode, (unsigned long)m.capacity_mah, m.chem, m.cells);
+                     m.amps_avg, m.mode, (unsigned long)m.capacity_mah, m.chem, m.cells,
+                     m.have_rssi ? "" : "none/", m.have_rssi ? m.rssi_dbm : 0,
+                     m.have_rssi ? rssi_bars(m.rssi_dbm) : 0);
             ESP_LOGI("ui", "env %s: %.2f C %.1f %% %.2f hPa; history %s, %d points, newest %lu s old",
                      m.have_env ? "yes" : "no", m.temp_c, m.humid_pct, m.press_hpa,
                      lh.supported ? "supported" : "unsupported", lh.count,
