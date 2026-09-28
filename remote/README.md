@@ -8,7 +8,7 @@ repository root: different chip, different BLE role, its own `version.txt`.
 
 ## Screens
 
-**Dashboard.** State of charge (large, with a bar), voltage,
+**Dashboard.** State of charge (large, with a ten-brick gauge), voltage,
 current, power, the mode (CHARGING / DISCHARGING / IDLE / FULL / EMPTY) with the gauge's
 own state, the battery chemistry and its capacity under it, and the time to empty or to
 full. Below, the
@@ -41,6 +41,11 @@ humidity and pressure on the line above it. **Tap the graph** to change the span
     first, and a coarser display calls them identical for the whole early life of a pack.
   - Both are computed on the monitor and only reported here -- two devices watching one
     pack must not quote two capacities.
+- **The gauge is ten bricks, one per 10 %.** A brick lights only when its whole tenth
+  is in the pack -- a gauge that rounds up strands people -- so 76.9 % lights seven
+  and the digits carry the rest. Anything above zero keeps one brick lit, because a
+  pack at 9 % must not look identical to a flat one. Unlit bricks stay visible as dim
+  slots, so the lit ones read as a proportion rather than as a bar of unknown length.
 - **The SoC colour is about the pack**, not the link: green from 50 %, yellow from
   30 %, red below. The number and the bar always take the same colour. Below **10 %**
   both blink, half a second each way -- by then the reading is a thing to act on, and

@@ -8,7 +8,7 @@
  *   +----------------------------+---------------------------+ 22
  *   | STATE OF CHARGE            |  12.432 V                 |
  *   |  72.4 %                    |  -0.0089 A                |
- *   |  [#########-------]        |  -0.110 W                 |
+ *   |  [##.##.##.##.##.--.--.--] |  -0.110 W                 |
  *   | TIME TO EMPTY              |  DISCHARGE   (device state)|
  *   |  3d 04h                    |  FLOODED 6S               |
  *   |                            |  CAP 44.0AH (43.97)       |
@@ -176,6 +176,9 @@ static int rssi_bars(int8_t dbm)
 
 /* --- the dashboard ----------------------------------------------------------------- */
 
+/* The SoC gauge: ten bricks, one per 10 %. */
+#define SOC_BRICKS 10
+
 #define GX 4
 #define GY 162
 #define GW 284
@@ -307,7 +310,7 @@ static void main_draw(const link_model_t *m)
 {
     static field_t f_name, f_status, f_soc, f_tlabel, f_time, f_v, f_a, f_w, f_mode, f_sub,
         f_glabel, f_cap;
-    static int     bar_last = -2;
+    static int     bar_last = -2;   /* bricks lit at the last draw */
     static uint16_t bar_col;
     static uint16_t icon_last = 1;
     static int      bars_last = -1;
@@ -412,12 +415,35 @@ static void main_draw(const link_model_t *m)
     else                    snprintf(b, sizeof(b), "%.1f", soc);
     field(&f_soc, 6, 40, 150, 6, soc_c, C_BLACK, b);
 
-    const int bar = have_soc ? (int)(soc * 162 / 100) : -1;
-    if (s_full || bar != bar_last || bar_col != soc_c) {
-        lcd_fill(6, 96, 164, 12, C_GREY);
+    /*
+     * Ten bricks, one per 10 %. A brick lights only when its whole tenth is in the
+     * pack -- a gauge that rounds up is a gauge that strands someone -- so 76.9 %
+     * lights seven and the digits above carry the rest. The one exception is the
+     * bottom: a pack at 9 % would light nothing and look identical to a flat one, and
+     * those are not the same thing, so anything above zero keeps one brick. That is
+     * also what the low-SoC blink needs to blink.
+     *
+     * Unlit bricks are drawn dim rather than left black: the ten slots stay visible,
+     * so the lit ones read as a proportion at a glance instead of as a bar of unknown
+     * length.
+     */
+    const int lit = !have_soc         ? -1
+                    : soc >= 99.95f   ? SOC_BRICKS
+                    : soc <= 0.0f     ? 0
+                    : (int)(soc / 10.0f) > 0 ? (int)(soc / 10.0f)
+                                             : 1;
+    if (s_full || lit != bar_last || bar_col != soc_c) {
+        lcd_fill(6, 96, 164, 12, C_GREY);   /* a one-pixel frame around the slots */
         lcd_fill(7, 97, 162, 10, C_BLACK);
-        if (bar > 0) lcd_fill(7, 97, bar, 10, soc_c);
-        bar_last = bar;
+        for (int i = 0; i < SOC_BRICKS; i++) {
+            /* Pitch from the box width, not a constant: 162 does not divide by ten,
+             * and rounding each edge separately spreads the odd pixels evenly rather
+             * than piling them all into the last brick. */
+            const int x0 = 7 + (i * 162) / SOC_BRICKS;
+            const int x1 = 7 + ((i + 1) * 162) / SOC_BRICKS - (i + 1 < SOC_BRICKS ? 2 : 0);
+            lcd_fill(x0, 97, x1 - x0, 10, i < lit ? soc_c : C_DIM);
+        }
+        bar_last = lit;
         bar_col  = soc_c;
     }
 
