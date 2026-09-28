@@ -26,6 +26,7 @@
 #define C_YELLOW  RGB(240, 210, 40)
 #define C_ORANGE  RGB(255, 150, 30)
 #define C_RED     RGB(240, 60, 50)
+#define C_RED_DIM RGB(70, 14, 12)   /* the dark half of a low-SoC blink */
 #define C_CYAN    RGB(60, 200, 230)
 #define C_BLUE    RGB(70, 130, 240)
 

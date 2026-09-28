@@ -8,7 +8,7 @@ repository root: different chip, different BLE role, its own `version.txt`.
 
 ## Screens
 
-**Dashboard.** State of charge (large, green/yellow/red by level, with a bar), voltage,
+**Dashboard.** State of charge (large, with a bar), voltage,
 current, power, the mode (CHARGING / DISCHARGING / IDLE / FULL / EMPTY) with the gauge's
 own state, the battery chemistry and its capacity under it, and the time to empty or to
 full. Below, the
@@ -41,6 +41,10 @@ humidity and pressure on the line above it. **Tap the graph** to change the span
     first, and a coarser display calls them identical for the whole early life of a pack.
   - Both are computed on the monitor and only reported here -- two devices watching one
     pack must not quote two capacities.
+- **The SoC colour is about the pack**, not the link: green from 50 %, yellow from
+  30 %, red below. The number and the bar always take the same colour. Below **10 %**
+  both blink, half a second each way -- by then the reading is a thing to act on, and
+  a static red carries no more urgency across a room than a static green.
 - Values turn grey when no telemetry has arrived for 5 seconds.
 - **Communications, top right.** A Bluetooth icon, always blue, flashes white on every
   notification received and yellow on every command sent. At 10 Hz telemetry it flickers

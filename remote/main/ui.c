@@ -390,7 +390,23 @@ static void main_draw(const link_model_t *m)
     /* State of charge. */
     const bool  have_soc = live && m->have_calc;
     const float soc      = m->soc_pct;
-    const uint16_t soc_c = !have_soc ? C_GREY : soc > 50 ? C_GREEN : soc > 20 ? C_YELLOW : C_RED;
+    /*
+     * Colour is about the pack, not the link: green from 50 %, yellow from 30, red
+     * below. The number and the bar take the same colour, so the two can never
+     * disagree about how worried to look.
+     *
+     * Below 10 % it blinks, half a second each way. By then the reading is not a
+     * status any more, it is a thing to act on, and a static red carries no more
+     * urgency across a room than a static green -- motion is the only channel left
+     * that a glance picks up without reading the digits.
+     */
+    uint16_t soc_c = !have_soc  ? C_GREY
+                     : soc >= 50.0f ? C_GREEN
+                     : soc >= 30.0f ? C_YELLOW
+                                    : C_RED;
+    if (have_soc && soc < 10.0f && ((now / 500000) & 1)) {
+        soc_c = C_RED_DIM;
+    }
     if (!have_soc)          snprintf(b, sizeof(b), "--");
     else if (soc >= 99.95f) snprintf(b, sizeof(b), "100");
     else                    snprintf(b, sizeof(b), "%.1f", soc);
