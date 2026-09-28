@@ -46,6 +46,9 @@ humidity and pressure on the line above it. **Tap the graph** to change the span
   and the digits carry the rest. Anything above zero keeps one brick lit, because a
   pack at 9 % must not look identical to a flat one. Unlit bricks stay visible as dim
   slots, so the lit ones read as a proportion rather than as a bar of unknown length.
+  A mark through the middle of the frame splits it at 50 %: which side of the middle
+  the lit bricks end on is faster to see than counting five of them, and half is the
+  threshold most decisions about a lead-acid pack are made against.
 - **The SoC colour is about the pack**, not the link: green from 50 %, yellow from
   30 %, red below. The number and the bar always take the same colour. Below **10 %**
   both blink, half a second each way -- by then the reading is a thing to act on, and

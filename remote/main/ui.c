@@ -8,7 +8,7 @@
  *   +----------------------------+---------------------------+ 22
  *   | STATE OF CHARGE            |  12.432 V                 |
  *   |  72.4 %                    |  -0.0089 A                |
- *   |  [##.##.##.##.##.--.--.--] |  -0.110 W                 |
+ *   |  [##.##.##.##.##|--.--.--] |  -0.110 W                 |
  *   | TIME TO EMPTY              |  DISCHARGE   (device state)|
  *   |  3d 04h                    |  FLOODED 6S               |
  *   |                            |  CAP 44.0AH (43.97)       |
@@ -443,6 +443,13 @@ static void main_draw(const link_model_t *m)
             const int x1 = 7 + ((i + 1) * 162) / SOC_BRICKS - (i + 1 < SOC_BRICKS ? 2 : 0);
             lcd_fill(x0, 97, x1 - x0, 10, i < lit ? soc_c : C_DIM);
         }
+        /*
+         * Half-scale mark, through the gap between the fifth and sixth bricks and the
+         * full height of the frame. Counting five bricks is slower than seeing which
+         * side of the middle the lit ones end on, and half is the threshold most of
+         * the decisions about a lead-acid pack are made against.
+         */
+        lcd_fill(7 + (162 * (SOC_BRICKS / 2)) / SOC_BRICKS - 2, 96, 2, 12, C_GREY);
         bar_last = lit;
         bar_col  = soc_c;
     }
