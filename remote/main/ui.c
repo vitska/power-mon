@@ -10,9 +10,9 @@
  *   |  72.4 %                    |  -0.0089 A                |
  *   |  [#########-------]        |  -0.110 W                 |
  *   | TIME TO EMPTY              |  DISCHARGE   (device state)|
- *   |  3d 04h                    |  FLOODED 6S               |
+ *   |  3d 04h                    |  FLOODED 6S  44.0AH       |
  *   +----------------------------+---------------------------+ 148
- *   | SOC 48 h              24.1C 46.2% 1003.5hPa      100      |
+ *   | SOC 24 h  fw 0.11.6   24.1C 46.2% 1003.5hPa      100      |
  *   |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~    50      |  tap: 1 h / 6 h / 24 h
  *   |                                                  0      |  graph: the monitor's own
  *                                                                history (`hist`)
@@ -305,7 +305,7 @@ static void main_enter(void)
 static void main_draw(const link_model_t *m)
 {
     static field_t f_name, f_status, f_soc, f_tlabel, f_time, f_v, f_a, f_w, f_mode, f_sub,
-        f_glabel;
+        f_glabel, f_fw;
     static int     bar_last = -2;
     static uint16_t bar_col;
     static uint16_t icon_last = 1;
@@ -437,12 +437,28 @@ static void main_draw(const link_model_t *m)
     else if (strcmp(m->mode, "DISCHARGE") == 0)                              mc = C_ORANGE;
     field(&f_mode, 178, 104, 140, 2, mc, C_BLACK, mode);
 
+    /*
+     * Chemistry, cells and capacity. The capacity is the monitor's LEARNED one --
+     * `soc.learned_uah`, the figure its gauge arrived at between two reference points --
+     * because that is the number the runtime estimates are actually built on. The
+     * nameplate is what the pack was sold as; after a few cycles they differ, and
+     * quoting the nameplate while the time-to-empty above is computed from the learned
+     * one is how a display argues with itself. Nothing is computed here: the monitor
+     * does the learning and this shows what it reports.
+     */
     char sub[64] = "";
     if (m->chem[0]) {
         snprintf(sub, sizeof(sub), "%s %dS", m->chem, m->cells);
         for (char *p = sub; *p; p++) {
             if (*p >= 'a' && *p <= 'z') *p -= 32;
         }
+    }
+    const uint32_t cap = m->capacity_learned_mah ? m->capacity_learned_mah
+                                                 : m->capacity_design_mah;
+    if (cap) {
+        char part[16];
+        snprintf(part, sizeof(part), "%s%.1fAH", sub[0] ? "  " : "", cap / 1000.0f);
+        strncat(sub, part, sizeof(sub) - strlen(sub) - 1);
     }
     field(&f_sub, 178, 126, 140, 1, C_GREY, C_BLACK, sub);
 
@@ -455,6 +471,16 @@ static void main_draw(const link_model_t *m)
             snprintf(b, sizeof(b), "SOC"); /* no history fetched yet: no span to name */
         }
         field(&f_glabel, 4, 152, 96, 1, C_GREY, C_BLACK, b);
+        /* The MONITOR's firmware version, small, between the graph label and the
+         * environment: which image is answering decides what half these readings even
+         * mean (estimates need 0.11.3, history 0.9.0), and hunting for it in the phone
+         * app while standing in front of the display is the wrong way to find out. The
+         * remote's own version is on its FIRMWARE UPDATE screen. */
+        char fw[16] = "";
+        if (m->firmware[0]) {
+            snprintf(fw, sizeof(fw), "fw %.8s", m->firmware);
+        }
+        field(&f_fw, 104, 152, 48, 1, C_GREY, C_BLACK, fw);
         char env[48] = "", part[16];
         if (m->have_env) {
             if (!isnan(m->temp_c)) {
@@ -477,6 +503,7 @@ static void main_draw(const link_model_t *m)
     } else {
         field(&f_glabel, 4, 152, 312, 1, C_YELLOW, C_BLACK, m->note);
         f_env.text[0] = '\x01'; /* force a redraw once the label shrinks back */
+        f_fw.text[0]  = '\x01'; /* the note has drawn over it */
     }
 }
 

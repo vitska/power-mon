@@ -10,7 +10,8 @@ repository root: different chip, different BLE role, its own `version.txt`.
 
 **Dashboard.** State of charge (large, green/yellow/red by level, with a bar), voltage,
 current, power, the mode (CHARGING / DISCHARGING / IDLE / FULL / EMPTY) with the gauge's
-own state and the battery chemistry under it, and the time to empty or to full. Below, the
+own state, the battery chemistry and its capacity under it, and the time to empty or to
+full. Below, the
 monitor's SoC history, tap-cycled between full span, half and a quarter, with the
 board's temperature,
 humidity and pressure on the line above it. **Tap the graph** to change the span, and
@@ -28,6 +29,15 @@ humidity and pressure on the line above it. **Tap the graph** to change the span
   - Currents under 5 mA read as idle. The format is exact, `Dd HH:MM:SS` (e.g.
     `0d 03:14:07`), with no cap on days -- an implausible estimate from a near-zero
     current is then visibly implausible rather than rounded away.
+- **Capacity** is the monitor's *learned* capacity (`soc.learned_uah`), not the
+  nameplate: the figure its gauge arrived at between two reference points, and the one
+  the time estimates above are built on. The learning happens on the monitor and this
+  only reports it -- two devices watching one pack must not quote two capacities. It
+  falls back to the design capacity until the monitor has reported a learned one.
+- **The monitor's firmware version** sits in small letters beside the graph label
+  (`fw 0.11.6`). Which image is answering decides what half of this screen can show at
+  all -- time estimates need 0.11.3, the history 0.9.0. The remote's *own* version is on
+  its FIRMWARE UPDATE screen.
 - Values turn grey when no telemetry has arrived for 5 seconds.
 - **Communications, top right.** A Bluetooth icon, always blue, flashes white on every
   notification received and yellow on every command sent. At 10 Hz telemetry it flickers

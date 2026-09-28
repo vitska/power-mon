@@ -177,7 +177,9 @@ static void reset_link_model(void)
     s.hist.supported    = false;
     s.hist.seq++;
     s.model.cells       = 0;
-    s.model.capacity_mah = 0;
+    s.model.capacity_mah         = 0;
+    s.model.capacity_design_mah  = 0;
+    s.model.capacity_learned_mah = 0;
     unlock();
     s.cap_design_mah = s.cap_learned_mah = 0;
     s.last_fast_ms   = 0;
@@ -317,7 +319,10 @@ static void on_line(char *line)
              * takes over from there. */
             snprintf(s.model.mode, sizeof(s.model.mode), "%s", v);
         }
-        s.model.capacity_mah = s.cap_learned_mah ? s.cap_learned_mah : s.cap_design_mah;
+        s.model.capacity_mah         = s.cap_learned_mah ? s.cap_learned_mah
+                                                          : s.cap_design_mah;
+        s.model.capacity_design_mah  = s.cap_design_mah;
+        s.model.capacity_learned_mah = s.cap_learned_mah;
     } else if (strncmp(line, "protocol ", 9) == 0) {
         s.model.protocol = atoi(line + 9);
     } else if (strncmp(line, "firmware ", 9) == 0) {

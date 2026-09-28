@@ -40,7 +40,16 @@ typedef struct {
     bool     have_est;
     int32_t  t_full_s, t_empty_s, settle_s;
     float    amps_avg;         /* ~1 minute moving average, for time estimates */
-    uint32_t capacity_mah;     /* learned capacity, else design, from `config` */
+    /*
+     * Capacity, from `config`. The monitor LEARNS its pack's real capacity between two
+     * reference points (DESIGN.md 5, `soc.learned_uah`) and that arithmetic stays there:
+     * nothing here computes it, and the remote must not, or two devices watching one
+     * pack would quote two different capacities. Both are kept because they mean
+     * different things -- what the pack was sold as, and what it actually holds.
+     */
+    uint32_t capacity_mah;     /* learned capacity, else design: what to quote */
+    uint32_t capacity_design_mah;  /* the nameplate, `soc.cap_uah` */
+    uint32_t capacity_learned_mah; /* what the gauge has learned; 0 until it reports */
     char     chem[12];         /* battery.chem, "" on firmware before 0.8.0 */
     int      cells;
     int64_t  last_data_us;     /* esp_timer time of the last telemetry record */
