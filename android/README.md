@@ -8,7 +8,10 @@ A phone client for the battery monitor, speaking the Nordic-UART console describ
 [`../CLI.md`](../CLI.md) — protocol **3**. Everything the console exposes is reachable
 from here, in four tabs:
 
-- **Monitor:** SoC labelled with the battery chemistry, the monitor's SoC history
+- **Monitor:** SoC labelled with the battery chemistry, charge remaining written as a
+  fraction of the capacity the percentage is taken against (`34.33 of 45.00 Ah` --
+  alone, that first figure reads as the pack's capacity, which is the one thing it is
+  not), the monitor's SoC history
   (full span / half / quarter chart; gaps stay gaps), volts, amps, watts, gauge state,
   diagnostics,
   environment. The history is fetched on connect and every two minutes.

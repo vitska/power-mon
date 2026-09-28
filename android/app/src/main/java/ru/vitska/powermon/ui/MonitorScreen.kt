@@ -129,7 +129,21 @@ fun MonitorScreen(vm: MonitorViewModel, onPickDevice: () -> Unit = {}) {
             )
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("${f(t.chargeAh, 2)} Ah   ·   ", style = MaterialTheme.typography.bodyMedium)
+                // Charge REMAINING, and the capacity the percentage above is a
+                // percentage OF. Alone, "34.33 Ah" under a big 76.2 % reads as the pack's
+                // capacity -- the one number on this card it is not. Written as a
+                // fraction it cannot: 34.33 of 45.00 is visibly 76 %. The denominator is
+                // `soc.learned_uah` because that is what the gauge divides by, so the
+                // three figures on this card always agree.
+                val fullAh = cfg.long("soc.learned_uah")?.let { it / 1_000_000.0 }
+                Text(
+                    if (fullAh != null) {
+                        "${f(t.chargeAh, 2)} of ${String.format("%.2f", fullAh)} Ah   ·   "
+                    } else {
+                        "${f(t.chargeAh, 2)} Ah left   ·   "
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
                 Text(
                     state,
                     style = MaterialTheme.typography.bodyMedium,
@@ -169,7 +183,7 @@ fun MonitorScreen(vm: MonitorViewModel, onPickDevice: () -> Unit = {}) {
         Section("Gauge") {
             KV("OCV estimate", f(t.ocvV, 3, " V"))
             KV("Peukert factor", f(t.peukert, 3))
-            KV("Charge", f(t.chargeAh, 3, " Ah"))
+            KV("Charge remaining", f(t.chargeAh, 3, " Ah"))
             KV("State", state)
         }
 
