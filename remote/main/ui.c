@@ -11,7 +11,7 @@
  *   |  [#########-------]        |  -0.110 W                 |
  *   | TIME TO EMPTY              |  DISCHARGE   (device state)|
  *   |  3d 04h                    |  FLOODED 6S               |
- *   |                            |  CAP 44.0AH (41.2)        |
+ *   |                            |  CAP 44.0AH (43.97)       |
  *   +----------------------------+---------------------------+ 148
  *   | SOC 24 h              24.1C 46.2% 1003.5hPa      100      |
  *   |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~    50      |  tap: 1 h / 6 h / 24 h
@@ -475,13 +475,21 @@ static void main_draw(const link_model_t *m)
      * Neither is computed here. The monitor's gauge does the learning between two
      * reference points (fuelgauge.c learn_capacity()) and reports both through `config`;
      * two devices watching one pack must never arrive at two capacities.
+     *
+     * Decimals are not cosmetic here. The learned figure leaves the nameplate by a
+     * fraction of an Ah at first, so one decimal shows the pair as identical for the
+     * whole early life of a pack -- exactly when someone is watching to see whether the
+     * gauge has started learning at all. Two decimals on the measured value, one on the
+     * set value: the same as the phone's Configure tab, deliberately, because two
+     * screens rounding one pack's capacity differently is a bug report waiting to
+     * happen.
      */
     char cap[32] = "";
-    if (m->capacity_design_mah && m->capacity_learned_mah) {
-        snprintf(cap, sizeof(cap), "CAP %.1fAH (%.1f)", m->capacity_design_mah / 1000.0f,
-                 m->capacity_learned_mah / 1000.0f);
-    } else if (m->capacity_design_mah) {
-        snprintf(cap, sizeof(cap), "CAP %.1fAH", m->capacity_design_mah / 1000.0f);
+    if (m->capacity_design_uah && m->capacity_learned_uah) {
+        snprintf(cap, sizeof(cap), "CAP %.1fAH (%.2f)", m->capacity_design_uah / 1000000.0,
+                 m->capacity_learned_uah / 1000000.0);
+    } else if (m->capacity_design_uah) {
+        snprintf(cap, sizeof(cap), "CAP %.1fAH", m->capacity_design_uah / 1000000.0);
     }
     field(&f_cap, 178, 136, 140, 1, C_GREY, C_BLACK, cap);
 

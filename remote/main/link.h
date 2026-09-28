@@ -48,8 +48,16 @@ typedef struct {
      * different things -- what the pack was sold as, and what it actually holds.
      */
     uint32_t capacity_mah;     /* learned capacity, else design: what to quote */
-    uint32_t capacity_design_mah;  /* the nameplate, `soc.cap_uah` */
-    uint32_t capacity_learned_mah; /* what the gauge has learned; 0 until it reports */
+    /*
+     * In MICRO-amp-hours, as the wire carries them. Not scaled to mAh on the way in:
+     * the two figures differ by a fraction of an Ah for most of a pack's life, and a
+     * unit conversion that happens before the display has decided how many decimals it
+     * wants is a conversion that can silently round the difference away. The phone
+     * shows the nameplate to 1 decimal and the learned figure to 2; this must be able
+     * to do the same, or the two screens quote different capacities for one pack.
+     */
+    uint32_t capacity_design_uah;  /* the nameplate, `soc.cap_uah` */
+    uint32_t capacity_learned_uah; /* what the gauge has learned; 0 until it reports */
     char     chem[12];         /* battery.chem, "" on firmware before 0.8.0 */
     int      cells;
     int64_t  last_data_us;     /* esp_timer time of the last telemetry record */

@@ -111,7 +111,7 @@ static struct {
     char    line[256];
     size_t  line_len;
     int64_t last_fast_ms;
-    uint32_t cap_design_mah, cap_learned_mah;
+    uint32_t cap_design_uah, cap_learned_uah;
 } s = {.conn = BLE_HS_CONN_HANDLE_NONE};
 
 static void start_scan(void);
@@ -177,11 +177,11 @@ static void reset_link_model(void)
     s.hist.supported    = false;
     s.hist.seq++;
     s.model.cells       = 0;
-    s.model.capacity_mah         = 0;
-    s.model.capacity_design_mah  = 0;
-    s.model.capacity_learned_mah = 0;
+    s.model.capacity_mah          = 0;
+    s.model.capacity_design_uah   = 0;
+    s.model.capacity_learned_uah  = 0;
     unlock();
-    s.cap_design_mah = s.cap_learned_mah = 0;
+    s.cap_design_uah = s.cap_learned_uah = 0;
     s.last_fast_ms   = 0;
     s.line_len       = 0;
     s.pending        = false;
@@ -307,9 +307,9 @@ static void on_line(char *line)
         } else if (strcmp(k, "age_s") == 0) {
             s.hist_tmp_age = strtoul(v, NULL, 10);
         } else if (strcmp(k, "soc.cap_uah") == 0) {
-            s.cap_design_mah = strtoul(v, NULL, 10) / 1000;
+            s.cap_design_uah = strtoul(v, NULL, 10);
         } else if (strcmp(k, "soc.learned_uah") == 0) {
-            s.cap_learned_mah = strtoul(v, NULL, 10) / 1000;
+            s.cap_learned_uah = strtoul(v, NULL, 10);
         } else if (strcmp(k, "battery.chem") == 0) {
             snprintf(s.model.chem, sizeof(s.model.chem), "%s", v);
         } else if (strcmp(k, "battery.cells") == 0) {
@@ -319,10 +319,10 @@ static void on_line(char *line)
              * takes over from there. */
             snprintf(s.model.mode, sizeof(s.model.mode), "%s", v);
         }
-        s.model.capacity_mah         = s.cap_learned_mah ? s.cap_learned_mah
-                                                          : s.cap_design_mah;
-        s.model.capacity_design_mah  = s.cap_design_mah;
-        s.model.capacity_learned_mah = s.cap_learned_mah;
+        s.model.capacity_design_uah  = s.cap_design_uah;
+        s.model.capacity_learned_uah = s.cap_learned_uah;
+        s.model.capacity_mah = (s.cap_learned_uah ? s.cap_learned_uah
+                                                  : s.cap_design_uah) / 1000;
     } else if (strncmp(line, "protocol ", 9) == 0) {
         s.model.protocol = atoi(line + 9);
     } else if (strncmp(line, "firmware ", 9) == 0) {
