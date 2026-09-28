@@ -68,6 +68,12 @@ typedef struct {
     uint32_t rate_diag_ms;
     uint32_t rate_env_ms;
 
+    /* --- the SoC history (history_values.h) ---------------------------------- */
+
+    /** Seconds between history points. The ring is a fixed 288 points, so this is
+     *  what sets the span: 300 s covers 24 h, 600 s covers 48 h. */
+    uint32_t hist_period_s;
+
     /* --- the panel (§9.11) --------------------------------------------------- */
 
     bool    lcd_on;

@@ -22,14 +22,18 @@ import androidx.compose.ui.unit.dp
 import ru.vitska.powermon.model.SocHistory
 
 /**
- * The monitor's own SoC history (`hist`): a point every 10 minutes for 48 hours. The
- * right edge is now and each point sits where its age puts it, so a span shows exactly
- * that many hours. A gap in the data -- a reboot, an unseeded gauge -- breaks the line
- * rather than being bridged by one, since nothing was measured there.
+ * The monitor's own SoC history (`hist`). The right edge is now and each point sits where
+ * its age puts it, so a span shows exactly that many hours. A gap in the data -- a
+ * reboot, an unseeded gauge -- breaks the line rather than being bridged by one, since
+ * nothing was measured there.
+ *
+ * The spans on offer come from the device: its interval is settable and its ring is a
+ * fixed number of points, so what it holds -- a half of that, and a quarter -- is the
+ * honest menu. A fixed 12/24/48 would offer hours the monitor never recorded.
  */
 @Composable
 fun HistoryChart(h: SocHistory?) {
-    var spanH by remember { mutableIntStateOf(48) }
+    var spanH by remember { mutableIntStateOf(0) }
 
     Section("SoC history") {
         when {
@@ -39,24 +43,30 @@ fun HistoryChart(h: SocHistory?) {
                 style = MaterialTheme.typography.bodySmall,
             )
             h.points.isEmpty() -> Text(
-                "No history yet: the monitor records a point every 10 minutes.",
+                "No history yet: the monitor records a point every " +
+                    (h.intervalS / 60).coerceAtLeast(1) + " minutes.",
                 style = MaterialTheme.typography.bodySmall,
             )
             else -> {
+                val full = h.coverH.coerceAtLeast(1)
+                val spans = listOf(full / 4, full / 2, full).filter { it > 0 }.distinct()
+                // Not stored back into spanH: the monitor's interval can change under us,
+                // and a remembered span it no longer covers would draw an empty left half.
+                val span = if (spanH in spans) spanH else spans.last()
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(12, 24, 48).forEach { s ->
+                    spans.forEach { s ->
                         FilterChip(
-                            selected = spanH == s,
+                            selected = span == s,
                             onClick = { spanH = s },
                             label = { Text("$s h") },
                         )
                     }
                 }
                 Spacer(Modifier.height(4.dp))
-                Chart(h, spanH)
+                Chart(h, span)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("-$spanH h", style = MaterialTheme.typography.labelSmall)
-                    Text("-${spanH / 2} h", style = MaterialTheme.typography.labelSmall)
+                    Text("-$span h", style = MaterialTheme.typography.labelSmall)
+                    Text("-${span / 2} h", style = MaterialTheme.typography.labelSmall)
                     Text("now", style = MaterialTheme.typography.labelSmall)
                 }
                 if (h.states.isNotEmpty()) {

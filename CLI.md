@@ -518,12 +518,21 @@ Refusals a client should expect and surface verbatim — each names a physical c
 
 | Command | Notes |
 |---|---|
-| `hist` | SoC every 10 minutes for the last 48 hours. Machine-readable, like `config` |
+| `hist` | The SoC series, oldest first. Machine-readable, like `config` |
 | `hist clear` | Forget it, in RAM and in flash |
+| `hist every <s>` | Seconds between points, 60..3600. Saved; **clears the history** |
+
+The ring is a fixed **288 points**, so the interval is the whole span/resolution trade:
+300 s (the default) covers 24 h, 600 s covers 48 h. Changing it clears what is stored,
+because a client places a point by counting intervals back from now and points taken at
+the old spacing would be drawn at times they were never taken.
+
+Take the span from the reply — `interval_s` × `capacity` — rather than assuming either:
+both are settings now, and `soc reset all` can empty the ring between two fetches.
 
 ```
 > hist
-interval_s=600
+interval_s=300
 capacity=288
 points=145
 age_s=212
@@ -550,6 +559,10 @@ exit 0
   history gets a `-` at boot.
 - **Size:** at most 288 points, about 1.8 KB over BLE. Polling it every couple of minutes
   is fine.
+- **Interval:** `hist every <s>` sets it, 60..3600, and it is saved. `config` reports it
+  as `hist.period_s` alongside `hist.points`. Firmware before 0.11.6 is fixed at 600 s
+  and ignores the argument -- it answers with the dump -- so test for the key in
+  `config`, not for a refusal.
 - **Firmware:** `hist` needs 0.9.0 or later. Older firmware answers `exit -2`.
 
 ### Battery chemistry
@@ -599,6 +612,7 @@ lead-acid while charging) needs the divider (`curve v divider`).
 | `soc set <permille>` | 0–1000 | Force SoC |
 | `soc full` | | Declare the pack full now |
 | `soc reset` | | Forget the count; re-seed from voltage |
+| `soc reset all` | | The same, and clear the SoC history (`hist`) with it |
 | `soc cap <uAh>` | | Design capacity |
 | `soc v0 <uV>` / `v100 <uV>` | v0 < v100 | Resting-OCV endpoints of the SoC map |
 | `soc vfull <uV>` | ≥ v100 | Absorption voltage for full detection |

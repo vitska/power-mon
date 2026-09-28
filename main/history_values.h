@@ -52,30 +52,59 @@ int32_t stats_mean_uv(const sample_stats_t *s);
  *  reason values() is one: it is where a lock goes when one is needed. */
 sample_stats_t *history_window(void);
 
-/* --- SoC history (48 h, a point every 10 minutes) ---------------------------------- */
+/* --- SoC history (288 points, a point every 5 minutes by default) ------------------ */
 
 /*
- * The one genuine time series the firmware keeps: state of charge every ten minutes
- * for the last 48 hours, for the phone app's and the remote display's graphs. Clients
- * used to record their own, which meant a graph that started empty every time a phone
- * connected and was lost whenever the remote rebooted; the monitor is the thing that is
- * always on, so it is the one that remembers.
+ * The one genuine time series the firmware keeps: state of charge at a fixed interval,
+ * for the phone app's and the remote display's graphs. Clients used to record their
+ * own, which meant a graph that started empty every time a phone connected and was lost
+ * whenever the remote rebooted; the monitor is the thing that is always on, so it is
+ * the one that remembers.
  *
  * 288 points of 2 bytes, persisted to NVS at every point, so an OTA update or a power
  * cycle does not wipe it. The monitor has no clock and cannot know how long it was
  * off, so a restored history gets a gap mark (SOC_HIST_NONE) at boot: a graph shows a
- * break there rather than drawing a line across time that was never measured. Flash
- * cost: one ~600-byte write every ten minutes -- years of NVS endurance (DESIGN.md 6.3).
+ * break there rather than drawing a line across time that was never measured.
+ *
+ * THE INTERVAL IS A SETTING (`hist every <s>`, cfg_t.hist_period_s), because the ring
+ * is a fixed 288 points and the interval is therefore the only thing that trades span
+ * against resolution: 5 minutes covers 24 h, 10 minutes covers 48 h, and a pack being
+ * watched through one charge cycle is better served by the first. The span is not a
+ * constant any more, so a client MUST take it from the `interval_s` and `capacity`
+ * the `hist` reply carries rather than assuming either.
+ *
+ * Every point costs one ~900-byte NVS write, so the floor is a minute: at 5 minutes
+ * that is 288 writes a day and years of endurance (DESIGN.md 6.3), and the floor is
+ * ten times that.
  */
-#define SOC_HIST_POINTS   288  /* 48 h */
-#define SOC_HIST_PERIOD_S 600  /* 10 min */
-#define SOC_HIST_NONE     0xFFFF
+#define SOC_HIST_POINTS           288
+#define SOC_HIST_PERIOD_DEFAULT_S 300   /* 5 min -> 24 h across the ring */
+#define SOC_HIST_PERIOD_MIN_S     60
+#define SOC_HIST_PERIOD_MAX_S     3600
+#define SOC_HIST_NONE             0xFFFF
 /* State letter for a point with none recorded: a gap, or a point stored by firmware
  * before the state was kept alongside SoC. */
 #define SOC_HIST_STATE_NONE '-'
 
 /** Restores the stored history and marks the boot gap. Call once, after NVS is up. */
 void soc_history_init(void);
+
+/** Seconds between points, as it is actually running. */
+uint32_t soc_history_period_s(void);
+
+/**
+ * Sets the interval between points, clamped to SOC_HIST_PERIOD_MIN_S..MAX_S, and
+ * restarts the schedule from now so the change takes effect at once.
+ *
+ * Points already recorded at a DIFFERENT spacing are dropped, because a client places
+ * a point by counting intervals back from now and nothing else: kept, they would be
+ * drawn at times they were never taken. The spacing the ring was filled at is stored
+ * with it, so this is exact rather than a guess -- a board whose stored interval is the
+ * one being set (the usual case, config_apply() at boot) keeps everything, and a board
+ * upgrading from the old fixed 600 s to the 300 s default drops a history it cannot
+ * honestly draw.
+ */
+void soc_history_set_period_s(uint32_t period_s);
 
 /** True when the next point is due. Cheap enough to call on every sample. */
 bool soc_history_due(int64_t now_us);

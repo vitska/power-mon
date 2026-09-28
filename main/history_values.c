@@ -106,9 +106,12 @@ static struct {
     char     st[SOC_HIST_POINTS]; /* the gauge's state letter at each point */
     uint16_t head;          /* next slot to write */
     uint16_t count;
+    uint32_t period_s;      /* seconds between points; a setting, not a constant */
+    uint32_t ring_period_s; /* what the points in ring[] were actually taken at */
     int64_t  next_due_us;   /* 0 until the first sample sets the schedule */
     int64_t  last_point_us;
-} s_hist;
+} s_hist = {.period_s      = SOC_HIST_PERIOD_DEFAULT_S,
+            .ring_period_s = SOC_HIST_PERIOD_DEFAULT_S};
 
 /* The sampler writes, the console reads: a spinlock around the copy, never around
  * the flash write. */
@@ -136,6 +139,9 @@ static void hist_save(void)
     nvs_set_blob(h, "st", st, sizeof(st));
     nvs_set_u16(h, "head", head);
     nvs_set_u16(h, "count", count);
+    /* The spacing these points were taken at, so a restore can tell whether the
+     * interval in force still describes them. Absent = the old fixed 600 s. */
+    nvs_set_u32(h, "per", s_hist.period_s);
     nvs_commit(h);
     nvs_close(h);
 }
@@ -168,6 +174,9 @@ void soc_history_init(void)
             if (nvs_get_blob(h, "st", s_hist.st, &slen) != ESP_OK || slen != sizeof(s_hist.st)) {
                 memset(s_hist.st, SOC_HIST_STATE_NONE, sizeof(s_hist.st));
             }
+            uint32_t per = 600; /* what firmware without this key always used */
+            nvs_get_u32(h, "per", &per);
+            s_hist.ring_period_s = per;
         }
         nvs_close(h);
     }
@@ -175,8 +184,50 @@ void soc_history_init(void)
         /* However long the power was off, it was not measured. */
         hist_append(SOC_HIST_NONE, SOC_HIST_STATE_NONE);
         s_hist.last_point_us = esp_timer_get_time();
-        ESP_LOGI("hist", "restored %u SoC points (48 h ring), gap marked", s_hist.count);
+        ESP_LOGI("hist", "restored %u SoC points taken %lu s apart, gap marked",
+                 s_hist.count, (unsigned long)s_hist.ring_period_s);
     }
+}
+
+uint32_t soc_history_period_s(void)
+{
+    return s_hist.period_s;
+}
+
+void soc_history_set_period_s(uint32_t period_s)
+{
+    if (period_s < SOC_HIST_PERIOD_MIN_S) {
+        period_s = SOC_HIST_PERIOD_MIN_S;
+    }
+    if (period_s > SOC_HIST_PERIOD_MAX_S) {
+        period_s = SOC_HIST_PERIOD_MAX_S;
+    }
+    if (period_s == s_hist.period_s) {
+        return;
+    }
+    const bool stale = (s_hist.count > 0 && s_hist.ring_period_s != period_s);
+    if (stale) {
+        ESP_LOGW("hist", "interval %lu -> %lu s: dropping %u points taken at the old one",
+                 (unsigned long)s_hist.ring_period_s, (unsigned long)period_s,
+                 (unsigned)s_hist.count);
+    }
+    s_hist.period_s = period_s;
+    /* Points taken at another spacing cannot be placed on a graph drawn at this one.
+     * clear() resets ring_period_s to the new value along with the ring. */
+    if (stale) {
+        soc_history_clear();
+    } else {
+        s_hist.ring_period_s = period_s;
+    }
+    /* The pending due time was computed from the old spacing. Rebuild it from now, so
+     * shortening the interval does not leave the next point an old interval away --
+     * the first thing anyone does after asking for points more often is look for one. */
+    if (s_hist.next_due_us != 0) {
+        s_hist.next_due_us = esp_timer_get_time() + (int64_t)period_s * 1000000;
+    }
+    ESP_LOGI("hist", "a point every %lu s (%lu h across %d points)",
+             (unsigned long)period_s,
+             (unsigned long)((uint32_t)period_s * SOC_HIST_POINTS / 3600), SOC_HIST_POINTS);
 }
 
 bool soc_history_due(int64_t now_us)
@@ -198,7 +249,7 @@ void soc_history_push(int64_t now_us, uint16_t soc_permille, char state)
     /* On schedule from the previous due time, not from now: a late sample must not
      * make every later point late too. */
     do {
-        s_hist.next_due_us += (int64_t)SOC_HIST_PERIOD_S * 1000000;
+        s_hist.next_due_us += (int64_t)s_hist.period_s * 1000000;
     } while (s_hist.next_due_us <= now_us);
     hist_save();
 }
@@ -224,6 +275,7 @@ void soc_history_clear(void)
     s_hist.head  = 0;
     s_hist.count = 0;
     taskEXIT_CRITICAL(&s_hist_mux);
+    s_hist.ring_period_s = s_hist.period_s; /* nothing left that was taken at another */
     nvs_handle_t h;
     if (nvs_open(HIST_NS, NVS_READWRITE, &h) == ESP_OK) {
         nvs_erase_all(h);

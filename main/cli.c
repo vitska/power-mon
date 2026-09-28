@@ -1757,6 +1757,7 @@ static int cmd_soc(int argc, char **argv)
         printf("  soc v0 <uV>            resting OCV at 0%%\n");
         printf("  soc v100 <uV>          resting OCV at 100%%\n");
         printf("  soc vfull <uV>         absorption voltage for full detection\n");
+        printf("  soc reset [all]        forget the count; 'all' wipes the history too\n");
         printf("  soc rint <uOhm>        internal resistance for I*R compensation\n");
         printf("  soc taper <uA>         charge current below which full can latch\n");
         printf("  soc rest <s>           idle time before OCV is trusted\n");
@@ -1775,8 +1776,21 @@ static int cmd_soc(int argc, char **argv)
     }
 
     if (strcmp(argv[1], "reset") == 0) {
+        /* `all` wipes the graphed history too. They are separate stores -- the gauge's
+         * accumulator and the 288-point ring -- but after a pack swap or a bench session
+         * both describe a battery that is no longer there, and resetting one while the
+         * graph still draws the other is how a stale curve gets believed. */
+        const bool all = (argc >= 3 && strcmp(argv[2], "all") == 0);
+        if (argc >= 3 && !all) {
+            printf("usage: soc reset [all]   -- 'all' also clears the SoC history\n");
+            return 1;
+        }
         ESP_ERROR_CHECK(fg_reset());
-        printf("count cleared. SoC will be re-seeded from the next voltage reading,\n");
+        if (all) {
+            soc_history_clear();
+        }
+        printf("count cleared%s. SoC will be re-seeded from the next voltage reading,\n",
+               all ? " and the SoC history wiped" : "");
         printf("and shown with a '?' until a rest period or a full charge anchors it.\n");
         return 0;
     }
@@ -1937,7 +1951,21 @@ static int cmd_raw(int argc, char **argv)
  * the same order, 24 to a line (fg_state_code(): U C A F D E S R; `-` for none). A
  * client concatenates them like the `soc=` lines; one that predates them skips the
  * unknown key.
+ *
+ * interval_s is a SETTING (`hist every <s>`) rather than the constant it once was, and
+ * capacity x interval_s is the whole span the ring can hold. A client takes both from
+ * here; one that hardcodes either draws the wrong hours against the wrong axis.
  */
+
+/* The interval in the terms anyone actually asks it in: how far back the graph reaches. */
+static void hist_span_line(void)
+{
+    const unsigned long p = (unsigned long)soc_history_period_s();
+    printf("a point every %lu s: %d points span %lu h %lu min\n", p,
+           SOC_HIST_POINTS, p * SOC_HIST_POINTS / 3600,
+           (p * SOC_HIST_POINTS % 3600) / 60);
+}
+
 static int cmd_hist(int argc, char **argv)
 {
     if (argc >= 2 && strcmp(argv[1], "clear") == 0) {
@@ -1945,11 +1973,45 @@ static int cmd_hist(int argc, char **argv)
         printf("SoC history cleared\n");
         return 0;
     }
+
+    if (argc >= 2 && strcmp(argv[1], "every") == 0) {
+        if (argc < 3) {
+            hist_span_line();
+            printf("usage: hist every <%d..%d seconds>\n", SOC_HIST_PERIOD_MIN_S,
+                   SOC_HIST_PERIOD_MAX_S);
+            return 1;
+        }
+        const long v = strtol(argv[2], NULL, 10);
+        if (v < SOC_HIST_PERIOD_MIN_S || v > SOC_HIST_PERIOD_MAX_S) {
+            printf("interval must be %d..%d s. The ring is a fixed %d points, so this\n",
+                   SOC_HIST_PERIOD_MIN_S, SOC_HIST_PERIOD_MAX_S, SOC_HIST_POINTS);
+            printf("is the whole span/resolution trade: 300 covers 24 h, 600 covers 48 h.\n");
+            return 1;
+        }
+        const uint32_t was = soc_history_period_s();
+        soc_history_set_period_s((uint32_t)v);
+        config()->hist_period_s = soc_history_period_s();
+        if (soc_history_period_s() != was) {
+            /* The stored points are spaced the old way, and a client places them by
+             * counting intervals back from now: kept, they would be drawn at times
+             * they were never taken. */
+            soc_history_clear();
+            printf("history emptied: anything it held was taken %lu s apart.\n",
+                   (unsigned long)was);
+        }
+        hist_span_line();
+        const esp_err_t err = config_commit();
+        if (err != ESP_OK) {
+            printf("WARNING: could not save (%s) -- RAM only, lost on reboot.\n",
+                   esp_err_to_name(err));
+        }
+        return 0;
+    }
     static uint16_t pts[SOC_HIST_POINTS];
     static char     st[SOC_HIST_POINTS];
     uint32_t        age = 0;
     const int       n   = soc_history_get(pts, st, &age);
-    printf("interval_s=%d\n", SOC_HIST_PERIOD_S);
+    printf("interval_s=%lu\n", (unsigned long)soc_history_period_s());
     printf("capacity=%d\n", SOC_HIST_POINTS);
     printf("points=%d\n", n);
     printf("age_s=%lu\n", (unsigned long)age);
@@ -2793,6 +2855,8 @@ static int cmd_config(int argc, char **argv)
         printf("soc.permille=%lu\n", (unsigned long)st.soc_permille);
         printf("soc.state=%s\n", fg_state_str(st.state));
         printf("soc.voltage_only=%d\n", st.voltage_only ? 1 : 0);
+        printf("hist.period_s=%lu\n", (unsigned long)soc_history_period_s());
+        printf("hist.points=%d\n", SOC_HIST_POINTS);
     }
 
 #if CONFIG_BATMON_DISPLAY_ENABLE
@@ -2993,6 +3057,9 @@ static int cmd_options(int argc, char **argv)
            (unsigned long)config()->rate_diag_ms, (unsigned long)config()->rate_env_ms);
     printf("samples       %lu taken, window n=%lu\n",
            (unsigned long)values()->n_samples, (unsigned long)history_window()->n);
+    printf("history       a point every %lu s, %d points = %lu h span   (hist every <s>)\n",
+           (unsigned long)soc_history_period_s(), SOC_HIST_POINTS,
+           (unsigned long)soc_history_period_s() * SOC_HIST_POINTS / 3600);
     printf("errors        bus %lu, not-ready %lu, range %lu, unresolved %lu\n",
            (unsigned long)values()->err_bus, (unsigned long)values()->err_not_finished,
            (unsigned long)values()->err_range_discard,
@@ -3160,9 +3227,9 @@ void cli_start(app_ctx_t *ctx)
 #if CONFIG_BATMON_BLE_ENABLE
     register_cmd("ble",     "BLE link, pairing and bonds",                  "[pair <open|bonded>|passkey <random|NNNNNN>|bonds|unpair|disconnect]", cmd_ble);
 #endif
-    register_cmd("hist",    "SoC every 10 min for 48 h, for graphs",       "[clear]",        cmd_hist);
+    register_cmd("hist",    "SoC over time for graphs: 288 points, settable interval", "[clear | every <s>]", cmd_hist);
     register_cmd("battery", "Battery chemistry and cells: the SoC curve and endpoints", "[list | <chemistry> [cells]]", cmd_battery);
-    register_cmd("soc",     "State of charge, endpoints and accumulators",   "[set|full|reset|cap|v0|v100|vfull|rint|taper|rest] [v]", cmd_soc);
+    register_cmd("soc",     "State of charge, endpoints and accumulators",   "[set|full|reset [all]|cap|v0|v100|vfull|rint|taper|rest] [v]", cmd_soc);
     register_cmd("options", "Everything that is set, in one place",         NULL,             cmd_options);
     register_cmd("config",  "Every setting as key=value, for programs",   NULL,             cmd_config);
     register_cmd("ota",     "Firmware update: status, receive, confirm, roll back", "[status|begin <bytes> <sha256>|end|abort|confirm|rollback]", cmd_ota);

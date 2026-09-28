@@ -86,8 +86,11 @@ void link_forget(void);
 /* --- SoC history, from the monitor ------------------------------------------------- */
 
 /*
- * The monitor keeps SoC every 10 minutes for 48 hours (`hist`, firmware 0.9.0 and
- * later); the remote fetches it on connect and every two minutes and draws it.
+ * The monitor keeps SoC at a fixed interval in a ring of `capacity` points (`hist`,
+ * firmware 0.9.0 and later); the remote fetches it on connect and every two minutes and
+ * draws it. The interval is a setting on the monitor -- 5 minutes covering 24 h by
+ * default, 10 covering 48 -- so the span comes from interval_s x capacity and is never
+ * assumed here.
  */
 #define LINK_HIST_MAX  288
 #define LINK_HIST_NONE 0xFFFF
@@ -96,6 +99,7 @@ typedef struct {
     bool     supported;   /* false: the monitor's firmware has no `hist` */
     int      count;       /* points in pts[], oldest first */
     uint32_t interval_s;
+    uint32_t capacity;    /* points the monitor's ring holds: span = interval_s x this */
     uint32_t age_s;       /* how long ago the newest point was taken, as of now */
     uint32_t seq;         /* bumps on every fetch that changed anything */
     uint16_t pts[LINK_HIST_MAX];

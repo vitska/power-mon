@@ -97,6 +97,25 @@ fun ConfigureScreen(vm: MonitorViewModel) {
     }
 
     /**
+     * A setter that changes the SHAPE of the history, or empties it: the graph on the
+     * Monitor tab is polled every two minutes, and two minutes of showing a curve the
+     * device has already thrown away is two minutes of believing it. Re-read it here
+     * instead, after the command has actually answered.
+     */
+    val histSet: (String) -> Unit = { cmd ->
+        vm.launchCommandWith(cmd) { r ->
+            last = if (r == null) {
+                "no reply -- timed out"
+            } else {
+                (if (r.ok) "" else "exit " + r.exit + "\n") + r.text.ifBlank { "(applied)" }
+            }
+            vm.launchRefreshConfig()
+            vm.launchRefreshHistory()
+        }
+        Unit
+    }
+
+    /**
      * Like [set], but only surfaces a failure -- not the command's own output on
      * success. For a stepper tapped repeatedly (the gain fine-tune below): the new
      * value already shows in the field it changed once `refreshConfig` returns, and
@@ -414,6 +433,57 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             Wrap {
                 OutlinedButton(onClick = { guarded("soc full") }) { Text("soc full") }
                 OutlinedButton(onClick = { guarded("soc reset") }) { Text("soc reset") }
+                OutlinedButton(onClick = { histSet("soc reset all") }) {
+                    Text("soc reset all")
+                }
+            }
+            Text(
+                "soc reset forgets the count and re-seeds from voltage. `all` clears the " +
+                    "recorded history with it -- what you want after a pack swap, when " +
+                    "both describe a battery that is no longer there.",
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+
+        Section("SoC history") {
+            // The ring is a fixed number of points, so the interval IS the span: there is
+            // nothing to choose between but how far back the graph reaches and how finely.
+            val points = cfg.int("hist.points")
+            val period = cfg.int("hist.period_s")
+            PlainField(
+                "A point every", "s", "300",
+                current = period?.toString(),
+            ) { histSet("hist every " + it) }
+            Spacer(Modifier.height(4.dp))
+            KVGrid(
+                "Span" to (if (period != null && points != null) {
+                    val h = period.toLong() * points / 3600
+                    val m = period.toLong() * points % 3600 / 60
+                    "$points points = $h h" + (if (m > 0) " $m min" else "")
+                } else "—"),
+                "Point every" to (period?.let {
+                    if (it % 60 == 0) "${it / 60} min" else "$it s"
+                } ?: "—"),
+            )
+            Text(
+                "60..3600 s. Changing it CLEARS the stored history: points taken at the " +
+                    "old spacing would be drawn at times they were never taken.",
+                style = MaterialTheme.typography.labelSmall,
+            )
+            Spacer(Modifier.height(8.dp))
+            Wrap {
+                AssistChip(onClick = { histSet("hist every 300") },
+                    label = { Text("5 min (24 h)") })
+                AssistChip(onClick = { histSet("hist every 600") },
+                    label = { Text("10 min (48 h)") })
+                OutlinedButton(onClick = { histSet("hist clear") }) { Text("hist clear") }
+            }
+            if (cfg.supported && period == null) {
+                Spacer(Modifier.height(6.dp))
+                Warn(
+                    "This firmware keeps the history at a fixed 10 minutes: `hist every` " +
+                        "needs 0.11.6 or later."
+                )
             }
         }
 

@@ -52,10 +52,12 @@ Verified against a 12 V / 44 A·h flooded lead-acid battery.
   centrals at once**, with LE Secure Connections passkey pairing.
 - **Live monitoring**: a repainting dashboard (`mon`), and grouped telemetry at three
   independent rates to both transports.
-- **SoC history on the monitor**: a point every 10 minutes for 48 hours, kept in flash
-  across reboots and updates (`hist`). The app and the remote display both graph it.
+- **SoC history on the monitor**: 288 points at a settable interval -- 5 minutes covering
+  24 h by default, `hist every 600` for 48 -- kept in flash across reboots and updates
+  (`hist`). The app and the remote display both graph it, and both take the span from
+  the device rather than assuming one.
 - **Android app** (`android/`), with four tabs:
-  - **Monitor:** live SoC, a 48 h SoC history chart, voltage, current, power, gauge state,
+  - **Monitor:** live SoC, the SoC history chart, voltage, current, power, gauge state,
     diagnostics and environment.
   - **Configure:** calibration, battery chemistry and every other setting.
   - **Console:** raw commands.
@@ -64,7 +66,8 @@ Verified against a 12 V / 44 A·h flooded lead-acid battery.
   Tapping a board connects to it straight away, and a dropped link reconnects on its own.
 - **Remote display** (`remote/`): an ESP32-2432S028 touch screen that connects over BLE.
   - It shows SoC, voltage, current, power, mode, time to empty/full, temperature,
-    humidity and pressure, and the monitor's SoC history over 12, 24 or 48 h.
+    humidity and pressure, and the monitor's SoC history -- tap the graph to step
+    between the full span the monitor holds, a half of it and a quarter.
   - A Bluetooth icon flashes on each packet, with the packet rate beside it.
   - Its Settings screen switches boards and runs the calibration points.
   - It pairs with the monitor on its own keypad.

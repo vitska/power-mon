@@ -73,6 +73,10 @@ data class Handshake(
 /**
  * The monitor's SoC history (`hist`, CLI.md §6): permille per point, null for a gap,
  * oldest first. The newest point was [ageS] old when fetched at [fetchedAtMs].
+ *
+ * [intervalS] and [capacity] are the monitor's, not ours: the interval is a setting on
+ * the device (`hist every <s>`) and the ring is a fixed number of points, so the span a
+ * chart can honestly draw is theirs to state and [coverS] to read.
  */
 data class SocHistory(
     val supported: Boolean,
@@ -81,17 +85,27 @@ data class SocHistory(
      *  than [points] -- or empty -- from firmware that does not send it. */
     val states: List<Char> = emptyList(),
     val intervalS: Int = 600,
+    /** Points the monitor's ring holds. 0 from firmware that does not say. */
+    val capacity: Int = 0,
     val ageS: Long = 0,
     val fetchedAtMs: Long = 0,
 ) {
     /** The newest point's age now, not at the fetch. */
     fun ageNowS(): Long = ageS + (System.currentTimeMillis() - fetchedAtMs) / 1000
 
+    /** How far back a full ring reaches, in seconds. Falls back to what it actually
+     *  sent, for firmware that reports no capacity. */
+    val coverS: Int get() = intervalS * (if (capacity > 0) capacity else points.size)
+
+    /** The same in whole hours, at least 1 once there is anything at all. */
+    val coverH: Int get() = if (coverS <= 0) 0 else maxOf(1, coverS / 3600)
+
     companion object {
         fun parse(lines: List<String>): SocHistory {
             val pts = mutableListOf<Int?>()
             val sts = mutableListOf<Char>()
             var interval = 600
+            var capacity = 0
             var age = 0L
             for (l in lines) {
                 val i = l.indexOf('=')
@@ -100,12 +114,14 @@ data class SocHistory(
                 val v = l.substring(i + 1)
                 when (k) {
                     "interval_s" -> interval = v.toIntOrNull() ?: 600
+                    "capacity" -> capacity = v.toIntOrNull() ?: 0
                     "age_s" -> age = v.toLongOrNull() ?: 0
                     "soc" -> v.split(',').forEach { t -> pts.add(t.trim().toIntOrNull()) }
                     "state" -> v.trim().forEach { sts.add(it) }
                 }
             }
-            return SocHistory(true, pts, sts, interval, age, System.currentTimeMillis())
+            return SocHistory(true, pts, sts, interval, capacity, age,
+                System.currentTimeMillis())
         }
     }
 }
@@ -442,6 +458,10 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
             rawBusy = false
         }
     }
+
+    /** Re-reads `hist` off the polling loop -- after a setting that reshapes it, or a
+     *  reset that empties it, neither of which should wait up to two minutes to show. */
+    fun launchRefreshHistory() = viewModelScope.launch { refreshHistory() }
 
     /** Re-reads `hist`, quietly: it is polled, and would flood the console transcript. */
     suspend fun refreshHistory() {

@@ -9,6 +9,7 @@
 
 #include "app_ctx.h"
 #include "esp_log.h"
+#include "history_values.h"
 #include "lcd.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
@@ -58,6 +59,7 @@ static const char *TAG = "config";
 #define K_RCALC  "rcalc"
 #define K_RDIAG  "rdiag"
 #define K_RENV   "renv"
+#define K_HPER   "hper"
 #define K_LCDON  "lcdon"
 #define K_LCDSCR "lcdscr"
 #define K_LCDCON "lcdcon"
@@ -104,6 +106,8 @@ void config_defaults(void)
         .rate_diag_ms   = CONFIG_BATMON_STREAM_DIAG_MS,
         .rate_env_ms    = CONFIG_BATMON_STREAM_ENV_MS,
 
+        .hist_period_s = SOC_HIST_PERIOD_DEFAULT_S,
+
         .lcd_on       = true,
         .lcd_screen   = 0,
         .lcd_contrast = 0x40,
@@ -127,6 +131,11 @@ esp_err_t config_apply(void)
         ESP_LOGW(TAG, "gauge config rejected: %s -- keeping the previous one",
                  esp_err_to_name(gerr));
     }
+
+    /* Pushed, not compared: the history module clamps it and does nothing when the
+     * value is the one it already runs on, which is the usual case at boot. */
+    soc_history_set_period_s(s_cfg.hist_period_s);
+    s_cfg.hist_period_s = soc_history_period_s(); /* keep cfg honest about the clamp */
 
 #if CONFIG_BATMON_DISPLAY_ENABLE
     if (lcd_present()) {
@@ -267,6 +276,7 @@ esp_err_t config_commit(void)
     if (err == ESP_OK) err = nvs_set_u32(h, K_RCALC,  s_cfg.rate_calc_ms);
     if (err == ESP_OK) err = nvs_set_u32(h, K_RDIAG,  s_cfg.rate_diag_ms);
     if (err == ESP_OK) err = nvs_set_u32(h, K_RENV,   s_cfg.rate_env_ms);
+    if (err == ESP_OK) err = nvs_set_u32(h, K_HPER,   s_cfg.hist_period_s);
 
     if (err == ESP_OK) err = nvs_set_u8 (h, K_LCDON,  s_cfg.lcd_on ? 1 : 0);
     if (err == ESP_OK) err = nvs_set_i8 (h, K_LCDSCR, s_cfg.lcd_screen);
@@ -326,6 +336,7 @@ static void read_all(nvs_handle_t h)
     if (nvs_get_u32(h, K_RCALC,  &u32) == ESP_OK) s_cfg.rate_calc_ms = u32;
     if (nvs_get_u32(h, K_RDIAG,  &u32) == ESP_OK) s_cfg.rate_diag_ms = u32;
     if (nvs_get_u32(h, K_RENV,   &u32) == ESP_OK) s_cfg.rate_env_ms = u32;
+    if (nvs_get_u32(h, K_HPER,   &u32) == ESP_OK) s_cfg.hist_period_s = u32;
 
     if (nvs_get_u8 (h, K_LCDON,  &u8)  == ESP_OK) s_cfg.lcd_on = (u8 != 0);
     if (nvs_get_i8 (h, K_LCDSCR, &i8)  == ESP_OK) s_cfg.lcd_screen = i8;

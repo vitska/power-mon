@@ -47,7 +47,11 @@ typedef enum { SCR_MAIN, SCR_SETTINGS, SCR_DEVICES, SCR_NUMPAD, SCR_CONFIRM, SCR
 
 static screen_t s_screen;
 static bool     s_full;              /* redraw everything on the next pass */
-static int      s_span_h = 48;       /* graph span: 12, 24 or 48 hours */
+/* Graph span in hours. Not a fixed menu any more: the monitor's interval is settable,
+ * so the widest useful span is whatever its ring covers, and the tap cycles that, a
+ * half of it and a quarter. 0 until a fetch says what the ring holds. */
+static int      s_span_h;
+static int      s_span_full_h;       /* what the monitor's ring covers, from the last fetch */
 
 /* --- small widgets --------------------------------------------------------------- */
 
@@ -196,11 +200,19 @@ static uint16_t dim565(uint16_t c)
                       ((c & 31) / 3));
 }
 
+/* What the monitor's ring covers, in hours, rounded down and at least one: the widest
+ * span worth offering. 0 until a fetch has said. */
+static int hist_cover_h(const link_hist_t *h)
+{
+    const uint32_t s = h->interval_s * h->capacity;
+    return s < 3600 ? (s ? 1 : 0) : (int)(s / 3600);
+}
+
 /*
- * The monitor's own history (`hist`): a point every 10 minutes for 48 hours, fetched
- * on connect and every two minutes. The graph's right edge is "now"; each point sits
- * where its age puts it, so a span shows exactly that many hours whatever the ring
- * holds, and minutes the monitor did not record stay empty.
+ * The monitor's own history (`hist`): a point every interval_s, fetched on connect and
+ * every two minutes. The graph's right edge is "now"; each point sits where its age
+ * puts it, so a span shows exactly that many hours whatever the ring holds, and minutes
+ * the monitor did not record stay empty.
  */
 static void draw_graph(void)
 {
@@ -209,7 +221,13 @@ static void draw_graph(void)
     static char        scol[GW];
     link_history(&h);
 
-    const int64_t span_s = (int64_t)s_span_h * 3600;
+    /* First sight of a history, or one whose interval changed under us: show all of it. */
+    const int cover = hist_cover_h(&h);
+    s_span_full_h   = cover;
+    if (cover > 0 && (s_span_h <= 0 || s_span_h > cover)) {
+        s_span_h = cover;
+    }
+    const int64_t span_s = (int64_t)(s_span_h > 0 ? s_span_h : 48) * 3600;
     for (int c = 0; c < GW; c++) { ycol[c] = -1; scol[c] = 0; }
     for (int i = 0; i < h.count; i++) {
         if (h.pts[i] == LINK_HIST_NONE) continue;
@@ -263,7 +281,7 @@ static void draw_graph(void)
         lcd_blit(GX, GY + y0, GW, h, buf);
     }
     const char *msg = !h.supported ? "monitor firmware too old for history (< 0.9.0)"
-                    : h.count == 0 ? "no history yet -- a point every 10 minutes"
+                    : h.count == 0 ? "no history yet -- the monitor records one now and then"
                                    : NULL;
     if (msg) {
         lcd_text(GX + (GW - lcd_text_w(msg, 1)) / 2, GY + GH / 2 - 4, msg, 1, C_GREY, bg);
@@ -431,7 +449,11 @@ static void main_draw(const link_model_t *m)
     /* Graph label, or why there is nothing to show; the environment on the right. */
     static field_t f_env;
     if (m->state == LINK_READY) {
-        snprintf(b, sizeof(b), "SOC %d h", s_span_h);
+        if (s_span_h > 0) {
+            snprintf(b, sizeof(b), "SOC %d h", s_span_h);
+        } else {
+            snprintf(b, sizeof(b), "SOC"); /* no history fetched yet: no span to name */
+        }
         field(&f_glabel, 4, 152, 96, 1, C_GREY, C_BLACK, b);
         char env[48] = "", part[16];
         if (m->have_env) {
@@ -1028,7 +1050,11 @@ void ui_run(void)
                 break;
             }
             if (tap && ty >= 150) {
-                s_span_h = s_span_h == 48 ? 12 : s_span_h == 12 ? 24 : 48;
+                /* full span -> a quarter -> a half -> full again */
+                const int full = s_span_full_h > 0 ? s_span_full_h : 48;
+                s_span_h = s_span_h == full        ? (full / 4 > 0 ? full / 4 : full)
+                           : s_span_h == full / 4  ? (full / 2 > 0 ? full / 2 : full)
+                                                   : full;
                 s_full = true; /* graph and its label */
             }
             if (s_full) main_enter();

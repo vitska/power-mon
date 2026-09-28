@@ -11,7 +11,8 @@ repository root: different chip, different BLE role, its own `version.txt`.
 **Dashboard.** State of charge (large, green/yellow/red by level, with a bar), voltage,
 current, power, the mode (CHARGING / DISCHARGING / IDLE / FULL / EMPTY) with the gauge's
 own state and the battery chemistry under it, and the time to empty or to full. Below, the
-monitor's SoC history over the last 12, 24 or 48 hours, with the board's temperature,
+monitor's SoC history, tap-cycled between full span, half and a quarter, with the
+board's temperature,
 humidity and pressure on the line above it. **Tap the graph** to change the span, and
 **tap the header** for Settings.
 
@@ -89,8 +90,10 @@ changes nothing on the board except the calibration you run from Settings.
 
 ## SoC history
 
-The graph is the monitor's own history (`hist`, CLI.md §6): a point every 10 minutes for
-48 hours, which the monitor keeps in flash.
+The graph is the monitor's own history (`hist`, CLI.md §6): 288 points at whatever
+interval the monitor is set to -- 5 minutes covering 24 h by default -- which it keeps in flash. The
+span comes from the reply (`interval_s` x `capacity`), so changing the interval on the
+monitor changes the axis here with no update to this firmware.
 - The remote fetches it on connect and every two minutes, so the graph is full as soon as
   it connects, whether the remote has just booted or not.
 - The right edge is now, and each point sits where its age puts it. Gaps, from reboots or

@@ -8,8 +8,9 @@ A phone client for the battery monitor, speaking the Nordic-UART console describ
 [`../CLI.md`](../CLI.md) — protocol **3**. Everything the console exposes is reachable
 from here, in four tabs:
 
-- **Monitor:** SoC labelled with the battery chemistry, the monitor's 48 h SoC history
-  (12/24/48 h chart; gaps stay gaps), volts, amps, watts, gauge state, diagnostics,
+- **Monitor:** SoC labelled with the battery chemistry, the monitor's SoC history
+  (full span / half / quarter chart; gaps stay gaps), volts, amps, watts, gauge state,
+  diagnostics,
   environment. The history is fetched on connect and every two minutes.
 - **Configure:** calibration first, then battery chemistry and cell count, the fuel gauge,
   shunt topology, telemetry rates, the display and BLE pairing.
@@ -75,7 +76,7 @@ square and round icons.
 | `ui/ConsoleScreen.kt` | Raw command entry and transcript. |
 | `ble/Firmware.kt` | Firmware versions, reading an image's identity out of the `.bin`, and the GitHub release lookup. |
 | `ui/FirmwareScreen.kt` | What the board runs, what is published, and the update itself. |
-| `ui/HistoryChart.kt` | The 48 h SoC history from `hist`, placed by age, with gaps as breaks. |
+| `ui/HistoryChart.kt` | The SoC history from `hist`, placed by age, with gaps as breaks. |
 
 ## Several boards
 

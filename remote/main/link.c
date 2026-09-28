@@ -100,7 +100,7 @@ static struct {
     int         hist_tmp_n;
     int         hist_tmp_st_n;
     bool        hist_tmp_seen;
-    uint32_t    hist_tmp_interval, hist_tmp_age;
+    uint32_t    hist_tmp_interval, hist_tmp_capacity, hist_tmp_age;
     link_hist_t hist;
     int64_t     hist_fetched_us;
 
@@ -298,6 +298,8 @@ static void on_line(char *line)
             }
         } else if (strcmp(k, "points") == 0) {
             s.hist_tmp_seen = true;
+        } else if (strcmp(k, "capacity") == 0) {
+            s.hist_tmp_capacity = strtoul(v, NULL, 10);
         } else if (strcmp(k, "interval_s") == 0) {
             s.hist_tmp_interval = strtoul(v, NULL, 10);
         } else if (strcmp(k, "age_s") == 0) {
@@ -365,6 +367,7 @@ static void fetch_history(void)
     s.hist_tmp_st_n     = 0;
     s.hist_tmp_seen     = false;
     s.hist_tmp_interval = 600;
+    s.hist_tmp_capacity = 0;
     s.hist_tmp_age      = 0;
     const bool got = run("hist", 4000);
     lock();
@@ -382,6 +385,10 @@ static void fetch_history(void)
             memcpy(s.hist.st, s.hist_tmp_st, s.hist_tmp_n);
             s.hist.count      = s.hist_tmp_n;
             s.hist.interval_s = s.hist_tmp_interval;
+            /* A monitor from before the interval was settable sends no `capacity`;
+             * what it sent is all it has. */
+            s.hist.capacity   = s.hist_tmp_capacity ? s.hist_tmp_capacity
+                                                    : (uint32_t)s.hist_tmp_n;
             s.hist.age_s      = s.hist_tmp_age;
             s.hist_fetched_us = esp_timer_get_time();
             if (changed) s.hist.seq++;

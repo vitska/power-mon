@@ -1233,9 +1233,14 @@ board.
 
 ### 6.2a SoC history
 
-A point every 10 minutes for 48 hours (288 × 2 bytes), in NVS namespace `hist`, rewritten
-at every point. That is one ~600-byte blob write every ten minutes, a small addition to
-the gauge commits below. It is here rather than in the clients because the monitor is
+288 points of two bytes plus a state letter each, in NVS namespace `hist`, rewritten
+at every point. The interval between points is a setting (`hist every <s>`, cfg key
+`hper`, 60..3600 s, default 300) because the ring is fixed at 288 points and the interval
+is therefore the only thing that trades span against resolution: 5 minutes covers 24 h,
+10 minutes covers 48 h, and a pack watched through a single charge cycle is better served
+by the first. That is one ~900-byte blob write per point -- 288 a day at the default, a
+small addition to the gauge commits below; the 60 s floor is ten times that and still
+within budget. It is here rather than in the clients because the monitor is
 the device that is always on. Clients graph the same history whenever they connect,
 instead of each recording its own from the moment it happened to be connected. There is
 no clock, so a restored history gets a gap mark at boot rather than a guessed duration
