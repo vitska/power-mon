@@ -57,6 +57,15 @@ static struct {
     int64_t  cum_in_uas;
     int64_t  cum_out_uas;
     uint32_t full_capacity_uah;
+    /*
+     * The DESIGN capacity that full_capacity_uah was measured against. Persisted,
+     * because the only useful comparison -- "has the design capacity been changed
+     * since the gauge learned?" -- has to survive a power cycle, and s_fg.cfg cannot
+     * answer it: at boot it holds the compiled-in default until config.c pushes the
+     * stored settings in. 0 means "never recorded", which is how a board upgrading
+     * from a firmware without this key keeps what it learned.
+     */
+    uint32_t design_ref_uah;
 
     fg_state_t state;
     uint32_t   ocv_uv;
@@ -431,6 +440,7 @@ static esp_err_t store(void)
     if (err == ESP_OK) err = nvs_set_i64 (h, "in",  s_fg.cum_in_uas);
     if (err == ESP_OK) err = nvs_set_i64 (h, "out", s_fg.cum_out_uas);
     if (err == ESP_OK) err = nvs_set_u32 (h, "cap", s_fg.full_capacity_uah);
+    if (err == ESP_OK) err = nvs_set_u32 (h, "dcap", s_fg.design_ref_uah);
     if (err == ESP_OK) err = nvs_set_u32 (h, "lrn", s_fg.learn_count);
     if (err == ESP_OK) err = nvs_set_u8  (h, "hr",  s_fg.have_ref ? 1 : 0);
     if (err == ESP_OK) err = nvs_set_u32 (h, "rsc", s_fg.ref_soc_permille);
@@ -481,6 +491,9 @@ esp_err_t fg_init(void)
     uint32_t u32;
     uint8_t  u8;
     if (nvs_get_u32(h, "cap", &u32) == ESP_OK && u32 > 0) s_fg.full_capacity_uah = u32;
+    /* Absent on a board written by firmware before 0.11.7: left 0, which fg_set_config
+     * reads as "no capacity change to react to" and so keeps the learned figure. */
+    if (nvs_get_u32(h, "dcap", &u32) == ESP_OK) s_fg.design_ref_uah = u32;
     if (nvs_get_i64(h, "q",   &i64) == ESP_OK) {
         s_fg.charge_uas   = i64;
         s_fg.voltage_only = false;
@@ -992,8 +1005,20 @@ esp_err_t fg_set_config(const fg_config_t *cfg)
         return ESP_ERR_INVALID_ARG;
     }
 
-    const uint32_t old_cap = s_fg.cfg.design_capacity_uah;
-    s_fg.cfg = *cfg;
+    /*
+     * Compared against the PERSISTED reference, not against s_fg.cfg.
+     *
+     * s_fg.cfg holds the compiled-in default (44 Ah) from fg_init() until config.c
+     * pushes the stored settings in a few steps later -- so comparing against it made
+     * every boot of a pack that is not 44 Ah look like a deliberate capacity change,
+     * and every boot threw away the learned capacity and the learn count. On a 45 Ah
+     * pack the gauge could never report anything but its nameplate: it re-learned
+     * through a discharge, saved the result, and lost it at the next power cycle. A
+     * gauge that cannot keep what it learned past a reboot has not learned anything.
+     */
+    const uint32_t old_cap = s_fg.design_ref_uah;
+    s_fg.cfg               = *cfg;
+    s_fg.design_ref_uah    = cfg->design_capacity_uah;
 
     /* A capacity change rescales the learned capacity with it, so SoC as a percentage
      * is preserved rather than jumping because the denominator moved. */
@@ -1063,6 +1088,7 @@ esp_err_t fg_reset(void)
     s_fg.state        = FG_UNKNOWN;
     s_fg.voltage_only = true;
     s_fg.full_capacity_uah = s_fg.cfg.design_capacity_uah;
+    s_fg.design_ref_uah    = s_fg.cfg.design_capacity_uah;
     s_fg.learn_count       = 0;
     /* A reset abandons the learning span too: it is no longer bracketed by a
      * trustworthy reference point. */

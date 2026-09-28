@@ -31,14 +31,16 @@ humidity and pressure on the line above it. **Tap the graph** to change the span
     current is then visibly implausible rather than rounded away.
 - **Capacity** reads `CAP 44.0AH (43.97)`: the capacity the pack is *set* to
   (`soc.cap_uah`, its nameplate) and, in brackets, what the monitor has *measured* it to
-  be (`soc.learned_uah`). The gap between them is the pack's state of health. They are
-  equal until the gauge completes its first deep-enough discharge, so reading them equal
-  is the answer to "has it learned yet". The measured value carries two decimals and
-  the set one carries a single decimal, matching the phone's Configure tab exactly:
-  the two part company by a fraction of an Ah at first, and a coarser display would
-  call them identical for the whole early life of a pack. Both are computed on the
-  monitor and only reported here -- two devices watching one pack must not quote two
-  capacities.
+  be (`soc.learned_uah`). The gap between them is the pack's state of health.
+  - Until the gauge has measured the pack even once (`soc.learn_count` is 0) it reads
+    `CAP 45.0AH (learning)`. Until then the "learned" figure is the nameplate copied,
+    and printing it as a measurement invites the one reading it cannot support -- that
+    the pack was checked and came out at exactly its rating.
+  - The measured value carries two decimals and the set one a single decimal, matching
+    the phone's Configure tab exactly: the two part company by a fraction of an Ah at
+    first, and a coarser display calls them identical for the whole early life of a pack.
+  - Both are computed on the monitor and only reported here -- two devices watching one
+    pack must not quote two capacities.
 - Values turn grey when no telemetry has arrived for 5 seconds.
 - **Communications, top right.** A Bluetooth icon, always blue, flashes white on every
   notification received and yellow on every command sent. At 10 Hz telemetry it flickers

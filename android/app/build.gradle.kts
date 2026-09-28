@@ -15,8 +15,8 @@ android {
         // is a tool for the person who owns the hardware, not a mass-market app.
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.9.5"
+        versionCode = 17
+        versionName = "0.9.6"
     }
 
     buildTypes {

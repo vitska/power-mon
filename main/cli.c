@@ -2841,6 +2841,10 @@ static int cmd_config(int argc, char **argv)
         printf("battery.cells=%u\n", (unsigned)c.cells);
         printf("soc.cap_uah=%lu\n", (unsigned long)c.design_capacity_uah);
         printf("soc.learned_uah=%lu\n", (unsigned long)st.full_capacity_uah);
+        /* 0 means the learned figure above is just the nameplate copied, not a
+         * measurement. Without this a client has to guess from the two being equal,
+         * which is also what a pack that measured exactly its nameplate looks like. */
+        printf("soc.learn_count=%lu\n", (unsigned long)st.learn_count);
         printf("soc.v0_uv=%lu\n", (unsigned long)c.v_0pct_uv);
         printf("soc.v100_uv=%lu\n", (unsigned long)c.v_100pct_uv);
         printf("soc.vfull_uv=%lu\n", (unsigned long)c.v_full_uv);

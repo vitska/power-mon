@@ -278,8 +278,13 @@ protocol bump, and only a change to an existing key's *meaning* is breaking.
 
 Some keys are state rather than settings, included because a client showing a setting
 usually wants them in the same breath: `soc.permille`, `soc.state`, `soc.voltage_only`,
-`soc.learned_uah`, `shunt.roles`, `sense.pga`, `cal.stored`, `ble.conns`, `ble.bonds`,
-`profile.pair_us`.
+`soc.learned_uah`, `soc.learn_count`, `shunt.roles`, `sense.pga`, `cal.stored`,
+`ble.conns`, `ble.bonds`, `profile.pair_us`.
+
+`soc.learn_count` is how many times the gauge has *measured* the pack's capacity.
+**While it is 0, `soc.learned_uah` is the nameplate copied, not a measurement** --
+show it as pending rather than as a result, because an equal pair otherwise reads as
+"checked, and it came out exactly at its rating". Absent before 0.11.7.
 
 **Re-read it after every setter rather than echoing back what you wrote.** The device
 clamps and rejects values, and another client may change one at any time — CLI.md's rule

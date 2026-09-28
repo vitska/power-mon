@@ -485,7 +485,14 @@ static void main_draw(const link_model_t *m)
      * happen.
      */
     char cap[32] = "";
-    if (m->capacity_design_uah && m->capacity_learned_uah) {
+    if (m->capacity_design_uah && m->learn_count == 0) {
+        /* The monitor has measured nothing yet, so its "learned" figure is the
+         * nameplate copied. Printing it as a measurement invites exactly the reading
+         * it cannot support -- that the pack has been checked and came out at its
+         * rating. */
+        snprintf(cap, sizeof(cap), "CAP %.1fAH (learning)",
+                 m->capacity_design_uah / 1000000.0);
+    } else if (m->capacity_design_uah && m->capacity_learned_uah) {
         snprintf(cap, sizeof(cap), "CAP %.1fAH (%.2f)", m->capacity_design_uah / 1000000.0,
                  m->capacity_learned_uah / 1000000.0);
     } else if (m->capacity_design_uah) {

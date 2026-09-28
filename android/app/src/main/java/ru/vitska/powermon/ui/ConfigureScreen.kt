@@ -421,7 +421,12 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             }
             Spacer(Modifier.height(4.dp))
             KVGrid(
-                "Learned capacity" to (cfg.micro("soc.learned_uah", 2)?.let { it + " Ah" } ?: "—"),
+                // learn_count 0: the device is reporting the nameplate back, not a
+                // measurement. Saying so beats letting an equal pair read as "checked,
+                // and it came out exactly at its rating". Absent on firmware < 0.11.7.
+                "Learned capacity" to (cfg.micro("soc.learned_uah", 2)?.let {
+                    it + " Ah" + (if (cfg.int("soc.learn_count") == 0) "  (not measured yet)" else "")
+                } ?: "—"),
                 "Integration deadband" to (cfg.micro("soc.deadband_ua", 3)?.let { it + " A" } ?: "—"),
                 "SoC source" to when (cfg.bool("soc.voltage_only")) {
                     true -> "VOLTAGE only"

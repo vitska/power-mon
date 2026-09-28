@@ -58,6 +58,10 @@ typedef struct {
      */
     uint32_t capacity_design_uah;  /* the nameplate, `soc.cap_uah` */
     uint32_t capacity_learned_uah; /* what the gauge has learned; 0 until it reports */
+    /* How many times the monitor has measured capacity. 0 = the learned figure is the
+     * nameplate copied, not a measurement, and must not be shown as one. -1 = the
+     * monitor's firmware predates the key (before 0.11.7) and cannot say. */
+    int      learn_count;
     char     chem[12];         /* battery.chem, "" on firmware before 0.8.0 */
     int      cells;
     int64_t  last_data_us;     /* esp_timer time of the last telemetry record */
