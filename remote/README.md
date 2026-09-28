@@ -29,23 +29,26 @@ humidity and pressure on the line above it. **Tap the graph** to change the span
   - Currents under 5 mA read as idle. The format is exact, `Dd HH:MM:SS` (e.g.
     `0d 03:14:07`), with no cap on days -- an implausible estimate from a near-zero
     current is then visibly implausible rather than rounded away.
-- **Capacity** is the monitor's *learned* capacity (`soc.learned_uah`), not the
-  nameplate: the figure its gauge arrived at between two reference points, and the one
-  the time estimates above are built on. The learning happens on the monitor and this
-  only reports it -- two devices watching one pack must not quote two capacities. It
-  falls back to the design capacity until the monitor has reported a learned one.
-- **The monitor's firmware version** sits in small letters beside the graph label
-  (`fw 0.11.6`). Which image is answering decides what half of this screen can show at
-  all -- time estimates need 0.11.3, the history 0.9.0. The remote's *own* version is on
-  its FIRMWARE UPDATE screen.
+- **Capacity** reads `CAP 44.0AH (41.2)`: the capacity the pack is *set* to
+  (`soc.cap_uah`, its nameplate) and, in brackets, what the monitor has *measured* it to
+  be (`soc.learned_uah`). The gap between them is the pack's state of health. They are
+  equal until the gauge completes its first deep-enough discharge, so reading them equal
+  is the answer to "has it learned yet". Both are computed on the monitor and only
+  reported here -- two devices watching one pack must not quote two capacities.
 - Values turn grey when no telemetry has arrived for 5 seconds.
 - **Communications, top right.** A Bluetooth icon, always blue, flashes white on every
   notification received and yellow on every command sent. At 10 Hz telemetry it flickers
   steadily, and when it stops, the data has stopped. The link's state itself is the
   status text's colour instead (blue while searching, yellow while connecting or in
-  setup, orange while pairing or with no data).
-  - Beside it is the packet rate, e.g. `LIVE 9/s` or `PAIRED 9/s`. A stalled stream shows
-    `0/s`, where a resting battery's unchanging numbers alone would not show it.
+  setup, orange while pairing or with no data, green or cyan when it is working).
+  - Beside it is the packet rate and **the monitor's firmware version**, e.g.
+    `9/s 0.11.6`. A stalled stream shows `0/s`, where a resting battery's unchanging
+    numbers alone would not show it. Which firmware is answering decides what half of
+    this screen can show at all -- time estimates need 0.11.3, the history 0.9.0 -- and
+    it is otherwise only findable from the phone app. The remote's *own* version is on
+    its FIRMWARE UPDATE screen.
+  - A working link carries no status *word*: the packets ticking up say it. Encrypted
+    versus merely connected is the colour -- **green** authenticated, **cyan** not.
   - A five-bar signal-strength antenna sits between the status text and the icon, from
     this connection's own RSSI (read locally every second, not a round trip to the
     board): 5 bars ≥ −60 dBm down to 1 bar at −100 dBm.

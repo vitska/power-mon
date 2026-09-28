@@ -4,15 +4,16 @@
  * Layout, landscape 320 x 240:
  *
  *   +--------------------------------------------------------+  0
- *   | batmon-DCFA                              LIVE  (o)     |  header: tap -> Settings
+ *   | batmon-DCFA                      9/s 0.11.6  ...ll (o) |  header: tap -> Settings
  *   +----------------------------+---------------------------+ 22
  *   | STATE OF CHARGE            |  12.432 V                 |
  *   |  72.4 %                    |  -0.0089 A                |
  *   |  [#########-------]        |  -0.110 W                 |
  *   | TIME TO EMPTY              |  DISCHARGE   (device state)|
- *   |  3d 04h                    |  FLOODED 6S  44.0AH       |
+ *   |  3d 04h                    |  FLOODED 6S               |
+ *   |                            |  CAP 44.0AH (41.2)        |
  *   +----------------------------+---------------------------+ 148
- *   | SOC 24 h  fw 0.11.6   24.1C 46.2% 1003.5hPa      100      |
+ *   | SOC 24 h              24.1C 46.2% 1003.5hPa      100      |
  *   |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~    50      |  tap: 1 h / 6 h / 24 h
  *   |                                                  0      |  graph: the monitor's own
  *                                                                history (`hist`)
@@ -305,7 +306,7 @@ static void main_enter(void)
 static void main_draw(const link_model_t *m)
 {
     static field_t f_name, f_status, f_soc, f_tlabel, f_time, f_v, f_a, f_w, f_mode, f_sub,
-        f_glabel, f_fw;
+        f_glabel, f_cap;
     static int     bar_last = -2;
     static uint16_t bar_col;
     static uint16_t icon_last = 1;
@@ -321,7 +322,7 @@ static void main_draw(const link_model_t *m)
     char b[32];
 
     /* Header. */
-    field(&f_name, 6, 3, 190, 2, C_WHITE, C_HEADER, m->name[0] ? m->name : "tap: pick a board");
+    field(&f_name, 6, 3, 186, 2, C_WHITE, C_HEADER, m->name[0] ? m->name : "tap: pick a board");
     const char *st;
     uint16_t    sc;
     switch (m->state) {
@@ -329,8 +330,21 @@ static void main_draw(const link_model_t *m)
     case LINK_CONNECTING: st = "CONNECTING"; sc = C_YELLOW; break;
     case LINK_SETUP:      st = "SETUP";      sc = C_YELLOW; break;
     case LINK_PAIRING:    st = "PAIRING";    sc = C_ORANGE; break;
-    default:              st = live ? (m->secure ? "PAIRED" : "LIVE") : "NO DATA";
-                          sc = live ? C_GREEN : C_ORANGE;   break;
+    default:              st = "NO DATA";    sc = C_ORANGE; break;
+    }
+    /*
+     * A working link says so by working: the packets tick up and the numbers move, so
+     * the word that used to sit here ("LIVE", "PAIRED") spent the header's only spare
+     * room restating that. What cannot be deduced by watching goes there instead -- the
+     * MONITOR's firmware version, which decides what half this screen can even show
+     * (time estimates need 0.11.3, the history 0.9.0) and is otherwise only findable
+     * from the phone app. Encrypted versus merely connected, the other thing "PAIRED"
+     * carried, is now the colour: green when the link is authenticated, cyan when it is
+     * not. Every state that is NOT a working link still says so in words, because there
+     * a word is the whole message.
+     */
+    if (live) {
+        sc = m->secure ? C_GREEN : C_CYAN;
     }
 
     /* Packets per second, so a stalled stream shows as a number, not just as values
@@ -341,9 +355,12 @@ static void main_draw(const link_model_t *m)
         rate_t    = now;
     }
     char status[24];
-    if (m->state == LINK_READY) snprintf(status, sizeof(status), "%s %d/s", st, rate);
+    if (live && m->firmware[0]) snprintf(status, sizeof(status), "%d/s %.8s", rate,
+                                         m->firmware);
+    else if (live)              snprintf(status, sizeof(status), "%d/s", rate);
+    else if (m->state == LINK_READY) snprintf(status, sizeof(status), "%s %d/s", st, rate);
     else                        snprintf(status, sizeof(status), "%s", st);
-    field(&f_status, 200, 8, 80, 1, sc, C_HEADER, status);
+    field(&f_status, 196, 8, 84, 1, sc, C_HEADER, status);
 
     /* The icon is always Bluetooth-blue -- state lives in the status text's colour
      * above, not in the icon -- and flashes white for every notification that
@@ -437,15 +454,6 @@ static void main_draw(const link_model_t *m)
     else if (strcmp(m->mode, "DISCHARGE") == 0)                              mc = C_ORANGE;
     field(&f_mode, 178, 104, 140, 2, mc, C_BLACK, mode);
 
-    /*
-     * Chemistry, cells and capacity. The capacity is the monitor's LEARNED one --
-     * `soc.learned_uah`, the figure its gauge arrived at between two reference points --
-     * because that is the number the runtime estimates are actually built on. The
-     * nameplate is what the pack was sold as; after a few cycles they differ, and
-     * quoting the nameplate while the time-to-empty above is computed from the learned
-     * one is how a display argues with itself. Nothing is computed here: the monitor
-     * does the learning and this shows what it reports.
-     */
     char sub[64] = "";
     if (m->chem[0]) {
         snprintf(sub, sizeof(sub), "%s %dS", m->chem, m->cells);
@@ -453,14 +461,29 @@ static void main_draw(const link_model_t *m)
             if (*p >= 'a' && *p <= 'z') *p -= 32;
         }
     }
-    const uint32_t cap = m->capacity_learned_mah ? m->capacity_learned_mah
-                                                 : m->capacity_design_mah;
-    if (cap) {
-        char part[16];
-        snprintf(part, sizeof(part), "%s%.1fAH", sub[0] ? "  " : "", cap / 1000.0f);
-        strncat(sub, part, sizeof(sub) - strlen(sub) - 1);
-    }
     field(&f_sub, 178, 126, 140, 1, C_GREY, C_BLACK, sub);
+
+    /*
+     * Capacity: what the pack was SET to -- its nameplate, `soc.cap_uah` -- and in
+     * brackets what the monitor has MEASURED it to be, `soc.learned_uah`. Both, because
+     * either alone is a half-answer: the nameplate is a claim about a new battery, the
+     * learned figure is this one after however many cycles, and the gap between them is
+     * the pack's state of health, readable at a glance only when they sit side by side.
+     * They are equal until the gauge completes its first deep-enough span, and reading
+     * them equal is itself the answer to "has it learned yet".
+     *
+     * Neither is computed here. The monitor's gauge does the learning between two
+     * reference points (fuelgauge.c learn_capacity()) and reports both through `config`;
+     * two devices watching one pack must never arrive at two capacities.
+     */
+    char cap[32] = "";
+    if (m->capacity_design_mah && m->capacity_learned_mah) {
+        snprintf(cap, sizeof(cap), "CAP %.1fAH (%.1f)", m->capacity_design_mah / 1000.0f,
+                 m->capacity_learned_mah / 1000.0f);
+    } else if (m->capacity_design_mah) {
+        snprintf(cap, sizeof(cap), "CAP %.1fAH", m->capacity_design_mah / 1000.0f);
+    }
+    field(&f_cap, 178, 136, 140, 1, C_GREY, C_BLACK, cap);
 
     /* Graph label, or why there is nothing to show; the environment on the right. */
     static field_t f_env;
@@ -471,16 +494,6 @@ static void main_draw(const link_model_t *m)
             snprintf(b, sizeof(b), "SOC"); /* no history fetched yet: no span to name */
         }
         field(&f_glabel, 4, 152, 96, 1, C_GREY, C_BLACK, b);
-        /* The MONITOR's firmware version, small, between the graph label and the
-         * environment: which image is answering decides what half these readings even
-         * mean (estimates need 0.11.3, history 0.9.0), and hunting for it in the phone
-         * app while standing in front of the display is the wrong way to find out. The
-         * remote's own version is on its FIRMWARE UPDATE screen. */
-        char fw[16] = "";
-        if (m->firmware[0]) {
-            snprintf(fw, sizeof(fw), "fw %.8s", m->firmware);
-        }
-        field(&f_fw, 104, 152, 48, 1, C_GREY, C_BLACK, fw);
         char env[48] = "", part[16];
         if (m->have_env) {
             if (!isnan(m->temp_c)) {
@@ -503,7 +516,6 @@ static void main_draw(const link_model_t *m)
     } else {
         field(&f_glabel, 4, 152, 312, 1, C_YELLOW, C_BLACK, m->note);
         f_env.text[0] = '\x01'; /* force a redraw once the label shrinks back */
-        f_fw.text[0]  = '\x01'; /* the note has drawn over it */
     }
 }
 
