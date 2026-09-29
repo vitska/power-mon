@@ -9,6 +9,18 @@
  * and the two controllers agree on every command used here -- window, memory write,
  * pixel format, access order, inversion. What differs between the two board variants
  * is only the MADCTL value and inversion, which is what the Kconfig choice sets.
+ *
+ * PIXELS GO OUT DOUBLE-BUFFERED. A transfer is queued and NOT waited for; the caller
+ * fills the other buffer while the DMA drains this one, and the wait happens only when
+ * that second buffer is itself ready to go. One transfer is outstanding at a time,
+ * which is all the pipelining this needs: filling a chunk costs a few percent of
+ * sending it, and one buffer ahead hides all of it.
+ *
+ * Leaving a transfer in flight when a drawing call returns is safe. esp_lcd's
+ * tx_param() drains every queued colour transfer before it issues a command, so the
+ * next window is never set over pixels still on the wire, and the completion callback
+ * runs from the SPI ISR at transfer end rather than when anyone reaps it -- so the
+ * semaphore is posted exactly once per transfer whoever does the draining.
  */
 
 #include "lcd.h"
@@ -56,7 +68,9 @@ static const char *TAG = "lcd";
 
 static esp_lcd_panel_io_handle_t s_io;
 static SemaphoreHandle_t         s_done;
-static uint16_t                 *s_tx;    /* DMA buffer, byte-swapped pixels */
+static uint16_t                 *s_tx[2]; /* DMA buffers, byte-swapped pixels */
+static int                       s_buf;   /* the one free to fill; the other may be in flight */
+static bool                      s_busy;  /* a transfer is outstanding */
 static uint16_t                 *s_strip; /* caller-side strip buffer */
 
 /* The panel reads RGB565 most significant byte first; the ESP32 stores it the other
@@ -88,12 +102,24 @@ static void set_window(int x, int y, int w, int h)
     cmd(0x2B, ra, 4); /* RASET */
 }
 
-/* Sends n pixels already in s_tx. The first chunk of a window carries RAMWR; the rest
- * continue it (-1: no command phase). Waits, because s_tx is about to be reused. */
+/*
+ * Sends n pixels already in the free buffer. The first chunk of a window carries RAMWR;
+ * the rest continue it (-1: no command phase).
+ *
+ * The wait is for the PREVIOUS transfer, not this one: by the time we are called the
+ * caller has finished filling this buffer, so the only thing that has to be true is
+ * that the buffer we are about to hand to the DMA is not the one already on the wire.
+ * Then the buffers swap, and the caller fills the other one while this transfer runs.
+ */
 static void send_px(size_t n, bool first)
 {
-    esp_lcd_panel_io_tx_color(s_io, first ? 0x2C : -1, s_tx, n * 2);
-    xSemaphoreTake(s_done, portMAX_DELAY);
+    if (s_busy) {
+        xSemaphoreTake(s_done, portMAX_DELAY);
+        s_busy = false;
+    }
+    esp_lcd_panel_io_tx_color(s_io, first ? 0x2C : -1, s_tx[s_buf], n * 2);
+    s_busy = true;
+    s_buf ^= 1;
 }
 
 void lcd_init(void)
@@ -121,9 +147,10 @@ void lcd_init(void)
     };
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)SPI2_HOST, &io, &s_io));
 
-    s_tx    = heap_caps_malloc(LCD_STRIP_PX * 2, MALLOC_CAP_DMA);
+    s_tx[0] = heap_caps_malloc(LCD_STRIP_PX * 2, MALLOC_CAP_DMA);
+    s_tx[1] = heap_caps_malloc(LCD_STRIP_PX * 2, MALLOC_CAP_DMA);
     s_strip = heap_caps_malloc(LCD_STRIP_PX * 2, MALLOC_CAP_8BIT);
-    assert(s_tx && s_strip);
+    assert(s_tx[0] && s_tx[1] && s_strip);
 
     cmd(0x01, NULL, 0); /* SWRESET */
     vTaskDelay(pdMS_TO_TICKS(150));
@@ -161,13 +188,16 @@ void lcd_fill(int x, int y, int w, int h, uint16_t color)
     const uint16_t c = swap16(color);
     size_t total = (size_t)w * h;
     const size_t chunk = total < LCD_STRIP_PX ? total : LCD_STRIP_PX;
-    for (size_t i = 0; i < chunk; i++) {
-        s_tx[i] = c;
-    }
     set_window(x, y, w, h);
     bool first = true;
     while (total > 0) {
         const size_t n = total < chunk ? total : chunk;
+        /* Refilled per chunk rather than once: the buffers alternate now, and writing
+         * the same colour twice costs a fraction of the transfer it overlaps. */
+        uint16_t *buf = s_tx[s_buf];
+        for (size_t i = 0; i < n; i++) {
+            buf[i] = c;
+        }
         send_px(n, first);
         first = false;
         total -= n;
@@ -184,8 +214,9 @@ void lcd_blit(int x, int y, int w, int h, const uint16_t *px)
     bool first = true;
     while (total > 0) {
         const size_t n = total < LCD_STRIP_PX ? total : LCD_STRIP_PX;
+        uint16_t *buf = s_tx[s_buf];
         for (size_t i = 0; i < n; i++) {
-            s_tx[i] = swap16(px[i]);
+            buf[i] = swap16(px[i]);
         }
         send_px(n, first);
         first = false;
