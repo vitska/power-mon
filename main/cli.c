@@ -2850,6 +2850,15 @@ static int cmd_config(int argc, char **argv)
          * measurement. Without this a client has to guess from the two being equal,
          * which is also what a pack that measured exactly its nameplate looks like. */
         printf("soc.learn_count=%lu\n", (unsigned long)st.learn_count);
+        printf("soc.last_learn_uah=%lu\n", (unsigned long)st.last_learn_uah);
+        /* The OPEN span, so a client can say when the next measurement will happen
+         * rather than only that none has. have_ref 0 means no span is open at all:
+         * the next full, empty or settled rest starts one. */
+        printf("soc.have_ref=%d\n", st.have_ref ? 1 : 0);
+        printf("soc.ref_permille=%lu\n", (unsigned long)st.ref_soc_permille);
+        /* Charge drawn since the reference, in uAh: positive means out of the pack,
+         * which is the direction that can be learned from. */
+        printf("soc.span_uah=%lld\n", (long long)(-st.q_since_ref_uas / 3600));
         printf("soc.v0_uv=%lu\n", (unsigned long)c.v_0pct_uv);
         printf("soc.v100_uv=%lu\n", (unsigned long)c.v_100pct_uv);
         printf("soc.vfull_uv=%lu\n", (unsigned long)c.v_full_uv);

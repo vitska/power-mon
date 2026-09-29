@@ -278,8 +278,15 @@ protocol bump, and only a change to an existing key's *meaning* is breaking.
 
 Some keys are state rather than settings, included because a client showing a setting
 usually wants them in the same breath: `soc.permille`, `soc.state`, `soc.voltage_only`,
-`soc.learned_uah`, `soc.learn_count`, `shunt.roles`, `sense.pga`, `cal.stored`,
-`ble.conns`, `ble.bonds`, `profile.pair_us`.
+`soc.learned_uah`, `soc.learn_count`, `soc.last_learn_uah`, `soc.have_ref`,
+`soc.ref_permille`, `soc.span_uah`, `soc.rest_ua`, `shunt.roles`, `sense.pga`,
+`cal.stored`, `ble.conns`, `ble.bonds`, `profile.pair_us`.
+
+The three span keys are the open capacity measurement, enough to tell someone what has
+to happen next (CAPACITY.md): `soc.have_ref` 0 means no span is open and the next full,
+empty or settled rest starts one; otherwise the span began at `soc.ref_permille` and has
+drawn `soc.span_uah` since, and capacity is measured at the next reference point at or
+below `soc.ref_permille` − `soc.depth_permille`.
 
 `soc.learn_count` is how many times the gauge has *measured* the pack's capacity.
 **While it is 0, `soc.learned_uah` is the nameplate copied, not a measurement** --

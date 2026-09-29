@@ -482,6 +482,8 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                 },
             )
             Spacer(Modifier.height(8.dp))
+            LearningState(cfg)
+            Spacer(Modifier.height(8.dp))
             Wrap {
                 OutlinedButton(onClick = { guarded("soc full") }) { Text("soc full") }
                 OutlinedButton(onClick = { guarded("soc reset") }) { Text("soc reset") }
@@ -990,3 +992,71 @@ private fun summary(p: CfgPage, cfg: ConfigState): String? = when (p) {
     }
     CfgPage.STATE -> null
 }
+
+/**
+ * What has to happen before capacity is measured again.
+ *
+ * "45.00 Ah (not measured yet)" says the gauge has never measured the pack and stops
+ * there, which invites the reasonable question this answers: measured WHEN, and on what
+ * condition? The device knows -- it tracks the open span -- and CAPACITY.md explains the
+ * mechanism, but neither is any use to someone holding the phone in front of the
+ * battery. The conditions are short enough to just state.
+ *
+ * Everything here is the device's own arithmetic re-stated, never re-derived: the
+ * reference SoC, the charge drawn since it, and the depth setting all come from
+ * `config`. The one subtraction done here (reference minus depth) is the number the
+ * firmware compares against, and is the whole answer to "how far down".
+ */
+@Composable
+private fun LearningState(cfg: ConfigState) {
+    val depth = cfg.int("soc.depth_permille") ?: return
+    val learns = cfg.int("soc.learn_count")
+    val haveRef = cfg.bool("soc.have_ref")
+    if (learns == null || haveRef == null) {
+        // Firmware before 0.11.10 does not report the span.
+        return
+    }
+
+    Text("CAPACITY LEARNING", style = MaterialTheme.typography.labelSmall)
+    val head = when {
+        learns == 0 -> "Never measured. The figure above is the nameplate copied."
+        learns == 1 -> "Measured once" + (cfg.micro("soc.last_learn_uah", 2)
+            ?.let { "; last raw result $it Ah" } ?: "")
+        else -> "Measured $learns times" + (cfg.micro("soc.last_learn_uah", 2)
+            ?.let { "; last raw result $it Ah" } ?: "")
+    }
+    Text(head, style = MaterialTheme.typography.bodySmall)
+
+    if (!haveRef) {
+        Text(
+            "No span open. One starts at the next full charge, empty, or rest long " +
+                "enough to settle — then a discharge of " + pct(depth) +
+                " without recharging measures the pack.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        return
+    }
+
+    val ref = cfg.int("soc.ref_permille") ?: return
+    val drawn = cfg.long("soc.span_uah")?.let { it / 1_000_000.0 } ?: 0.0
+    val target = ref - depth
+    Text(
+        "Span open from " + pct(ref) + ", " + String.format("%.2f", drawn) + " Ah drawn.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Text(
+        if (target < 0) {
+            "It cannot complete: " + pct(depth) + " below " + pct(ref) + " is past empty. " +
+                "Charge further before the span opens, or lower the learning depth."
+        } else {
+            "Measures at the next full, empty or settled rest at or below " + pct(target) +
+                " — with no charging in between, and no rest along the way, which " +
+                "would end this span and start a new one."
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+private fun pct(permille: Int): String =
+    if (permille % 10 == 0) "${permille / 10} %" else String.format("%.1f %%", permille / 10.0)
