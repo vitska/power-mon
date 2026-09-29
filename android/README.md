@@ -12,14 +12,17 @@ from here, in four tabs:
   fraction of the capacity the percentage is taken against (`34.33 of 45.00 Ah` --
   alone, that first figure reads as the pack's capacity, which is the one thing it is
   not), the monitor's SoC history
-  (full span / half / quarter chart; gaps stay gaps), volts, amps, watts, gauge state,
-  diagnostics,
-  environment. The history is fetched on connect and every two minutes.
+  (full span / half / quarter chart, ruled at every 25 % and on whole hours taken from
+  the recording interval; gaps stay gaps), volts, amps, watts, gauge state,
+  diagnostics, environment. The history is fetched on connect and every two minutes.
 - **Configure:** a menu of nine pages, one screen each -- calibration, shunt and
   topology, battery, fuel gauge, SoC history, telemetry, display, BLE, read state.
   Every row carries a line of what the device currently holds for that page, so
   "is this board set up" is answered without opening any of them. One long scroll
   meant passing the calibration buttons twice on the way to the passkey.
+  The Fuel gauge page states what has to happen before capacity is measured again --
+  where the open span started, how much has come out of it, and the SoC the next
+  reference has to be at or below ([CAPACITY.md](../CAPACITY.md)).
 - **Console:** a raw command line for whatever is left.
 - **Firmware:** the board's version and slot, the newest GitHub release, and the update
   over BLE, with rollback if the new firmware does not come back.

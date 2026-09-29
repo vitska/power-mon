@@ -1002,9 +1002,9 @@ current**, terminal voltage approximates OCV. The rest current is a settable fra
 of the design capacity (`soc irest`, 15 per mille = 1.5 % of C by default, 0.66 A on
 44 A·h), deliberately *not* the integration deadband: a monitor powered from its own
 pack draws a steady few to few tens of milliamps forever, and with the deadband as the
-threshold such a pack never rested, so a wrong count was never corrected. At C/400 the
-compensated I·R term is under a millivolt and polarisation a few, a fraction of a percent
-of SoC. Look up `soc_ocv` and blend:
+threshold such a pack never rested, so a wrong count was never corrected. At that current
+the compensated I·R term is a millivolt or two and polarisation a few, a fraction of a
+percent of SoC. Look up `soc_ocv` and blend:
 
 ```
 charge += ocv_blend_gain × (charge_from_ocv − charge)

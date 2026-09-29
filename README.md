@@ -38,11 +38,15 @@ Verified against a 12 V / 44 A·h flooded lead-acid battery.
 - **Calibration**: guided two-point flow (`cal zero` / `cal top`), all of it written
   to flash and restored at boot.
 - **Fuel gauge**: coulomb counting with I·R-compensated OCV re-anchoring, Peukert
-  compensation, capacity learning, full/empty/rest anchors.
-  - It counts as resting (SETTLING) below C/110 (0.4 A on 44 Ah, 10 s average), not below the 3 mA
+  compensation, capacity learning, full/empty/rest anchors. How the pack's real
+  capacity gets measured, and what has to happen for it to: [CAPACITY.md](CAPACITY.md).
+  - It counts as resting (SETTLING) below a settable fraction of capacity (`soc irest`,
+    1.5 % of C by default: 0.68 A on 45 Ah, over a 10 s average), not below the 3 mA
     deadband. A pack that powers its own monitor never stops drawing a few mA, and still
     has to re-sync.
   - The empty anchor must hold for 10 s.
+  - The open capacity measurement, the learned capacity and the counters survive a
+    reboot, an OTA and a rollback: every deliberate restart writes them out first.
 - **Battery chemistries**: lead-acid (flooded, AGM, gel), LiFePO₄, Li-ion, LiPo, LTO
   and NiMH, any cell count. `battery lifepo4 4` loads the voltage curve, endpoints and
   charge behaviour for that pack (CLI.md §6).
@@ -68,10 +72,14 @@ Verified against a 12 V / 44 A·h flooded lead-acid battery.
 
   Tapping a board connects to it straight away, and a dropped link reconnects on its own.
 - **Remote display** (`remote/`): an ESP32-2432S028 touch screen that connects over BLE.
-  - It shows SoC, voltage, current, power, mode, time to empty/full, temperature,
-    humidity and pressure, and the monitor's SoC history -- tap the graph to step
-    between the full span the monitor holds, a half of it and a quarter.
-  - A Bluetooth icon flashes on each packet, with the packet rate beside it.
+  - It shows SoC as a ten-brick gauge and large digits, voltage, current, power, mode,
+    time to empty/full, the pack's set and measured capacity, temperature, humidity
+    and pressure, and the monitor's SoC history -- tap the graph to step between the
+    full span the monitor holds, a half of it and a quarter.
+  - Both clients rule the graph at every 25 % and on whole hours, with the hour step
+    taken from the recording interval rather than assumed.
+  - The header carries this display's own firmware version, the monitor's under it,
+    and the packet rate; a Bluetooth icon flashes on each packet.
   - Its Settings screen switches boards and runs the calibration points.
   - It pairs with the monitor on its own keypad.
   - It updates its own firmware over BLE from the phone app, with the same rollback as
