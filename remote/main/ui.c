@@ -320,22 +320,31 @@ static void draw_graph(void)
             const bool gridln = (y == GH / 4 || y == GH / 2 || y == 3 * GH / 4);
             for (int c = 0; c < GW; c++) {
                 uint16_t px = bg_px;
+                bool      on_curve = false;
                 const int yc = ycol[c];
                 if (yc >= 0) {
-                    if (y == yc || y == yc + 1) px = lcol[c];
-                    else if (y > yc)            px = fcol[c];
+                    if (y == yc || y == yc + 1) {
+                        px       = lcol[c];
+                        on_curve = true;
+                    } else if (y > yc) {
+                        px = fcol[c];
+                    }
                 }
                 /*
-                 * The grid goes on LAST, over the fill and the curve alike. It is the
-                 * scale the curve is read against, and a scale that disappears under
-                 * the thing it measures is no scale at all -- which is precisely where
-                 * it was, since the fill covers everything below the line and that is
-                 * most of the panel on a charged pack.
+                 * The grid goes on LAST, over the fill: a scale that disappears under
+                 * the thing it measures is no scale at all, and the fill covers
+                 * everything below the line, which is most of the panel on a charged
+                 * pack.
+                 *
+                 * The curve's own two pixels are the exception. It is the datum, drawn
+                 * a couple of pixels thick to be followable at all, and stippling it
+                 * every other column reads as a broken line rather than as a grid
+                 * passing behind. So the grid stops at the curve and carries on below.
                  *
                  * Every other pixel, not every fourth: at 1-in-4 across 284 pixels the
                  * eye reads dust rather than a line.
                  */
-                if ((gridln && (c & 1) == 0) || (vgrid[c] && (y & 1) == 0)) {
+                if (!on_curve && ((gridln && (c & 1) == 0) || (vgrid[c] && (y & 1) == 0))) {
                     px = grid_px;
                 }
                 buf[r * GW + c] = px;
