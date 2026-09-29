@@ -317,16 +317,20 @@ static void read_all(nvs_handle_t h)
     if (nvs_get_u8 (h, K_PROF,   &u8)  == ESP_OK) s_cfg.profile = (ina219_profile_t)u8;
     if (nvs_get_u8 (h, K_CADC,   &u8)  == ESP_OK) s_cfg.cont_adc = (ina219_adc_t)u8;
 
-    /* The gauge blob is fg_config_t as it was when saved. Fields are only ever
-     * appended to it, so a shorter blob is an older layout: take what it has, and let
-     * the defaults stand for the rest. Before 0.8.0 that meant everything up to
-     * `chemistry`; those boards were all flooded lead-acid, 6 cells, which is exactly
-     * the default. Rejecting it instead would silently reset every gauge setting on
-     * the update that introduced chemistries. */
+    /*
+     * The gauge blob is fg_config_t as it was when saved. Fields are only ever
+     * appended to it, so ANY shorter blob is an older layout: take what it has, and
+     * let the defaults stand for the rest -- `g` starts as the defaults, and the read
+     * overwrites only the bytes that were stored.
+     *
+     * This used to name the two lengths it would accept, which meant every appended
+     * field silently reset every gauge setting on the board it was added to, until
+     * someone remembered to add the old size to the list. The rule the struct actually
+     * guarantees is "shorter is older", so that is what is checked.
+     */
     len = sizeof(s_cfg.gauge);
     fg_config_t g = s_cfg.gauge;
-    if (nvs_get_blob(h, K_GAUGE, &g, &len) == ESP_OK &&
-        (len == sizeof(g) || len == offsetof(fg_config_t, chemistry))) {
+    if (nvs_get_blob(h, K_GAUGE, &g, &len) == ESP_OK && len <= sizeof(g)) {
         s_cfg.gauge = g;
     }
 

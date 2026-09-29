@@ -1735,8 +1735,10 @@ static void soc_show(void)
            FMT_A(b2, c.i_taper_ua));
     printf("R internal   %lu uOhm   deadband %s A\n",
            (unsigned long)c.r_int_uohm, FMT_A(b2, c.i_deadband_ua));
-    printf("rest         %lu s below %s A, then SoC re-syncs to resting voltage\n",
-           (unsigned long)c.t_rest_s, FMT_A(b3, st.rest_current_ua));
+    printf("rest         %lu s below %s A (%u permille of capacity), then SoC\n",
+           (unsigned long)c.t_rest_s, FMT_A(b3, st.rest_current_ua),
+           (unsigned)c.i_rest_permille);
+    printf("             re-syncs to resting voltage\n");
     printf("rated rate   %s A -- the current the nameplate capacity assumes\n",
            FMT_A(b1, c.i_rated_ua));
     printf("learning     needs %lu.%lu %% SoC change between references, blend %lu %%\n",
@@ -1761,6 +1763,7 @@ static int cmd_soc(int argc, char **argv)
         printf("  soc rint <uOhm>        internal resistance for I*R compensation\n");
         printf("  soc taper <uA>         charge current below which full can latch\n");
         printf("  soc rest <s>           idle time before OCV is trusted\n");
+        printf("  soc irest <permille>   rest current as per mille of capacity, 1..200\n");
         printf("  soc peukert <q8>       k in Q8: 256 = 1.00, 294 = 1.15 lead-acid\n");
         printf("  soc irated <uA>        rate the nameplate capacity assumes, C/20\n");
         printf("  soc depth <permille>   SoC change between references to learn capacity\n");
@@ -1829,6 +1832,7 @@ static int cmd_soc(int argc, char **argv)
     else if (strcmp(argv[1], "irated")  == 0) c.i_rated_ua = (uint32_t)v;
     else if (strcmp(argv[1], "depth")   == 0)
         c.learn_min_depth_permille = (uint16_t)v;
+    else if (strcmp(argv[1], "irest")   == 0) c.i_rest_permille = (uint16_t)v;
     else {
         printf("unknown: %s\n", argv[1]);
         return 1;
@@ -1840,7 +1844,8 @@ static int cmd_soc(int argc, char **argv)
         printf("The window must satisfy v0 < v100 <= vfull, and capacity must be\n");
         printf("non-zero -- otherwise the SoC scale would invert or divide by zero.\n");
         printf("Peukert k must be 256..512 (1.00..2.00): below 1.0 would mean a fast\n");
-        printf("discharge yields MORE capacity. Learn depth is 100..1000 permille.\n");
+        printf("discharge yields MORE capacity. Learn depth is 100..1000 permille,\n");
+        printf("and the rest current 1..200 permille of the design capacity.\n");
         return 1;
     }
     /* fg_set_config() only changes the running gauge: config.c owns persistence of
@@ -2852,6 +2857,8 @@ static int cmd_config(int argc, char **argv)
         printf("soc.taper_ua=%lu\n", (unsigned long)c.i_taper_ua);
         printf("soc.taper_eff_ua=%lu\n", (unsigned long)st.taper_current_ua);
         printf("soc.rest_s=%lu\n", (unsigned long)c.t_rest_s);
+        printf("soc.irest_permille=%u\n", (unsigned)c.i_rest_permille);
+        printf("soc.rest_ua=%lu\n", (unsigned long)st.rest_current_ua);
         printf("soc.peukert_q8=%u\n", (unsigned)c.peukert_q8);
         printf("soc.irated_ua=%lu\n", (unsigned long)c.i_rated_ua);
         printf("soc.depth_permille=%u\n", (unsigned)c.learn_min_depth_permille);
@@ -3233,7 +3240,7 @@ void cli_start(app_ctx_t *ctx)
 #endif
     register_cmd("hist",    "SoC over time for graphs: 288 points, settable interval", "[clear | every <s>]", cmd_hist);
     register_cmd("battery", "Battery chemistry and cells: the SoC curve and endpoints", "[list | <chemistry> [cells]]", cmd_battery);
-    register_cmd("soc",     "State of charge, endpoints and accumulators",   "[set|full|reset [all]|cap|v0|v100|vfull|rint|taper|rest] [v]", cmd_soc);
+    register_cmd("soc",     "State of charge, endpoints and accumulators",   "[set|full|reset [all]|cap|v0|v100|vfull|rint|taper|rest|irest] [v]", cmd_soc);
     register_cmd("options", "Everything that is set, in one place",         NULL,             cmd_options);
     register_cmd("config",  "Every setting as key=value, for programs",   NULL,             cmd_config);
     register_cmd("ota",     "Firmware update: status, receive, confirm, roll back", "[status|begin <bytes> <sha256>|end|abort|confirm|rollback]", cmd_ota);

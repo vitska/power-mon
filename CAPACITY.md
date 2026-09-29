@@ -62,7 +62,8 @@ The pack never has to reach 0 %.
 | **REST** | current idle, then resting voltage read off the chemistry curve | `soc rest` |
 
 A rest anchors after `soc rest` — 5 minutes on lead-acid, longer on the flat
-chemistries, which settle more slowly. Idle means `|I|` below capacity/110 — 0.4 A on a 44 A·h pack — smoothed over ~10 s,
+chemistries, which settle more slowly. Idle means `|I|` below `soc irest` — 15 per mille of the design capacity by
+default, 0.68 A on a 45 A·h pack — smoothed over ~10 s,
 with hysteresis: entering a direction takes twice that, leaving it only once. On
 lead-acid every settled rest anchors; on flat chemistries (LiFePO₄, NiMH) only rests
 near the ends of the curve do.
@@ -92,6 +93,7 @@ a pack worked hard counts out more than the shunt literally measured.
 |---|---|---|
 | `soc depth <permille>` | 200 (20 %) | depth a span must reach |
 | `soc rest <s>` | 300 | idle time before a rest anchors — and so how easily a lull splits a span |
+| `soc irest <permille>` | 15 (1.5 % of C) | the current below which the pack counts as idle at all |
 | `soc cap <uAh>` | — | changing it **rescales the measured capacity and resets the count** |
 | `soc taper <uA>` | design/30 | how easily FULL is reached |
 | `soc irated`, `soc peukert` | per chemistry | the Peukert adjustment; `soc peukert 256` disables it |

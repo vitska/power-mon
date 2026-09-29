@@ -152,7 +152,24 @@ typedef struct {
      * saved before these existed is the same struct without them. */
     uint8_t  chemistry;                /**< fg_chem_t: which OCV curve applies */
     uint8_t  cells;                    /**< cells in series */
+
+    /**
+     * The rest current, as per mille of the design capacity: 15 means 1.5 % of C,
+     * which is 0.68 A on a 45 A.h pack. Below it the pack counts as idle, and after
+     * t_rest_s of that the resting voltage is trusted as OCV.
+     *
+     * A fraction of capacity rather than an absolute current, because what makes a
+     * current negligible is how big the pack is: 0.5 A is nothing to a 200 A.h bank
+     * and a real load on a 7 A.h one. Floored at i_deadband_ua, below which nothing
+     * integrates anyway.
+     */
+    uint16_t i_rest_permille;
 } fg_config_t;
+
+/** Per mille of design capacity, and the range `soc irest` accepts. 15 = 1.5 % of C. */
+#define FG_REST_PERMILLE_DEFAULT 15u
+#define FG_REST_PERMILLE_MIN     1u
+#define FG_REST_PERMILLE_MAX     200u
 
 /** Defaults for a 12 V / 44 A·h flooded lead-acid — the battery this was brought up
  *  on. Chemistry-specific values are commented with where they come from. */
@@ -172,6 +189,7 @@ typedef struct {
         .i_rated_ua          = 2200000u,  /* C/20 = 2.2 A: how car batteries are rated */ \
         .learn_min_depth_permille = 200u, /* 20 %: partial cycles are the norm */ \
         .learn_blend_q8      = 64u,       /* 0.25 -- learn slowly, it is a big claim */ \
+        .i_rest_permille     = FG_REST_PERMILLE_DEFAULT, /* 1.5 % of C */         \
         .chemistry           = FG_CHEM_FLOODED,                                  \
         .cells               = 6,                                                \
     })

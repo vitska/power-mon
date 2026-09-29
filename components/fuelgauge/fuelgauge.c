@@ -354,7 +354,8 @@ static uint32_t soc_from_ocv(uint32_t ocv_uv)
  * the deadband as the threshold, such a pack never rested, never re-synced, and a
  * wrong count stayed wrong indefinitely.
  *
- * C/110: 0.4 A on 44 Ah, averaged over ~10 s (CLASS_TAU_S). Below it the pack is
+ * A per mille of the design capacity (`soc irest`, 15 = 1.5 % of C by default: 0.66 A
+ * on 44 Ah), averaged over ~10 s (CLASS_TAU_S). Below it the pack is
  * SETTLING whatever the direction -- the small, noisy currents of an idle installation
  * are not a charge or a discharge worth leaving the settle countdown for. The I·R
  * compensation still applies at that current, so OCV stays usable.
@@ -378,8 +379,17 @@ static uint32_t taper_current_ua(void)
 
 static uint32_t rest_current_ua(void)
 {
-    const uint32_t c110 = s_fg.cfg.design_capacity_uah / 110;
-    return c110 > s_fg.cfg.i_deadband_ua ? c110 : s_fg.cfg.i_deadband_ua;
+    /* Zero only from a stored config written before the field existed, which config.c
+     * fills from the defaults -- but a threshold of zero would mean a pack that never
+     * rests, so it is worth not depending on that. */
+    uint32_t permille = s_fg.cfg.i_rest_permille;
+    if (permille == 0) {
+        permille = FG_REST_PERMILLE_DEFAULT;
+    }
+    /* 64-bit: a 1000 A.h bank at 20 permille overflows a uint32 before the divide. */
+    const uint64_t i = ((uint64_t)s_fg.cfg.design_capacity_uah * permille) / 1000;
+    const uint32_t r = i > UINT32_MAX ? UINT32_MAX : (uint32_t)i;
+    return r > s_fg.cfg.i_deadband_ua ? r : s_fg.cfg.i_deadband_ua;
 }
 
 /*
@@ -999,6 +1009,10 @@ esp_err_t fg_set_config(const fg_config_t *cfg)
     /* k below 1.0 would mean a fast discharge yields MORE capacity. 2.0 is already
      * far past any real chemistry. */
     if (cfg->peukert_q8 < 256 || cfg->peukert_q8 > 512) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (cfg->i_rest_permille < FG_REST_PERMILLE_MIN ||
+        cfg->i_rest_permille > FG_REST_PERMILLE_MAX) {
         return ESP_ERR_INVALID_ARG;
     }
     if (cfg->chemistry >= FG_CHEM_COUNT || cfg->cells == 0 || cfg->cells > 32) {

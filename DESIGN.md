@@ -998,7 +998,8 @@ healthy pack at 0 % and saved it. Action:
 
 **C. Rest OCV re-sync** — after `t_rest` (5 min for lead-acid by default, longer for
 the flat chemistries) with |I| below the **rest
-current**, terminal voltage approximates OCV. The rest current is C/400 (110 mA on
+current**, terminal voltage approximates OCV. The rest current is a settable fraction
+of the design capacity (`soc irest`, 15 per mille = 1.5 % of C by default, 0.66 A on
 44 A·h), deliberately *not* the integration deadband: a monitor powered from its own
 pack draws a steady few to few tens of milliamps forever, and with the deadband as the
 threshold such a pack never rested, so a wrong count was never corrected. At C/400 the

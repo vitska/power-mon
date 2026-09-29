@@ -627,6 +627,7 @@ a span needs, and why a board may never learn -- is [CAPACITY.md](CAPACITY.md).
 | `soc rint <uOhm>` | | Battery internal resistance, for I·R → OCV |
 | `soc taper <uA>` | | Charge current below which full can latch, set for the nameplate capacity. The value in force is it scaled by learned / design capacity -- `soc.taper_eff_ua` in `config` |
 | `soc rest <s>` | | Idle time before OCV is trusted |
+| `soc irest <permille>` | 1–200 | Rest current as per mille of the design capacity. 15 = 1.5 % of C, 0.68 A on a 45 A·h pack. Floored at the integration deadband. `config` reports the resulting current as `soc.rest_ua` |
 | `soc peukert <q8>` | 256–512 | k; 256 = disabled |
 | `soc irated <uA>` | | Rate the nameplate capacity assumes |
 | `soc depth <permille>` | 100–1000 | SoC change between two reference points (FULL, EMPTY, settled rest) needed to learn capacity; default 200 |
