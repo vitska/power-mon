@@ -1,6 +1,11 @@
 idf_component_register(
     SRCS        "main.c"
                 "cli.c"
+                "cli_sense.c"
+                "cli_stream.c"
+                "cli_gauge.c"
+                "cli_cal.c"
+                "cli_report.c"
                 "lcd.c"
                 "ble.c"
                 "values.c"

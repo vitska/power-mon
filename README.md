@@ -478,7 +478,13 @@ main/
   values.c/.h           every live measured or calculated quantity
   history_values.c/.h   accumulated and time-series quantities: the sample window
   config.c/.h           every setting, as §6.1's cfg_t, persisted in namespace `cfg`
-  cli.c/.h              the textual interface: framing, commands, both transports
+  cli.c/.h              the textual interface: framing, the table, both transports
+  cli_internal.h        the little the command files share with each other
+  cli_sense.c           read, raw, sensors, detect, shunt, gain/offset/pga, curve
+  cli_stream.c          stream rates, stats, mon, env, ver
+  cli_gauge.c           soc, battery, hist
+  cli_cal.c             the guided two-point calibration
+  cli_report.c          config, options, disp, ble, ota, reboot
   ble.c/.h              the BLE link: GAP, GATT, pairing, bonds, connections
   lcd.c/.h              the internal OLED: panel driver and the screens on it
   app_ctx.h             the devices and the sensor lock; protocol constants
