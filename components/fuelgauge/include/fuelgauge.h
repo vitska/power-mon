@@ -165,7 +165,7 @@ typedef struct {
         .r_int_uohm          = 6000u,     /* ~6 mOhm typical for this size */ \
         .i_taper_ua          = 1466667u,  /* design/30, §8.3 tag 0x0020 */ \
         .i_deadband_ua       = 3000u,     /* §5.2 */    \
-        .t_rest_s            = 600u,      /* lead-acid settles slowly */ \
+        .t_rest_s            = 300u,      /* 5 min: often enough to be useful */ \
         .t_full_hold_s       = 60u,       /* §8.3 tag 0x0021 */ \
         .ocv_blend_q8        = 64u,       /* 0.25, §8.3 tag 0x0023 */ \
         .peukert_q8          = 294u,      /* k 1.15, Appendix B lead-acid */ \

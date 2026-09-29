@@ -28,7 +28,7 @@ State of health is measured / nameplate. Every SoC percentage is charge / measur
 2. **Set a depth you will actually reach** — `soc depth 200` asks for a 20 % discharge,
    which ordinary use provides. The default is 200; higher is better evidence and far
    rarer.
-3. **Open a span.** Charge to full, or leave the pack idle for `soc rest` (10 min).
+3. **Open a span.** Charge to full, or leave the pack idle for `soc rest` (5 min).
    Either one anchors a reference point. `soc` then shows `learn span from …`.
 4. **Discharge past the depth in one go.** No charging, and no idle gaps longer than
    `soc rest` — a rest is itself a reference point and starts the span over.
@@ -61,7 +61,8 @@ The pack never has to reach 0 %.
 | **EMPTY** | I·R-compensated voltage ≤ `soc v0`, under load | 10 s |
 | **REST** | current idle, then resting voltage read off the chemistry curve | `soc rest` |
 
-Idle means `|I|` below capacity/110 — 0.4 A on a 44 A·h pack — smoothed over ~10 s,
+A rest anchors after `soc rest` — 5 minutes on lead-acid, longer on the flat
+chemistries, which settle more slowly. Idle means `|I|` below capacity/110 — 0.4 A on a 44 A·h pack — smoothed over ~10 s,
 with hysteresis: entering a direction takes twice that, leaving it only once. On
 lead-acid every settled rest anchors; on flat chemistries (LiFePO₄, NiMH) only rests
 near the ends of the curve do.
@@ -89,8 +90,8 @@ a pack worked hard counts out more than the shunt literally measured.
 
 | Setting | Default | Effect |
 |---|---|---|
-| `soc depth <permille>` | 200 | depth a span must reach |
-| `soc rest <s>` | 600 | idle time before a rest anchors — and so how easily a lull splits a span |
+| `soc depth <permille>` | 200 (20 %) | depth a span must reach |
+| `soc rest <s>` | 300 | idle time before a rest anchors — and so how easily a lull splits a span |
 | `soc cap <uAh>` | — | changing it **rescales the measured capacity and resets the count** |
 | `soc taper <uA>` | design/30 | how easily FULL is reached |
 | `soc irated`, `soc peukert` | per chemistry | the Peukert adjustment; `soc peukert 256` disables it |

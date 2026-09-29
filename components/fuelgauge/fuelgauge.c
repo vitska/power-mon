@@ -195,7 +195,7 @@ static const fg_chem_profile_t CHEM[FG_CHEM_COUNT] = {
         .ocv_cell_uv = {1916667, 1946667, 1976667, 2001667, 2021667, 2041667,
                         2055000, 2068333, 2083333, 2100000, 2116667},
         .v_full_cell_uv = 2400000, .taper_div = 30, .rated_div = 20,
-        .peukert_q8 = 294, .t_rest_s = 600,
+        .peukert_q8 = 294, .t_rest_s = 300,
         .trust_lo_permille = 1000, .trust_hi_permille = 1000,
     },
     [FG_CHEM_AGM] = {
@@ -203,7 +203,7 @@ static const fg_chem_profile_t CHEM[FG_CHEM_COUNT] = {
         .ocv_cell_uv = {1966667, 1983333, 2000000, 2021667, 2041667, 2058333,
                         2075000, 2091667, 2108333, 2125000, 2141667},
         .v_full_cell_uv = 2400000, .taper_div = 50, .rated_div = 20,
-        .peukert_q8 = 282, .t_rest_s = 600,
+        .peukert_q8 = 282, .t_rest_s = 300,
         .trust_lo_permille = 1000, .trust_hi_permille = 1000,
     },
     [FG_CHEM_GEL] = {
@@ -211,7 +211,7 @@ static const fg_chem_profile_t CHEM[FG_CHEM_COUNT] = {
         .ocv_cell_uv = {1966667, 1986667, 2008333, 2030000, 2050000, 2066667,
                         2083333, 2100000, 2116667, 2133333, 2150000},
         .v_full_cell_uv = 2333333, .taper_div = 50, .rated_div = 20,
-        .peukert_q8 = 287, .t_rest_s = 600,
+        .peukert_q8 = 287, .t_rest_s = 300,
         .trust_lo_permille = 1000, .trust_hi_permille = 1000,
     },
     [FG_CHEM_LIFEPO4] = {

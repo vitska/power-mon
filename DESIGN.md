@@ -996,7 +996,8 @@ healthy pack at 0 % and saved it. Action:
 `charge_uAs := 0`; set `EMPTY_SEEN`. Rejected if the discharge current exceeds
 `cfg.i_sag_ignore_uA`, since a heavy transient sag is not an empty pack.
 
-**C. Rest OCV re-sync** — after `t_rest` (default 10 min) with |I| below the **rest
+**C. Rest OCV re-sync** — after `t_rest` (5 min for lead-acid by default, longer for
+the flat chemistries) with |I| below the **rest
 current**, terminal voltage approximates OCV. The rest current is C/400 (110 mA on
 44 A·h), deliberately *not* the integration deadband: a monitor powered from its own
 pack draws a steady few to few tens of milliamps forever, and with the deadband as the

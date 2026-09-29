@@ -421,7 +421,7 @@ restored across a power cut reads `last anchor never since boot` until a rest pe
 re-syncs it.
 
 > **Lead-acid surface charge is the trap here.** Straight off a charger a 12 V battery
-> reads 13 V+ and takes hours to settle. With `soc rest` at ten minutes the gauge will
+> reads 13 V+ and takes hours to settle. With `soc rest` at five minutes the gauge will
 > anchor on that transient and drift toward 100 %. Raise it to hours for a real
 > installation.
 
