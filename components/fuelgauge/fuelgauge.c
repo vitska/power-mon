@@ -8,6 +8,7 @@
 #include <strings.h>
 
 #include "esp_log.h"
+#include "esp_system.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 
@@ -526,6 +527,45 @@ esp_err_t fg_init(void)
      * outage is how a gauge ends up confidently wrong.
      */
     s_fg.s_since_anchor = UINT32_MAX;
+
+    /*
+     * The open capacity measurement, though, is kept or dropped on what KIND of restart
+     * this was. A span is only worth anything if every coulomb between its two ends was
+     * counted, so the question is whether the pack was doing anything unwatched.
+     *
+     * A software restart -- `reboot`, an OTA, a panic, a watchdog -- takes a second or
+     * two, with the board powered from the pack throughout and the state written out on
+     * the way down. Dropping the span there throws away a measurement that may have been
+     * building for hours to avoid an error of a few milliamp-hours, which is the wrong
+     * trade by three orders of magnitude.
+     *
+     * A power-on or brownout is the opposite: the board may have been dark for a minute
+     * or a month, and the load may have emptied the pack meanwhile. Nothing about that
+     * span can be trusted, so it closes and the next reference point opens a new one.
+     */
+    if (s_fg.have_ref) {
+        const esp_reset_reason_t why = esp_reset_reason();
+        const bool powered_through = (why == ESP_RST_SW || why == ESP_RST_PANIC ||
+                                      why == ESP_RST_INT_WDT || why == ESP_RST_TASK_WDT ||
+                                      why == ESP_RST_WDT || why == ESP_RST_DEEPSLEEP ||
+                                      why == ESP_RST_USB || why == ESP_RST_JTAG);
+        if (!powered_through) {
+            ESP_LOGW(TAG, "reset reason %d: the pack was unwatched, closing the open "
+                          "capacity span (%lu mAh since %lu.%lu%%)",
+                     (int)why, (unsigned long)(-s_fg.q_since_ref_uas / 3600 / 1000),
+                     (unsigned long)(s_fg.ref_soc_permille / 10),
+                     (unsigned long)(s_fg.ref_soc_permille % 10));
+            s_fg.have_ref           = false;
+            s_fg.q_since_ref_uas    = 0;
+            s_fg.q_in_since_ref_uas = 0;
+        } else {
+            ESP_LOGI(TAG, "restart with power kept: capacity span held (%lu mAh since "
+                          "%lu.%lu%%)",
+                     (unsigned long)(-s_fg.q_since_ref_uas / 3600 / 1000),
+                     (unsigned long)(s_fg.ref_soc_permille / 10),
+                     (unsigned long)(s_fg.ref_soc_permille % 10));
+        }
+    }
     s_fg.saved_soc_permille = soc_from_charge();
 
     /*

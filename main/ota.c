@@ -32,6 +32,7 @@
 
 #include "esp_app_desc.h"
 #include "esp_log.h"
+#include "fuelgauge.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -106,9 +107,28 @@ static void on_probation_expired(void *arg)
     do_rollback(NULL);
 }
 
+/*
+ * Every deliberate restart goes through here -- `reboot`, the OTA reboot, the rollback
+ * -- so this is the one place that has to write the gauge out first.
+ *
+ * Its own policy saves every 300 s or half a percent of SoC, which is right for flash
+ * endurance and wrong for the moment someone types `reboot`: the open capacity
+ * measurement, the charge drawn into it and up to five minutes of counting would go,
+ * and an OTA would quietly cost a learning span that had been building for hours.
+ * A save here is one write per human action, which is free.
+ */
+static void save_state_for_restart(void)
+{
+    const esp_err_t err = fg_save();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "gauge not saved before restart: %s", esp_err_to_name(err));
+    }
+}
+
 static void do_reboot(void *arg)
 {
     (void)arg;
+    save_state_for_restart();
     esp_restart();
 }
 
@@ -380,6 +400,7 @@ esp_err_t ota_rollback(void)
         return ESP_ERR_NOT_FOUND;
     }
     /* Deferred like a reboot, so the reply announcing it still goes out. */
+    save_state_for_restart();
     esp_timer_stop(s.rollback);
     return esp_timer_start_once(s.rollback, 500 * 1000);
 }

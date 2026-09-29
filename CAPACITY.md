@@ -119,6 +119,23 @@ In order of likelihood:
 
 ---
 
+## What survives a restart
+
+Everything the measurement needs is in flash: the open span (where it started and how
+much has come out of it), the measured capacity, the learn count and the coulomb
+counters. The gauge writes them every 300 s or half a percent of SoC, **and once more
+on the way down** -- `reboot`, an OTA and a rollback all save before restarting, so a
+firmware update costs nothing.
+
+The one case where a span is deliberately dropped is a **power-on or brownout** reset.
+The board may have been dark for a minute or a month with the load still draining the
+pack, and a span with unmeasured coulombs in it would measure the wrong capacity
+confidently. A software restart is the opposite -- a second or two, powered throughout,
+state written on the way down -- and keeps the span. The log says which happened.
+
+A gap of more than 60 s in the samples while running closes the span for the same
+reason: charge flowed that nobody counted.
+
 ## History
 
 Firmware before **0.11.7** could not keep a measured capacity on any pack whose
