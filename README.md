@@ -60,7 +60,9 @@ Verified against a 12 V / 44 A·h flooded lead-acid battery.
 - **Android app** (`android/`), with four tabs:
   - **Monitor:** live SoC, the SoC history chart, voltage, current, power, gauge state,
     diagnostics and environment.
-  - **Configure:** calibration, battery chemistry and every other setting.
+  - **Configure:** a menu of nine one-screen pages -- calibration, shunt, battery,
+    fuel gauge, SoC history, telemetry, display, BLE, read state -- each row
+    showing what the device currently holds.
   - **Console:** raw commands.
   - **Firmware:** checks GitHub for a newer release and flashes it over BLE.
 

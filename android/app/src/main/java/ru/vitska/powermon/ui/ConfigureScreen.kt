@@ -1,5 +1,6 @@
 package ru.vitska.powermon.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -46,6 +47,27 @@ import ru.vitska.powermon.ble.RawSensor
 import ru.vitska.powermon.model.MonitorViewModel
 
 /**
+ * The Configure tab's sub-pages. One screen of controls each, because the alternative
+ * -- and what this was -- is a single scroll deep enough that finding the passkey means
+ * passing the calibration buttons twice, and the one screen nobody should touch by
+ * accident is the one they scroll through most often.
+ *
+ * The order is CLI.md's, which is also the order of a bring-up: calibrate, describe the
+ * wiring, then the battery, then everything that is set once and left alone.
+ */
+private enum class CfgPage(val title: String, val blurb: String) {
+    CALIBRATION("Calibration", "Zero and span for current and voltage, from a meter"),
+    SHUNT("Shunt and topology", "Shunt value, which pole it is in, sensor roles"),
+    BATTERY("Battery", "Chemistry and cells in series"),
+    GAUGE("Fuel gauge", "Capacity, endpoints, learning, rest and Peukert"),
+    HISTORY("SoC history", "How often a point is recorded, and clearing it"),
+    TELEMETRY("Telemetry", "Stream rates and the sampling profile"),
+    DISPLAY("Display", "The monitor's own OLED panel"),
+    BLE("BLE and pairing", "Pairing mode, passkey, bonds"),
+    STATE("Read state", "One-shot reads: raw sensors, the options dump"),
+}
+
+/**
  * Everything the console can set, grouped the way CLI.md groups it — calibration first,
  * because it is the reason to reach for this screen while standing at the bench with a
  * meter in hand. The rest is set once and left alone.
@@ -70,6 +92,7 @@ fun ConfigureScreen(vm: MonitorViewModel) {
     val t by vm.telemetry.collectAsState()
     val cfg by vm.config.collectAsState()
     var last by remember { mutableStateOf<String?>(null) }
+    var page by remember { mutableStateOf<CfgPage?>(null) }
 
     /** A read-only command: show what it said, change nothing. */
     val run: (String) -> Unit = { cmd ->
@@ -207,9 +230,25 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             }
         }
 
+        // The menu, or the page's own header. Nothing below renders unless its page is
+        // the open one, so every sub-page is one screen and the scroll is short.
+        val open = page
+        if (open == null) {
+            Spacer(Modifier.height(4.dp))
+            CfgPage.entries.forEach { p ->
+                MenuRow(p.title, p.blurb, summary(p, cfg)) { page = p }
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { page = null }) { Text("‹  All settings") }
+                Text(open.title, style = MaterialTheme.typography.titleMedium)
+            }
+            HorizontalDivider()
+        }
+
         // ------------------------------------------------------------ calibration
 
-        Section("Calibration") {
+        if (page == CfgPage.CALIBRATION) Section("Calibration") {
             Text("DEVICE READS NOW", style = MaterialTheme.typography.labelSmall)
             KVGrid(
                 "Voltage" to (t.volts?.let { String.format("%.3f V", it) } ?: "—"),
@@ -315,7 +354,7 @@ fun ConfigureScreen(vm: MonitorViewModel) {
 
         // ------------------------------------------------------------ the rest
 
-        Section("Shunt and topology") {
+        if (page == CfgPage.SHUNT) Section("Shunt and topology") {
             MicroField(
                 "Shunt resistance", "mOhm", "100",
                 current = cfg.milli("shunt.uohm", 3),
@@ -339,7 +378,7 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             OutlinedButton(onClick = { guarded("detect") }) { Text("detect") }
         }
 
-        Section("Telemetry rates") {
+        if (page == CfgPage.TELEMETRY) Section("Telemetry rates") {
             RateRow("fast", 20, 60_000, cfg.str("stream.fast_ms"), set)
             RateRow("calc", 20, 60_000, cfg.str("stream.calc_ms"), set)
             RateRow("diag", 20, 60_000, cfg.str("stream.diag_ms"), set)
@@ -370,7 +409,7 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             )
         }
 
-        Section("Battery") {
+        if (page == CfgPage.BATTERY) Section("Battery") {
             BatteryPicker(
                 currentKey = cfg.str("battery.chem"),
                 currentCells = cfg.str("battery.cells"),
@@ -382,7 +421,7 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             }
         }
 
-        Section("Fuel gauge") {
+        if (page == CfgPage.GAUGE) Section("Fuel gauge") {
             MicroField("Design capacity", "Ah", "44", current = cfg.micro("soc.cap_uah", 1)) {
                 set("soc cap " + Micro.ampHours(it))
             }
@@ -407,8 +446,16 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                 current = cfg.micro("soc.irated_ua", 3)) {
                 set("soc irated " + Micro.amps(it))
             }
-            PlainField("Rest before OCV is trusted", "s", "600",
+            PlainField("Rest before OCV is trusted", "s", "300",
                 current = cfg.str("soc.rest_s")) { set("soc rest " + it) }
+            // Per mille of the design capacity, so the field alone does not say what
+            // current it means. The device works that out and reports it, so show both.
+            PlainField("Rest current (per mille of capacity)", "permille", "15",
+                current = cfg.str("soc.irest_permille")?.let { p ->
+                    p + (cfg.long("soc.rest_ua")?.let {
+                        String.format("  (%.3f A)", it / 1_000_000.0)
+                    } ?: "")
+                }) { set("soc irest " + it) }
             PlainField("Peukert k (Q8; 256 disables)", "q8", "300",
                 current = cfg.str("soc.peukert_q8")?.let { q ->
                     q + "  (k " + String.format("%.3f", (q.toIntOrNull() ?: 256) / 256.0) + ")"
@@ -450,7 +497,7 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             )
         }
 
-        Section("SoC history") {
+        if (page == CfgPage.HISTORY) Section("SoC history") {
             // The ring is a fixed number of points, so the interval IS the span: there is
             // nothing to choose between but how far back the graph reaches and how finely.
             val points = cfg.int("hist.points")
@@ -492,7 +539,7 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             }
         }
 
-        Section("Display") {
+        if (page == CfgPage.DISPLAY) Section("Display") {
             KVGrid(
                 "Panel" to when (cfg.bool("disp.present")) {
                     true -> if (cfg.bool("disp.on") == true) "on" else "blanked"
@@ -516,7 +563,7 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                 current = cfg.str("disp.contrast")) { set("disp contrast " + it) }
         }
 
-        Section("BLE and pairing") {
+        if (page == CfgPage.BLE) Section("BLE and pairing") {
             KVGrid(
                 "Name" to (cfg.str("ble.name") ?: "—"),
                 "Links" to (cfg.str("ble.conns")?.let { c ->
@@ -539,7 +586,7 @@ fun ConfigureScreen(vm: MonitorViewModel) {
             }
         }
 
-        Section("Read state") {
+        if (page == CfgPage.STATE) Section("Read state") {
             // The prose overviews, for the things `config` deliberately does not carry:
             // history, statistics, and anything a person reads rather than a program.
             Wrap {
@@ -883,4 +930,63 @@ private fun Current(current: String?, rendered: String?) {
             fontFamily = FontFamily.Monospace,
         )
     }
+}
+
+/** One row of the Configure menu: what the page is, and what the device has now. */
+@Composable
+private fun MenuRow(title: String, blurb: String, value: String?, onClick: () -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 12.dp),
+    ) {
+        Text(title, style = MaterialTheme.typography.titleSmall)
+        Text(blurb, style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (!value.isNullOrBlank()) {
+            Text(value, style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.primary)
+        }
+    }
+    HorizontalDivider()
+}
+
+/**
+ * What each page currently holds, in one line, from `config`. A menu that only lists
+ * page names makes you open all nine to answer "is this board set up" -- the answer is
+ * mostly these nine lines, so they belong on the menu itself.
+ */
+private fun summary(p: CfgPage, cfg: ConfigState): String? = when (p) {
+    CfgPage.CALIBRATION -> cfg.gainPct("cal.i_gain_ppm")?.let { g ->
+        "current gain " + g + (if (cfg.bool("cal.stored") == true) ", stored" else ", UNSAVED")
+    }
+    CfgPage.SHUNT -> cfg.str("shunt.uohm")?.let { u ->
+        String.format("%.3f mOhm", u.toLongOrNull()?.div(1000.0) ?: 0.0) +
+            ", " + (cfg.str("shunt.loc") ?: "?") + ", " + (cfg.str("shunt.roles") ?: "")
+    }
+    CfgPage.BATTERY -> cfg.str("battery.chem")?.let { c ->
+        c.uppercase() + " " + (cfg.str("battery.cells") ?: "?") + "S"
+    }
+    CfgPage.GAUGE -> cfg.micro("soc.cap_uah", 1)?.let { cap ->
+        cap + " Ah nameplate, " + (cfg.micro("soc.learned_uah", 2) ?: "?") + " measured" +
+            (if (cfg.int("soc.learn_count") == 0) " (not yet)" else "")
+    }
+    CfgPage.HISTORY -> cfg.int("hist.period_s")?.let { s ->
+        val pts = cfg.int("hist.points") ?: 0
+        "a point every " + (if (s % 60 == 0) "${s / 60} min" else "$s s") +
+            (if (pts > 0) ", " + (s.toLong() * pts / 3600) + " h span" else "")
+    }
+    CfgPage.TELEMETRY -> cfg.bool("stream.on")?.let { on ->
+        (if (on) "on" else "off") + ", fast " + (cfg.str("stream.fast_ms") ?: "?") + " ms"
+    }
+    CfgPage.DISPLAY -> when (cfg.bool("disp.present")) {
+        true -> if (cfg.bool("disp.on") == true) "on, screen " + (cfg.str("disp.screen") ?: "?")
+                else "fitted, blanked"
+        false -> "none fitted"
+        null -> null
+    }
+    CfgPage.BLE -> cfg.str("ble.pair")?.let { m ->
+        m + ", " + (cfg.str("ble.conns") ?: "?") + " connected, " +
+            (cfg.str("ble.bonds") ?: "?") + " bonded"
+    }
+    CfgPage.STATE -> null
 }

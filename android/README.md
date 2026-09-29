@@ -15,8 +15,11 @@ from here, in four tabs:
   (full span / half / quarter chart; gaps stay gaps), volts, amps, watts, gauge state,
   diagnostics,
   environment. The history is fetched on connect and every two minutes.
-- **Configure:** calibration first, then battery chemistry and cell count, the fuel gauge,
-  shunt topology, telemetry rates, the display and BLE pairing.
+- **Configure:** a menu of nine pages, one screen each -- calibration, shunt and
+  topology, battery, fuel gauge, SoC history, telemetry, display, BLE, read state.
+  Every row carries a line of what the device currently holds for that page, so
+  "is this board set up" is answered without opening any of them. One long scroll
+  meant passing the calibration buttons twice on the way to the passkey.
 - **Console:** a raw command line for whatever is left.
 - **Firmware:** the board's version and slot, the newest GitHub release, and the update
   over BLE, with rollback if the new firmware does not come back.
