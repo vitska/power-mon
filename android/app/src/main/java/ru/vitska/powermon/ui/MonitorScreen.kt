@@ -1,10 +1,12 @@
 package ru.vitska.powermon.ui
 
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -49,163 +51,219 @@ fun MonitorScreen(vm: MonitorViewModel, onPickDevice: () -> Unit = {}) {
     // `config` read on connect until the first record arrives. Never re-derived here.
     val state = t.state.takeIf { it != "—" } ?: cfg.str("soc.state") ?: "—"
 
-    Column(
-        Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        if (link != Link.Ready) {
-            // Without this the panel is a wall of dashes with no way forward: the way in
-            // is the device picker, so say so where the dashes are.
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    Text(
-                        if (scanning) "Looking for boards" else "No board connected",
-                        style = MaterialTheme.typography.titleSmall,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        if (scanning) {
-                            "Scanning for anything advertising as batmon-XXXX."
-                        } else {
-                            "Pick a board to monitor. The last one used is reconnected " +
-                                "automatically when the app starts."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Button(onClick = onPickDevice) { Text("Devices") }
+    /*
+     * Portrait is one column, which is the only thing that fits on a phone held
+     * upright. Landscape is two, because the same content then leaves half the width
+     * empty and makes the reader scroll for what would have fitted beside it: the
+     * numbers on the left, the history and the detail on the right.
+     *
+     * Chosen on WIDTH, not on the orientation flag. What matters is whether two
+     * readable columns fit, and that is as true of a tablet held upright as of a phone
+     * turned sideways.
+     *
+     * Each block is a local composable rather than a top-level one: they read the same
+     * dozen values, and threading those through eight parameter lists would be more
+     * code than the blocks themselves.
+     */
+    val notices: @Composable () -> Unit = {
+            if (link != Link.Ready) {
+                // Without this the panel is a wall of dashes with no way forward: the way in
+                // is the device picker, so say so where the dashes are.
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text(
+                            if (scanning) "Looking for boards" else "No board connected",
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            if (scanning) {
+                                "Scanning for anything advertising as batmon-XXXX."
+                            } else {
+                                "Pick a board to monitor. The last one used is reconnected " +
+                                    "automatically when the app starts."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Button(onClick = onPickDevice) { Text("Devices") }
+                    }
                 }
             }
-        }
 
-        if (FirmwareTarget.forDeviceName(vm.deviceName.collectAsState().value) ==
-            FirmwareTarget.REMOTE && link == Link.Ready
-        ) {
-            Warn(
-                "This is a batmon remote display, not a monitor: it has no telemetry of " +
-                    "its own. Only the Firmware tab applies to it."
-            )
-        }
-        if (shake.mismatch) {
-            // CLI.md: refuse to drive a protocol you do not know rather than guess.
-            Warn(
-                "Protocol ${shake.protocol} — this app speaks 3. Fields may be missing " +
-                    "or misread; update one side."
-            )
-        }
-        if (t.saturated) {
-            // The whole reason the diagnostics group exists: sat=1 means the current
-            // reading is a range limit, not a measurement.
-            Warn("Shunt channel SATURATED (${t.pga}) — current readings are a range limit, not a measurement.")
-        }
-
-        // State of charge gets the space, as it does on the device's own panel.
-        Column(
-            Modifier.fillMaxWidth()
-                .border(1.dp, MaterialTheme.colorScheme.surfaceVariant)
-                .padding(16.dp),
-        ) {
-            // Which curve the percentage comes from: a LiFePO4 pack gauged on the
-            // lead-acid curve reads nonsense, and this is where that would show.
-            val chem = Chemistries.byKey(cfg.str("battery.chem"))
-            Text(
-                "STATE OF CHARGE" +
-                    (chem?.let { "  ·  ${it.short} ${cfg.str("battery.cells") ?: "?"}S" } ?: ""),
-                style = MaterialTheme.typography.labelSmall,
-            )
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(
-                    f(t.socPct, 1),
-                    fontSize = 56.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    fontFamily = FontFamily.Monospace,
-                )
-                Text(" %", style = MaterialTheme.typography.titleMedium)
-            }
-            Spacer(Modifier.height(8.dp))
-            LinearProgressIndicator(
-                progress = { ((t.socPct ?: 0.0) / 100.0).toFloat().coerceIn(0f, 1f) },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // Charge REMAINING, and the capacity the percentage above is a
-                // percentage OF. Alone, "34.33 Ah" under a big 76.2 % reads as the pack's
-                // capacity -- the one number on this card it is not. Written as a
-                // fraction it cannot: 34.33 of 45.00 is visibly 76 %. The denominator is
-                // `soc.learned_uah` because that is what the gauge divides by, so the
-                // three figures on this card always agree.
-                val fullAh = cfg.long("soc.learned_uah")?.let { it / 1_000_000.0 }
-                Text(
-                    if (fullAh != null) {
-                        "${f(t.chargeAh, 2)} of ${String.format("%.2f", fullAh)} Ah   ·   "
-                    } else {
-                        "${f(t.chargeAh, 2)} Ah left   ·   "
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Text(
-                    state,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = stateColor(state),
+            if (FirmwareTarget.forDeviceName(vm.deviceName.collectAsState().value) ==
+                FirmwareTarget.REMOTE && link == Link.Ready
+            ) {
+                Warn(
+                    "This is a batmon remote display, not a monitor: it has no telemetry of " +
+                        "its own. Only the Firmware tab applies to it."
                 )
             }
-            // The device's own estimate, as sent -- never computed here.
-            val est = when {
-                state == "FULL" || state == "EMPTY" -> null
-                t.tFullS != null -> "full in " + duration(t.tFullS!!)
-                t.tEmptyS != null -> "empty in " + duration(t.tEmptyS!!)
-                t.settleS != null ->
-                    "rested in " + String.format("%d:%02d", t.settleS!! / 60, t.settleS!! % 60)
-                else -> null
+            if (shake.mismatch) {
+                // CLI.md: refuse to drive a protocol you do not know rather than guess.
+                Warn(
+                    "Protocol ${shake.protocol} — this app speaks 3. Fields may be missing " +
+                        "or misread; update one side."
+                )
             }
-            if (est != null) {
-                Text(est, style = MaterialTheme.typography.bodyMedium,
-                    fontFamily = FontFamily.Monospace)
+            if (t.saturated) {
+                // The whole reason the diagnostics group exists: sat=1 means the current
+                // reading is a range limit, not a measurement.
+                Warn("Shunt channel SATURATED (${t.pga}) — current readings are a range limit, not a measurement.")
             }
-        }
+    }
 
-        if (link == Link.Ready) {
-            HistoryChart(history)
-        }
+    val socCard: @Composable () -> Unit = {
+            // State of charge gets the space, as it does on the device's own panel.
+            Column(
+                Modifier.fillMaxWidth()
+                    .border(1.dp, MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(16.dp),
+            ) {
+                // Which curve the percentage comes from: a LiFePO4 pack gauged on the
+                // lead-acid curve reads nonsense, and this is where that would show.
+                val chem = Chemistries.byKey(cfg.str("battery.chem"))
+                Text(
+                    "STATE OF CHARGE" +
+                        (chem?.let { "  ·  ${it.short} ${cfg.str("battery.cells") ?: "?"}S" } ?: ""),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        f(t.socPct, 1),
+                        fontSize = 56.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                    Text(" %", style = MaterialTheme.typography.titleMedium)
+                }
+                Spacer(Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { ((t.socPct ?: 0.0) / 100.0).toFloat().coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Charge REMAINING, and the capacity the percentage above is a
+                    // percentage OF. Alone, "34.33 Ah" under a big 76.2 % reads as the pack's
+                    // capacity -- the one number on this card it is not. Written as a
+                    // fraction it cannot: 34.33 of 45.00 is visibly 76 %. The denominator is
+                    // `soc.learned_uah` because that is what the gauge divides by, so the
+                    // three figures on this card always agree.
+                    val fullAh = cfg.long("soc.learned_uah")?.let { it / 1_000_000.0 }
+                    Text(
+                        if (fullAh != null) {
+                            "${f(t.chargeAh, 2)} of ${String.format("%.2f", fullAh)} Ah   ·   "
+                        } else {
+                            "${f(t.chargeAh, 2)} Ah left   ·   "
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        state,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = stateColor(state),
+                    )
+                }
+                // The device's own estimate, as sent -- never computed here.
+                val est = when {
+                    state == "FULL" || state == "EMPTY" -> null
+                    t.tFullS != null -> "full in " + duration(t.tFullS!!)
+                    t.tEmptyS != null -> "empty in " + duration(t.tEmptyS!!)
+                    t.settleS != null ->
+                        "rested in " + String.format("%d:%02d", t.settleS!! / 60, t.settleS!! % 60)
+                    else -> null
+                }
+                if (est != null) {
+                    Text(est, style = MaterialTheme.typography.bodyMedium,
+                        fontFamily = FontFamily.Monospace)
+                }
+            }
+    }
 
-        Row(Modifier.fillMaxWidth()) {
-            Metric("VOLTS", f(t.volts, 3), Modifier.weight(1f))
-            Metric("AMPS", f(t.amps, 4), Modifier.weight(1f))
-        }
-        Row(Modifier.fillMaxWidth()) {
-            Metric("WATTS", f(t.watts, 2), Modifier.weight(1f))
-            Metric("RATE", t.fastHz?.let { String.format("%.1f Hz", it) } ?: "—",
-                Modifier.weight(1f))
-        }
+    val chart: @Composable () -> Unit = {
+            if (link == Link.Ready) {
+                HistoryChart(history)
+            }
+    }
 
-        Section("Gauge") {
-            KV("OCV estimate", f(t.ocvV, 3, " V"))
-            KV("Peukert factor", f(t.peukert, 3))
-            KV("Charge remaining", f(t.chargeAh, 3, " Ah"))
-            KV("State", state)
-        }
+    val metrics: @Composable () -> Unit = {
+            Row(Modifier.fillMaxWidth()) {
+                Metric("VOLTS", f(t.volts, 3), Modifier.weight(1f))
+                Metric("AMPS", f(t.amps, 4), Modifier.weight(1f))
+            }
+            Row(Modifier.fillMaxWidth()) {
+                Metric("WATTS", f(t.watts, 2), Modifier.weight(1f))
+                Metric("RATE", t.fastHz?.let { String.format("%.1f Hz", it) } ?: "—",
+                    Modifier.weight(1f))
+            }
+    }
 
-        Section("Diagnostics") {
-            KV("Shunt drop", f(t.shuntMv, 3, " mV"))
-            KV("Range", t.pga.ifBlank { "—" })
-            KV("Saturated", if (t.saturated) "YES" else "no")
-        }
+    val detail: @Composable () -> Unit = {
+            Section("Gauge") {
+                KV("OCV estimate", f(t.ocvV, 3, " V"))
+                KV("Peukert factor", f(t.peukert, 3))
+                KV("Charge remaining", f(t.chargeAh, 3, " Ah"))
+                KV("State", state)
+            }
 
-        Section("Environment") {
-            // Nulls are meaningful here: an empty CSV field means no sensor, and a BMP280
-            // has no humidity channel at all.
-            KV("Temperature", f(t.tempC, 2, " °C"))
-            KV("Humidity", t.humidPct?.let { f(it, 1, " %RH") } ?: "not available")
-            KV("Pressure", f(t.pressHpa, 2, " hPa"))
-        }
+            Section("Diagnostics") {
+                KV("Shunt drop", f(t.shuntMv, 3, " mV"))
+                KV("Range", t.pga.ifBlank { "—" })
+                KV("Saturated", if (t.saturated) "YES" else "no")
+            }
 
-        if (shake.firmware.isNotBlank()) {
-            Section("Device") {
-                KV("Firmware", shake.firmware)
-                KV("Protocol", shake.protocol?.toString() ?: "—")
-                KV("MAC", shake.mac)
+            Section("Environment") {
+                // Nulls are meaningful here: an empty CSV field means no sensor, and a BMP280
+                // has no humidity channel at all.
+                KV("Temperature", f(t.tempC, 2, " °C"))
+                KV("Humidity", t.humidPct?.let { f(it, 1, " %RH") } ?: "not available")
+                KV("Pressure", f(t.pressHpa, 2, " hPa"))
+            }
+
+            if (shake.firmware.isNotBlank()) {
+                Section("Device") {
+                    KV("Firmware", shake.firmware)
+                    KV("Protocol", shake.protocol?.toString() ?: "—")
+                    KV("MAC", shake.mac)
+                }
+            }
+    }
+
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        if (maxWidth >= 560.dp) {
+            /* Two columns, each scrolling on its own: the right one is twice the height
+             * of the left, and a shared scroll would drag the state of charge off the
+             * screen to reach the environment readings. */
+            Row(Modifier.fillMaxSize()) {
+                Column(
+                    Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    notices()
+                    socCard()
+                    metrics()
+                }
+                Column(
+                    Modifier.weight(1f).verticalScroll(rememberScrollState())
+                        .padding(top = 16.dp, end = 16.dp, bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    chart()
+                    detail()
+                }
+            }
+        } else {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                notices()
+                socCard()
+                chart()
+                metrics()
+                detail()
             }
         }
     }

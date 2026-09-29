@@ -8,7 +8,14 @@ A phone client for the battery monitor, speaking the Nordic-UART console describ
 [`../CLI.md`](../CLI.md) — protocol **3**. Everything the console exposes is reachable
 from here, in four tabs:
 
-- **Monitor:** SoC labelled with the battery chemistry, charge remaining written as a
+- **Monitor:** one column in portrait, **two side by side once the screen is at least
+  560 dp wide** -- a phone turned sideways or a tablet either way up. The left column
+  keeps the state of charge and the live volts/amps/watts, the right takes the history
+  chart and the gauge, diagnostics, environment and device detail, each column
+  scrolling on its own so reading the environment does not push the SoC off screen.
+  The split is on width rather than on the orientation flag: what matters is whether
+  two readable columns fit.
+  SoC is labelled with the battery chemistry, charge remaining written as a
   fraction of the capacity the percentage is taken against (`34.33 of 45.00 Ah` --
   alone, that first figure reads as the pack's capacity, which is the one thing it is
   not), the monitor's SoC history
