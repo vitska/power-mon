@@ -60,12 +60,13 @@ humidity and pressure on the line above it. **Tap the graph** to change the span
   steadily, and when it stops, the data has stopped. The link's state itself is the
   status text's colour instead (blue while searching, yellow while connecting or in
   setup, orange while pairing or with no data, green or cyan when it is working).
-  - Beside it is the packet rate and **the monitor's firmware version**, e.g.
-    `9/s 0.11.6`. A stalled stream shows `0/s`, where a resting battery's unchanging
-    numbers alone would not show it. Which firmware is answering decides what half of
-    this screen can show at all -- time estimates need 0.11.3, the history 0.9.0 -- and
-    it is otherwise only findable from the phone app. The remote's *own* version is on
-    its FIRMWARE UPDATE screen.
+  - Beside it, two lines: **this display's own version** on top in grey, and under it
+    **the monitor's firmware version followed by the packet rate**, e.g. `0.11.6 9/s`,
+    in the link's colour. Position tells them apart -- there is no room to label two
+    versions and a rate. A stalled stream shows `0/s`, where a resting battery's
+    unchanging numbers alone would not show it, and which monitor firmware is answering
+    decides what half of this screen can show at all (time estimates need 0.11.3, the
+    history 0.9.0).
   - A working link carries no status *word*: the packets ticking up say it. Encrypted
     versus merely connected is the colour -- **green** authenticated, **cyan** not.
   - A five-bar signal-strength antenna sits between the status text and the icon, from

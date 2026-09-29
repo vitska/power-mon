@@ -4,7 +4,9 @@
  * Layout, landscape 320 x 240:
  *
  *   +--------------------------------------------------------+  0
- *   | batmon-DCFA                      9/s 0.11.6  ...ll (o) |  header: tap -> Settings
+ *   | batmon-DCFA                        0.4.21   ...ll (o) |  header: this display's
+ *   |                                    0.11.6 9/s            |  version, the monitor's
+ *   |                                                          |  under it; tap -> Settings
  *   +----------------------------+---------------------------+ 22
  *   | STATE OF CHARGE            |  12.432 V                 |
  *   |  72.4 %                    |  -0.0089 A                |
@@ -30,6 +32,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -380,8 +383,8 @@ static void main_enter(void)
 
 static void main_draw(const link_model_t *m)
 {
-    static field_t f_name, f_status, f_soc, f_tlabel, f_time, f_v, f_a, f_w, f_mode, f_sub,
-        f_glabel, f_cap;
+    static field_t f_name, f_status, f_self, f_soc, f_tlabel, f_time, f_v, f_a, f_w,
+        f_mode, f_sub, f_glabel, f_cap;
     static int     bar_last = -2;   /* bricks lit at the last draw */
     static uint16_t bar_col;
     static uint16_t icon_last = 1;
@@ -429,13 +432,30 @@ static void main_draw(const link_model_t *m)
         rate_base = m->rx_packets;
         rate_t    = now;
     }
+    /*
+     * Two versions, because two firmwares are involved in everything on this screen and
+     * "which version is this" has two answers. THIS display's own goes on top, in grey:
+     * it is a property of the thing in your hand and never changes while you watch. The
+     * monitor's goes under it in the link's colour, with the packet rate after it --
+     * both are about the far end, and both stop meaning anything the moment the link
+     * does. Position is what tells them apart; there is no room in 84 pixels to label
+     * two version numbers and a rate.
+     */
+    static const char *self_ver;
+    if (!self_ver) {
+        self_ver = esp_app_get_description()->version;
+    }
+    char selfb[24];
+    snprintf(selfb, sizeof(selfb), "%.10s", self_ver);
+    field(&f_self, 196, 3, 84, 1, C_GREY, C_HEADER, selfb);
+
     char status[24];
-    if (live && m->firmware[0]) snprintf(status, sizeof(status), "%d/s %.8s", rate,
-                                         m->firmware);
+    if (live && m->firmware[0]) snprintf(status, sizeof(status), "%.8s %d/s", m->firmware,
+                                         rate);
     else if (live)              snprintf(status, sizeof(status), "%d/s", rate);
     else if (m->state == LINK_READY) snprintf(status, sizeof(status), "%s %d/s", st, rate);
     else                        snprintf(status, sizeof(status), "%s", st);
-    field(&f_status, 196, 8, 84, 1, sc, C_HEADER, status);
+    field(&f_status, 196, 12, 84, 1, sc, C_HEADER, status);
 
     /* The icon is always Bluetooth-blue -- state lives in the status text's colour
      * above, not in the icon -- and flashes white for every notification that
