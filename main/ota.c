@@ -32,7 +32,6 @@
 
 #include "esp_app_desc.h"
 #include "esp_log.h"
-#include "fuelgauge.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -109,19 +108,27 @@ static void on_probation_expired(void *arg)
 
 /*
  * Every deliberate restart goes through here -- `reboot`, the OTA reboot, the rollback
- * -- so this is the one place that has to write the gauge out first.
+ * -- so this is the one place that can give the rest of the firmware a chance to write
+ * out what it would otherwise lose.
  *
- * Its own policy saves every 300 s or half a percent of SoC, which is right for flash
- * endurance and wrong for the moment someone types `reboot`: the open capacity
- * measurement, the charge drawn into it and up to five minutes of counting would go,
- * and an OTA would quietly cost a learning span that had been building for hours.
- * A save here is one write per human action, which is free.
+ * A hook rather than a call to the gauge, because this file is compiled into the remote
+ * display too, and that board has no gauge to save. What the monitor registers is a
+ * flush of the fuel gauge: its own policy saves every 300 s or half a percent of SoC,
+ * which is right for flash endurance and wrong for the moment someone types `reboot` --
+ * the open capacity measurement and the charge drawn into it would go with it, and an
+ * OTA would quietly cost a learning span that had been building for hours.
  */
+static ota_pre_restart_fn s_pre_restart;
+
+void ota_set_pre_restart(ota_pre_restart_fn fn)
+{
+    s_pre_restart = fn;
+}
+
 static void save_state_for_restart(void)
 {
-    const esp_err_t err = fg_save();
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "gauge not saved before restart: %s", esp_err_to_name(err));
+    if (s_pre_restart) {
+        s_pre_restart();
     }
 }
 

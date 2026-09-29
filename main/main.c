@@ -440,6 +440,15 @@ static void sampler_task(void *arg)
  * of poor RF later, and it costs two lines to be correct from the start.
  * Verify the pin numbers against your board revision (DESIGN.md §2.1).
  */
+/* Registered with ota.c: see ota_set_pre_restart(). */
+static void save_gauge_before_restart(void)
+{
+    const esp_err_t err = fg_save();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "gauge not saved before restart: %s", esp_err_to_name(err));
+    }
+}
+
 static void init_antenna_pins(void)
 {
     const gpio_config_t io = {
@@ -514,6 +523,10 @@ void app_main(void)
     /* Early, so a new image's probation clock starts at boot rather than after sensor
      * bring-up -- which is exactly the part most likely to hang in a bad build. */
     ota_init();
+    /* Nothing restarts this board without the gauge being written first: `reboot`,
+     * an OTA and a rollback all go through ota.c, and its own 300 s save policy would
+     * otherwise drop the open capacity span and minutes of counting on the way down. */
+    ota_set_pre_restart(save_gauge_before_restart);
 
 #if CONFIG_BATMON_INIT_ANTENNA_PINS
     init_antenna_pins();

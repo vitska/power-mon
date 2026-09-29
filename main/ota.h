@@ -86,6 +86,16 @@ esp_err_t ota_rollback(void);
 /** Restarts after `ms`, so the reply saying so can still reach the client. */
 void ota_reboot_after(uint32_t ms);
 
+/**
+ * Called immediately before any deliberate restart -- `reboot`, the OTA reboot, a
+ * rollback -- for state that is held in RAM between periodic saves and would be lost.
+ *
+ * A hook because this module is shared with the remote display, which has nothing of
+ * the sort to write. The monitor registers a fuel-gauge flush.
+ */
+typedef void (*ota_pre_restart_fn)(void);
+void ota_set_pre_restart(ota_pre_restart_fn fn);
+
 void ota_get_status(ota_status_t *out);
 
 #ifdef __cplusplus
