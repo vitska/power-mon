@@ -257,18 +257,27 @@ static void draw_graph(void)
         last = c;
     }
 
-    /* Each column's line and fill take the colour of the gauge's state there, so the
-     * curve itself says when the pack was charging, full, discharging or resting. */
+    /*
+     * Each column's line and fill take the colour of the gauge's state there, so the
+     * curve itself says when the pack was charging, full, discharging or resting.
+     *
+     * Swapped to the panel's byte order HERE, once per column, because the band below
+     * is written straight into the DMA buffer: 284 swaps instead of 21 016, and the
+     * per-pixel copy that used to sit between this and the wire is gone entirely.
+     */
     static uint16_t lcol[GW], fcol[GW];
     for (int c = 0; c < GW; c++) {
-        lcol[c] = state_colour(scol[c]);
-        fcol[c] = dim565(lcol[c]);
+        const uint16_t line = state_colour(scol[c]);
+        lcol[c] = lcd_px(line);
+        fcol[c] = lcd_px(dim565(line));
     }
-    const uint16_t bg = C_PANEL, grid = C_DIM;
-    uint16_t *buf = lcd_strip();
+    const uint16_t bg = lcd_px(C_PANEL), grid = lcd_px(C_DIM);
     const int rows = LCD_STRIP_PX / GW;
     for (int y0 = 0; y0 < GH; y0 += rows) {
         const int h = (y0 + rows > GH) ? GH - y0 : rows;
+        /* Re-fetched every band: the buffers alternate, so the previous pointer now
+         * belongs to the transfer still on the wire. */
+        uint16_t *buf = lcd_strip();
         for (int r = 0; r < h; r++) {
             const int  y      = y0 + r;
             const bool gridln = (y == GH / 4 || y == GH / 2 || y == 3 * GH / 4);
@@ -282,7 +291,7 @@ static void draw_graph(void)
                 buf[r * GW + c] = px;
             }
         }
-        lcd_blit(GX, GY + y0, GW, h, buf);
+        lcd_blit_strip(GX, GY + y0, GW, h);
     }
     const char *msg = !h.supported ? "monitor firmware too old for history (< 0.9.0)"
                     : h.count == 0 ? "no history yet -- the monitor records one now and then"

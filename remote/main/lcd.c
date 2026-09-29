@@ -71,7 +71,6 @@ static SemaphoreHandle_t         s_done;
 static uint16_t                 *s_tx[2]; /* DMA buffers, byte-swapped pixels */
 static int                       s_buf;   /* the one free to fill; the other may be in flight */
 static bool                      s_busy;  /* a transfer is outstanding */
-static uint16_t                 *s_strip; /* caller-side strip buffer */
 
 /* The panel reads RGB565 most significant byte first; the ESP32 stores it the other
  * way round. Swapped once, on the way into the DMA buffer. */
@@ -149,8 +148,7 @@ void lcd_init(void)
 
     s_tx[0] = heap_caps_malloc(LCD_STRIP_PX * 2, MALLOC_CAP_DMA);
     s_tx[1] = heap_caps_malloc(LCD_STRIP_PX * 2, MALLOC_CAP_DMA);
-    s_strip = heap_caps_malloc(LCD_STRIP_PX * 2, MALLOC_CAP_8BIT);
-    assert(s_tx[0] && s_tx[1] && s_strip);
+    assert(s_tx[0] && s_tx[1]);
 
     cmd(0x01, NULL, 0); /* SWRESET */
     vTaskDelay(pdMS_TO_TICKS(150));
@@ -175,9 +173,25 @@ void lcd_init(void)
     ESP_LOGI(TAG, "%s panel up, MADCTL 0x%02X", INVERT ? "ST7789" : "ILI9341", MADCTL);
 }
 
+/*
+ * The buffer that is free to draw into: the one send_px() is NOT about to transmit.
+ * Valid until the next lcd_blit_strip(), after which the buffers have swapped and this
+ * must be called again.
+ */
 uint16_t *lcd_strip(void)
 {
-    return s_strip;
+    return s_tx[s_buf];
+}
+
+void lcd_blit_strip(int x, int y, int w, int h)
+{
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+    const size_t total = (size_t)w * h;
+    assert(total <= LCD_STRIP_PX);
+    set_window(x, y, w, h);
+    send_px(total, true); /* already byte-swapped by the caller, and already in place */
 }
 
 void lcd_fill(int x, int y, int w, int h, uint16_t color)

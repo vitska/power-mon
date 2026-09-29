@@ -37,11 +37,32 @@ void lcd_fill(int x, int y, int w, int h, uint16_t color);
 /** Draws w x h pixels of RGB565 from `px`, row-major. Blocks until sent. */
 void lcd_blit(int x, int y, int w, int h, const uint16_t *px);
 
-/** The shared strip buffer, LCD_STRIP_PX pixels, for callers that render their own
- *  content a strip at a time and hand it to lcd_blit(). Byte order is handled by
- *  lcd_blit(); write plain RGB565 values. */
+/*
+ * ZERO-COPY STRIP RENDERING, for callers that draw their own content a band at a time.
+ *
+ * lcd_strip() hands back the DMA buffer that is free right now; draw straight into it
+ * and lcd_blit_strip() sends it without copying anything. That is the whole point: a
+ * full-width band is 6400 pixels, and copying and byte-swapping it costs more than a
+ * tenth of a millisecond that the panel is not doing anything with.
+ *
+ * The price is that the CALLER swaps the byte order, with lcd_px(). Do it per colour
+ * rather than per pixel -- a graph has a handful of colours and thousands of pixels --
+ * and the swap disappears from the cost entirely.
+ *
+ * Call lcd_strip() AGAIN after every lcd_blit_strip(): the buffers alternate, so the
+ * pointer changes each time. Holding the old one writes into a transfer in flight.
+ */
 #define LCD_STRIP_PX (LCD_W * 20)
 uint16_t *lcd_strip(void);
+
+/** Sends w x h pixels (at most LCD_STRIP_PX) from the buffer lcd_strip() just gave. */
+void lcd_blit_strip(int x, int y, int w, int h);
+
+/** RGB565 in the panel's byte order, for writing into lcd_strip(). */
+static inline uint16_t lcd_px(uint16_t c)
+{
+    return (uint16_t)((c >> 8) | (c << 8));
+}
 
 /** 5x7 font scaled by `scale` (6*scale px per character, 8*scale high), drawn with
  *  its background so that redrawing a field overwrites the old text. */
