@@ -13,8 +13,8 @@
  *   |  3d 04h                    |  FLOODED 6S               |
  *   |                            |  CAP 44.0AH (43.97)       |
  *   +----------------------------+---------------------------+ 148
- *   | SOC 24 h              24.1C 46.2% 1003.5hPa      100      |
- *   |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~    50      |  tap: 1 h / 6 h / 24 h
+ *   | SOC 24h /6h           24.1C 46.2% 1003.5hPa      100      |
+ *   |  ~~~~:~~~~:~~~~:~~~~:~~~~:~~~~:~~~~:~~~~:~~~    50      |  tap: full / half / quarter
  *   |                                                  0      |  graph: the monitor's own
  *                                                                history (`hist`)
  *   +--------------------------------------------------------+ 240
@@ -204,6 +204,23 @@ static uint16_t dim565(uint16_t c)
                       ((c & 31) / 3));
 }
 
+/*
+ * How many hours between vertical grid lines, for a span of that many hours: the
+ * smallest step from the list that leaves at most four divisions. The span itself comes
+ * from the monitor's interval and ring size, so the grid follows the recording
+ * frequency without anything here knowing what it is.
+ */
+static int hour_step(int span_h)
+{
+    static const int STEPS[] = {1, 2, 3, 4, 6, 8, 12, 24, 48};
+    for (size_t i = 0; i < sizeof(STEPS) / sizeof(STEPS[0]); i++) {
+        if (span_h <= STEPS[i] * 4) {
+            return STEPS[i];
+        }
+    }
+    return span_h;
+}
+
 /* What the monitor's ring covers, in hours, rounded down and at least one: the widest
  * span worth offering. 0 until a fetch has said. */
 static int hist_cover_h(const link_hist_t *h)
@@ -277,6 +294,21 @@ static void draw_graph(void)
      * that swaps is a colour nobody chose. */
     const uint16_t bg = C_PANEL;
     const uint16_t bg_px = lcd_px(bg), grid_px = lcd_px(C_DIM);
+
+    /*
+     * Vertical divisions on whole hours back from now, so the horizontal axis can be
+     * read rather than guessed at. One column each, marked in a lookup rather than
+     * recomputed per pixel: the inner loop below runs 21 016 times.
+     */
+    static uint8_t vgrid[GW];
+    memset(vgrid, 0, sizeof(vgrid));
+    const int step_h = hour_step(s_span_h > 0 ? s_span_h : 48);
+    for (int64_t t = step_h * 3600LL; t < span_s; t += step_h * 3600LL) {
+        const int c = GW - 1 - (int)(t * (GW - 1) / span_s);
+        if (c >= 0 && c < GW) {
+            vgrid[c] = 1;
+        }
+    }
     const int rows = LCD_STRIP_PX / GW;
     for (int y0 = 0; y0 < GH; y0 += rows) {
         const int h = (y0 + rows > GH) ? GH - y0 : rows;
@@ -287,7 +319,9 @@ static void draw_graph(void)
             const int  y      = y0 + r;
             const bool gridln = (y == GH / 4 || y == GH / 2 || y == 3 * GH / 4);
             for (int c = 0; c < GW; c++) {
-                uint16_t px = (gridln && (c & 3) == 0) ? grid_px : bg_px;
+                uint16_t px = ((gridln && (c & 3) == 0) || (vgrid[c] && (y & 3) == 0))
+                                  ? grid_px
+                                  : bg_px;
                 const int yc = ycol[c];
                 if (yc >= 0) {
                     if (y == yc || y == yc + 1) px = lcol[c];
@@ -314,8 +348,12 @@ static void main_enter(void)
     lcd_fill(GX, GY, GW, GH, C_PANEL);
     lcd_text(6, 28, "STATE OF CHARGE", 1, C_GREY, C_BLACK);
     lcd_text(156, 64, "%", 3, C_WHITE, C_BLACK);
+    /* Every quarter, matching the grid lines drawn across the panel: the curve is read
+     * against these, and with only 100/50/0 the two lines in between were unlabelled. */
     lcd_text(GX + GW + 4, GY, "100", 1, C_GREY, C_BLACK);
+    lcd_text(GX + GW + 4, GY + GH / 4 - 4, "75", 1, C_DIM, C_BLACK);
     lcd_text(GX + GW + 4, GY + GH / 2 - 4, "50", 1, C_GREY, C_BLACK);
+    lcd_text(GX + GW + 4, GY + 3 * GH / 4 - 4, "25", 1, C_DIM, C_BLACK);
     lcd_text(GX + GW + 4, GY + GH - 8, "0", 1, C_GREY, C_BLACK);
     draw_graph();
 }
@@ -569,7 +607,9 @@ static void main_draw(const link_model_t *m)
     static field_t f_env;
     if (m->state == LINK_READY) {
         if (s_span_h > 0) {
-            snprintf(b, sizeof(b), "SOC %d h", s_span_h);
+            /* The grid step belongs next to the span: five unlabelled verticals are a
+             * decoration, and there is no room under a 74-pixel graph for tick marks. */
+            snprintf(b, sizeof(b), "SOC %dh /%dh", s_span_h, hour_step(s_span_h));
         } else {
             snprintf(b, sizeof(b), "SOC"); /* no history fetched yet: no span to name */
         }

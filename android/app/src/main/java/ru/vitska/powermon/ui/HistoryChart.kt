@@ -2,7 +2,9 @@ package ru.vitska.powermon.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -14,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
@@ -63,11 +66,35 @@ fun HistoryChart(h: SocHistory?) {
                     }
                 }
                 Spacer(Modifier.height(4.dp))
-                Chart(h, span)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("-$span h", style = MaterialTheme.typography.labelSmall)
-                    Text("-${span / 2} h", style = MaterialTheme.typography.labelSmall)
-                    Text("now", style = MaterialTheme.typography.labelSmall)
+                val step = hourStep(span)
+                Row(Modifier.fillMaxWidth()) {
+                    // Percentages down the left, against the same quarters the grid is
+                    // drawn at. SpaceBetween puts the first and last hard against the
+                    // ends, which is where 100 and 0 belong.
+                    Column(
+                        Modifier.width(AXIS_W).height(CHART_H),
+                        verticalArrangement = Arrangement.SpaceBetween,
+                        horizontalAlignment = Alignment.End,
+                    ) {
+                        listOf(100, 75, 50, 25, 0).forEach {
+                            Text("$it", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    Chart(h, span, step)
+                }
+                // Hour labels under the plot only, so they line up with the verticals.
+                Row(Modifier.fillMaxWidth()) {
+                    Spacer(Modifier.width(AXIS_W + 4.dp))
+                    Row(Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceBetween) {
+                        val ticks = span / step
+                        (ticks downTo 0).forEach { t ->
+                            Text(
+                                if (t == 0) "now" else "-${t * step}h",
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
                 }
                 if (h.states.isNotEmpty()) {
                     // What the line and fill colours mean.
@@ -83,8 +110,19 @@ fun HistoryChart(h: SocHistory?) {
     }
 }
 
+/**
+ * Hours between vertical grid lines: the smallest step that leaves at most four
+ * divisions. The span comes from the monitor's recording interval and ring size, so the
+ * grid follows how often the device records without this knowing that it does.
+ */
+private fun hourStep(spanH: Int): Int =
+    listOf(1, 2, 3, 4, 6, 8, 12, 24, 48).firstOrNull { spanH <= it * 4 } ?: spanH
+
+private val CHART_H = 140.dp
+private val AXIS_W = 22.dp
+
 @Composable
-private fun Chart(h: SocHistory, spanH: Int) {
+private fun Chart(h: SocHistory, spanH: Int, stepH: Int) {
     val line = MaterialTheme.colorScheme.primary
     val grid = MaterialTheme.colorScheme.outlineVariant
     val ageNow = h.ageNowS()
@@ -92,7 +130,7 @@ private fun Chart(h: SocHistory, spanH: Int) {
     val stateLine = listOf('C', 'A', 'F', 'D', 'E', 'S', 'R')
         .associateWith { c -> stateColor(stateName(c)!!) }
 
-    Canvas(Modifier.fillMaxWidth().height(140.dp)) {
+    Canvas(Modifier.fillMaxWidth().height(CHART_H)) {
         val w = size.width
         val ht = size.height
         val span = spanH * 3600.0
@@ -104,6 +142,17 @@ private fun Chart(h: SocHistory, spanH: Int) {
                 grid, Offset(0f, y), Offset(w, y), strokeWidth = 1f,
                 pathEffect = if (q == 0 || q == 4) null else PathEffect.dashPathEffect(floatArrayOf(6f, 6f)),
             )
+        }
+        // And on whole hours back from now, so a feature can be placed in time rather
+        // than only in shape. The right edge is now and carries no line of its own.
+        var t = stepH
+        while (t < spanH) {
+            val x = w * (1f - t.toFloat() / spanH)
+            drawLine(
+                grid, Offset(x, 0f), Offset(x, ht), strokeWidth = 1f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)),
+            )
+            t += stepH
         }
 
         /*
