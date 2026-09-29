@@ -14,6 +14,7 @@ Verified against a 12 V / 44 A·h flooded lead-acid battery.
 |---|---|
 | [DESIGN.md](DESIGN.md) | why everything is the way it is |
 | [CALIBRATION.md](CALIBRATION.md) | bench procedure: meter readings → firmware constants |
+| [CAPACITY.md](CAPACITY.md) | how the gauge measures the pack's real capacity, and when |
 | [CLI.md](CLI.md) | command and protocol reference, sufficient to write a client |
 | [android/README.md](android/README.md) | the phone app, **Battery monitor**: monitor, configure, console, firmware updates. The APK is on the `app-v…` GitHub releases |
 | [remote/README.md](remote/README.md) | the touch-screen remote display on the ESP32-2432S028, a second firmware |

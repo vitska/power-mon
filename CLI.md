@@ -611,6 +611,9 @@ lead-acid while charging) needs the divider (`curve v divider`).
 
 ### Fuel gauge
 
+How the learned capacity is arrived at -- what counts as a reference point, the depth
+a span needs, and why a board may never learn -- is [CAPACITY.md](CAPACITY.md).
+
 | Command | Args | Notes |
 |---|---|---|
 | `soc` | — | SoC, state, charge, SoH, learning, Peukert, endpoints, all config |

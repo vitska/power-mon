@@ -1024,17 +1024,24 @@ the OCV table is less accurate than the counter. **Gated by chemistry:** for LiF
 OCV curve is famously flat between roughly 20 % and 80 %, so `cfg.ocv_valid_band`
 suppresses re-sync in that region.
 
-**D. Capacity learning (SoH)** — on a full→empty or empty→full excursion of depth ≥
-`cfg.learn_min_depth` (60 %):
+**D. Capacity learning (SoH)** — on a DISCHARGE span between two anchors of depth ≥
+`cfg.learn_min_depth`:
 
 ```
 measured_cap      = |charge counted between anchors| / (soc_hi − soc_lo)
-full_capacity_uAh = IIR(full_capacity_uAh, measured_cap, α = 0.25)
+full_capacity_uAh = IIR(full_capacity_uAh, measured_cap, α = blend × depth/500)
 soh_permille      = full_capacity_uAh × 1000 / cfg.design_capacity_uAh
 ```
 
-Clamped to 40–130 % of design capacity. A result outside that range is a measurement
+The first measurement replaces the nameplate outright rather than blending toward it;
+after that α is weighted by the span's depth, since a deeper span is better evidence.
+Charging during a span disqualifies it: lead-acid puts back less than it takes.
+
+Clamped to 5–150 % of design capacity. A result outside that range is a measurement
 fault, not a battery fault, and is rejected with a log entry rather than accepted.
+
+The implemented mechanism in full — what anchors a span, the gates a span must pass,
+and why a board may never learn — is [CAPACITY.md](CAPACITY.md).
 
 **Cycle counting:** `cycle_charge_uAs` accumulates discharge magnitude only; each time it
 passes one design capacity, `cycle_count++` and it wraps. This is the standard
