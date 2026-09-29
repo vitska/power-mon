@@ -271,7 +271,12 @@ static void draw_graph(void)
         lcol[c] = lcd_px(line);
         fcol[c] = lcd_px(dim565(line));
     }
-    const uint16_t bg = lcd_px(C_PANEL), grid = lcd_px(C_DIM);
+    /* Two forms of the same colour, deliberately named apart: the _px pair goes into
+     * the DMA buffer below and is already byte-swapped, while lcd_text() further down
+     * takes an ordinary RGB565 and swaps it itself. Passing a swapped value to an API
+     * that swaps is a colour nobody chose. */
+    const uint16_t bg = C_PANEL;
+    const uint16_t bg_px = lcd_px(bg), grid_px = lcd_px(C_DIM);
     const int rows = LCD_STRIP_PX / GW;
     for (int y0 = 0; y0 < GH; y0 += rows) {
         const int h = (y0 + rows > GH) ? GH - y0 : rows;
@@ -282,7 +287,7 @@ static void draw_graph(void)
             const int  y      = y0 + r;
             const bool gridln = (y == GH / 4 || y == GH / 2 || y == 3 * GH / 4);
             for (int c = 0; c < GW; c++) {
-                uint16_t px = (gridln && (c & 3) == 0) ? grid : bg;
+                uint16_t px = (gridln && (c & 3) == 0) ? grid_px : bg_px;
                 const int yc = ycol[c];
                 if (yc >= 0) {
                     if (y == yc || y == yc + 1) px = lcol[c];
