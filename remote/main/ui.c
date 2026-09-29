@@ -293,7 +293,7 @@ static void draw_graph(void)
      * takes an ordinary RGB565 and swaps it itself. Passing a swapped value to an API
      * that swaps is a colour nobody chose. */
     const uint16_t bg = C_PANEL;
-    const uint16_t bg_px = lcd_px(bg), grid_px = lcd_px(C_DIM);
+    const uint16_t bg_px = lcd_px(bg), grid_px = lcd_px(C_GRID);
 
     /*
      * Vertical divisions on whole hours back from now, so the horizontal axis can be
@@ -319,7 +319,9 @@ static void draw_graph(void)
             const int  y      = y0 + r;
             const bool gridln = (y == GH / 4 || y == GH / 2 || y == 3 * GH / 4);
             for (int c = 0; c < GW; c++) {
-                uint16_t px = ((gridln && (c & 3) == 0) || (vgrid[c] && (y & 3) == 0))
+                /* Every other pixel, not every fourth: at 1-in-4 on a 284-pixel row
+                 * the eye reads dust rather than a line. */
+                uint16_t px = ((gridln && (c & 1) == 0) || (vgrid[c] && (y & 1) == 0))
                                   ? grid_px
                                   : bg_px;
                 const int yc = ycol[c];
@@ -351,9 +353,9 @@ static void main_enter(void)
     /* Every quarter, matching the grid lines drawn across the panel: the curve is read
      * against these, and with only 100/50/0 the two lines in between were unlabelled. */
     lcd_text(GX + GW + 4, GY, "100", 1, C_GREY, C_BLACK);
-    lcd_text(GX + GW + 4, GY + GH / 4 - 4, "75", 1, C_DIM, C_BLACK);
+    lcd_text(GX + GW + 4, GY + GH / 4 - 4, "75", 1, C_GREY, C_BLACK);
     lcd_text(GX + GW + 4, GY + GH / 2 - 4, "50", 1, C_GREY, C_BLACK);
-    lcd_text(GX + GW + 4, GY + 3 * GH / 4 - 4, "25", 1, C_DIM, C_BLACK);
+    lcd_text(GX + GW + 4, GY + 3 * GH / 4 - 4, "25", 1, C_GREY, C_BLACK);
     lcd_text(GX + GW + 4, GY + GH - 8, "0", 1, C_GREY, C_BLACK);
     draw_graph();
 }

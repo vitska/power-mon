@@ -20,6 +20,9 @@
 #define C_WHITE   RGB(255, 255, 255)
 #define C_GREY    RGB(120, 120, 120)
 #define C_DIM     RGB(50, 50, 55)
+/* The graph's grid. C_DIM against C_PANEL is a difference of a few counts in each
+ * channel -- invisible on a TN panel at any angle but straight on. */
+#define C_GRID    RGB(78, 90, 115)
 #define C_PANEL   RGB(22, 26, 34)
 #define C_HEADER  RGB(30, 44, 70)
 #define C_GREEN   RGB(60, 220, 90)
