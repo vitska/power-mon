@@ -8,7 +8,7 @@
  *   +----------------------------+---------------------------+ 22
  *   | STATE OF CHARGE            |  12.432 V                 |
  *   |  72.4 %                    |  -0.0089 A                |
- *   |  [##.##.##.##.##|--.--.--] |  -0.110 W                 |
+ *   |  [##.##.##.##.##|##.##.--.--.--] |  -0.110 W           |
  *   | TIME TO EMPTY              |  DISCHARGE   (device state)|
  *   |  3d 04h                    |  FLOODED 6S               |
  *   |                            |  CAP 44.0AH (43.97)       |
@@ -416,22 +416,24 @@ static void main_draw(const link_model_t *m)
     field(&f_soc, 6, 40, 150, 6, soc_c, C_BLACK, b);
 
     /*
-     * Ten bricks, one per 10 %. A brick lights only when its whole tenth is in the
-     * pack -- a gauge that rounds up is a gauge that strands someone -- so 76.9 %
-     * lights seven and the digits above carry the rest. The one exception is the
-     * bottom: a pack at 9 % would light nothing and look identical to a flat one, and
-     * those are not the same thing, so anything above zero keeps one brick. That is
-     * also what the low-SoC blink needs to blink.
+     * Ten bricks, one per 10 %, lit to the NEAREST tenth rather than the one below.
+     * Truncating cost the tenth brick at 99 %, and a pack one percent off full that
+     * displays as nine tenths reads as a fault in the gauge -- the eye checks a full
+     * pack against "all ten lit", not against the digits. Rounding puts each brick's
+     * boundary in the middle of its band instead: the top one goes out below 95 %, the
+     * next below 85, and so on down to the first below 5.
+     *
+     * The floor of one brick survives that: a pack at 2 % would round to none and look
+     * identical to a flat one, and those are not the same thing. It is also what the
+     * sub-10 % blink needs in order to blink.
      *
      * Unlit bricks are drawn dim rather than left black: the ten slots stay visible,
      * so the lit ones read as a proportion at a glance instead of as a bar of unknown
      * length.
      */
-    const int lit = !have_soc         ? -1
-                    : soc >= 99.95f   ? SOC_BRICKS
-                    : soc <= 0.0f     ? 0
-                    : (int)(soc / 10.0f) > 0 ? (int)(soc / 10.0f)
-                                             : 1;
+    int lit = !have_soc ? -1 : (int)((soc + 5.0f) / 10.0f);
+    if (lit > SOC_BRICKS) lit = SOC_BRICKS;
+    if (have_soc && lit == 0 && soc > 0.0f) lit = 1;
     if (s_full || lit != bar_last || bar_col != soc_c) {
         lcd_fill(6, 96, 164, 12, C_GREY);   /* a one-pixel frame around the slots */
         lcd_fill(7, 97, 162, 10, C_BLACK);
