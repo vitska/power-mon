@@ -319,15 +319,24 @@ static void draw_graph(void)
             const int  y      = y0 + r;
             const bool gridln = (y == GH / 4 || y == GH / 2 || y == 3 * GH / 4);
             for (int c = 0; c < GW; c++) {
-                /* Every other pixel, not every fourth: at 1-in-4 on a 284-pixel row
-                 * the eye reads dust rather than a line. */
-                uint16_t px = ((gridln && (c & 1) == 0) || (vgrid[c] && (y & 1) == 0))
-                                  ? grid_px
-                                  : bg_px;
+                uint16_t px = bg_px;
                 const int yc = ycol[c];
                 if (yc >= 0) {
                     if (y == yc || y == yc + 1) px = lcol[c];
                     else if (y > yc)            px = fcol[c];
+                }
+                /*
+                 * The grid goes on LAST, over the fill and the curve alike. It is the
+                 * scale the curve is read against, and a scale that disappears under
+                 * the thing it measures is no scale at all -- which is precisely where
+                 * it was, since the fill covers everything below the line and that is
+                 * most of the panel on a charged pack.
+                 *
+                 * Every other pixel, not every fourth: at 1-in-4 across 284 pixels the
+                 * eye reads dust rather than a line.
+                 */
+                if ((gridln && (c & 1) == 0) || (vgrid[c] && (y & 1) == 0)) {
+                    px = grid_px;
                 }
                 buf[r * GW + c] = px;
             }
