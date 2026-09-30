@@ -411,6 +411,8 @@ fun ConfigureScreen(vm: MonitorViewModel) {
         }
 
         if (page == CfgPage.BATTERY) Section("Battery") {
+            BatteryLife(cfg)
+            Spacer(Modifier.height(12.dp))
             BatteryPicker(
                 currentKey = cfg.str("battery.chem"),
                 currentCells = cfg.str("battery.cells"),
@@ -967,7 +969,9 @@ private fun summary(p: CfgPage, cfg: ConfigState): String? = when (p) {
             ", " + (cfg.str("shunt.loc") ?: "?") + ", " + (cfg.str("shunt.roles") ?: "")
     }
     CfgPage.BATTERY -> cfg.str("battery.chem")?.let { c ->
-        c.uppercase() + " " + (cfg.str("battery.cells") ?: "?") + "S"
+        c.uppercase() + " " + (cfg.str("battery.cells") ?: "?") + "S" +
+            (cfg.micro("soc.cap_uah", 0)?.let { ", $it Ah" } ?: "") +
+            (cfg.int("soc.cycles")?.let { ", $it cycles" } ?: "")
     }
     CfgPage.GAUGE -> cfg.micro("soc.cap_uah", 1)?.let { cap ->
         cap + " Ah nameplate, " + (cfg.micro("soc.learned_uah", 2) ?: "?") + " measured" +
@@ -1098,3 +1102,47 @@ private fun LearningState(cfg: ConfigState, t: Telemetry) {
 
 private fun pct(permille: Int): String =
     if (permille % 10 == 0) "${permille / 10} %" else String.format("%.1f %%", permille / 10.0)
+
+/**
+ * The pack's black box: what it is, what it was sold as, what it has measured, and how
+ * hard it has been worked. The device keeps all of it in flash and restores it at every
+ * boot, whatever caused the boot -- `soc reset` clears the count and the learning, not
+ * these.
+ *
+ * Shown with the battery's identity rather than on a page of its own, because none of
+ * it means anything without knowing which pack it is about: 300 cycles is a long life
+ * for a flooded lead-acid and barely run-in for LiFePO4.
+ */
+@Composable
+private fun BatteryLife(cfg: ConfigState) {
+    val design = cfg.micro("soc.cap_uah", 1) ?: return
+    val learned = cfg.micro("soc.learned_uah", 2)
+    val learns = cfg.int("soc.learn_count")
+    val soh = cfg.long("soc.cap_uah")?.takeIf { it > 0 }?.let { d ->
+        cfg.long("soc.learned_uah")?.let { l -> (l * 100 / d).toInt() }
+    }
+
+    Text("THIS PACK, SINCE IT WAS FITTED", style = MaterialTheme.typography.labelSmall)
+    KVGrid(
+        "Nameplate" to "$design Ah",
+        "Measured" to ((learned?.let { "$it Ah" } ?: "—") +
+            (if (learns == 0) "  (not yet)" else "")),
+        "State of health" to (if (learns == 0 || soh == null) "—" else "$soh %"),
+        // Equivalent full cycles: ten 10 % discharges are one, so the number is
+        // comparable with a datasheet's cycle-life curve rather than with a count of
+        // times someone plugged a charger in.
+        "Cycles" to (cfg.int("soc.cycles")?.let { c ->
+            val frac = (cfg.int("soc.cycle_permille") ?: 0) / 100
+            "$c.$frac equivalent full"
+        } ?: "—"),
+        "Charged in" to (cfg.micro("soc.in_uah", 1)?.let { "$it Ah" } ?: "—"),
+        "Drawn out" to (cfg.micro("soc.out_uah", 1)?.let { "$it Ah" } ?: "—"),
+    )
+    if (cfg.int("soc.cycles") == null) {
+        Text(
+            "Cycle and throughput counters need firmware 0.11.15 or later.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}

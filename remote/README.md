@@ -78,7 +78,7 @@ humidity and pressure on the line above it. **Tap the graph** to change the span
     this connection's own RSSI (read locally every second, not a round trip to the
     board): 5 bars ≥ −60 dBm down to 1 bar at −100 dBm.
 
-**Settings** (tap the header). Five rows:
+**Settings** (tap the header). Seven rows:
 
 - **Board**: opens Devices, to connect to a different monitor.
 - **Zero current**: `cal zero i`. The load must be disconnected. About 35 s.
@@ -88,6 +88,13 @@ humidity and pressure on the line above it. **Tap the graph** to change the span
   (`cal top i`). At least 10 mA, measured in the same direction as the board. About 17 s.
 - **Measured voltage**: the same for voltage (`cal top v`). Take the reading at rest, with
   no load. About 17 s.
+- **Firmware update**: puts this display in range of the phone app (see below).
+- **Battery log**: the pack's black box, as the monitor has recorded it -- chemistry and
+  cells, the nameplate against the measured capacity, state of health, equivalent full
+  cycles, and the lifetime amp-hours in and out. Every figure is the monitor's, kept in
+  its flash across every kind of restart; nothing here is computed on the remote, since
+  two devices watching one pack must not arrive at two histories. Needs monitor firmware
+  0.11.15 for the cycle and throughput counters.
 
 The measured values use a keypad with a decimal point and a sign toggle. **USE** fills in
 the board's own live reading as a starting point to type over. Every calibration goes

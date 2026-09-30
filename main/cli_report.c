@@ -392,6 +392,10 @@ int cmd_config(int argc, char **argv)
          * measurement. Without this a client has to guess from the two being equal,
          * which is also what a pack that measured exactly its nameplate looks like. */
         printf("soc.learn_count=%lu\n", (unsigned long)st.learn_count);
+        printf("soc.cycles=%lu\n", (unsigned long)st.cycles);
+        printf("soc.cycle_permille=%lu\n", (unsigned long)st.cycle_permille);
+        printf("soc.in_uah=%ld\n", (long)(st.cum_in_uas / 3600));
+        printf("soc.out_uah=%ld\n", (long)(st.cum_out_uas / 3600));
         printf("soc.last_learn_uah=%lu\n", (unsigned long)st.last_learn_uah);
         /* The OPEN span, so a client can say when the next measurement will happen
          * rather than only that none has. have_ref 0 means no span is open at all:

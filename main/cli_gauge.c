@@ -314,6 +314,57 @@ int cmd_hist(int argc, char **argv)
     return 0;
 }
 
+/* --- the black box ------------------------------------------------------------ */
+
+/*
+ * What the pack has been through, in one place: what it is, what it was sold as, what
+ * it has measured, and how hard it has been worked.
+ *
+ * Separate from `soc`, which answers "where is it now" and is read constantly. This
+ * answers "what has it been through", changes over months, and is the thing worth
+ * writing down when a battery is replaced. Everything here survives every kind of
+ * restart -- it is held in the gauge's own NVS namespace, written on the periodic
+ * policy and again before any deliberate reboot.
+ */
+int cmd_life(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+
+    fg_status_t st;
+    fg_get(&st);
+    const fg_config_t        c = fg_get_config();
+    const fg_chem_profile_t *p = fg_chem_profile((fg_chem_t)c.chemistry);
+    char b1[24], b2[24], b3[24];
+
+    printf("battery      %s, %u cells in series\n", p ? p->name : "unknown",
+           (unsigned)c.cells);
+    printf("nameplate    %s Ah  (%s V at 0 %%, %s V at 100 %%)\n",
+           fixed_fmt(b1, sizeof(b1), st.design_capacity_uah, 1000000, 1),
+           FMT_V(b2, c.v_0pct_uv), FMT_V(b3, c.v_100pct_uv));
+    printf("measured     %s Ah\n",
+           fixed_fmt(b1, sizeof(b1), st.full_capacity_uah, 1000000, 2));
+    if (st.learn_count == 0) {
+        printf("             not measured yet -- that is the nameplate copied\n");
+    } else {
+        printf("             from %lu measurement%s, last raw %s Ah\n",
+               (unsigned long)st.learn_count, st.learn_count == 1 ? "" : "s",
+               fixed_fmt(b1, sizeof(b1), st.last_learn_uah, 1000000, 2));
+    }
+    printf("health       %lu %%   (measured / nameplate)\n",
+           (unsigned long)((uint64_t)st.full_capacity_uah * 100 /
+                           (st.design_capacity_uah ? st.design_capacity_uah : 1)));
+    printf("cycles       %lu.%lu equivalent full cycles\n",
+           (unsigned long)st.cycles, (unsigned long)(st.cycle_permille / 100));
+    printf("             (lifetime discharge / nameplate: ten 10 %% draws are one)\n");
+    printf("throughput   %s Ah in, %s Ah out, lifetime\n",
+           fixed_fmt(b1, sizeof(b1), st.cum_in_uas / 3600, 1000000, 3),
+           fixed_fmt(b2, sizeof(b2), st.cum_out_uas / 3600, 1000000, 3));
+    printf("\n");
+    printf("Kept in flash and restored at every boot, whatever caused it.\n");
+    printf("'soc reset' clears the count and the learning, NOT these.\n");
+    return 0;
+}
+
 /* --- battery chemistry ------------------------------------------------------- */
 
 static void battery_show(void)

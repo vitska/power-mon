@@ -119,6 +119,22 @@ In order of likelihood:
 
 ---
 
+## The lifetime record
+
+`life` on the console prints the pack's whole history in one place: its chemistry and
+cell count, the nameplate, the measured capacity and the state of health between them,
+the equivalent full cycles, and the lifetime amp-hours in and out. The app carries it on
+Configure - Battery, the remote on Settings - BATTERY LOG.
+
+**Cycles are equivalent full cycles**: lifetime discharge divided by the *nameplate*
+capacity, so ten 10 % discharges count as one and the number can be read against a
+datasheet's cycle-life curve. Against the nameplate rather than the measured capacity,
+because the measured one shrinks as the pack ages and a shrinking denominator would
+count cycles faster the older the battery got.
+
+None of it is cleared by `soc reset`, which forgets the count and the learning. It is
+the record of a physical object, and it outlives every opinion the gauge holds about it.
+
 ## What survives a restart
 
 Everything the measurement needs is in flash: the open span (where it started and how

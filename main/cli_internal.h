@@ -74,6 +74,7 @@ int cmd_ver(int argc, char **argv);
 
 int cmd_soc(int argc, char **argv);
 int cmd_battery(int argc, char **argv);
+int cmd_life(int argc, char **argv);
 int cmd_hist(int argc, char **argv);
 
 int cmd_cal(int argc, char **argv);

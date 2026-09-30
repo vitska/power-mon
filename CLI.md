@@ -279,8 +279,15 @@ protocol bump, and only a change to an existing key's *meaning* is breaking.
 Some keys are state rather than settings, included because a client showing a setting
 usually wants them in the same breath: `soc.permille`, `soc.state`, `soc.voltage_only`,
 `soc.learned_uah`, `soc.learn_count`, `soc.last_learn_uah`, `soc.have_ref`,
-`soc.ref_permille`, `soc.span_uah`, `soc.rest_ua`, `shunt.roles`, `sense.pga`,
+`soc.ref_permille`, `soc.span_uah`, `soc.rest_ua`, `soc.cycles`,
+`soc.cycle_permille`, `soc.in_uah`, `soc.out_uah`, `shunt.roles`, `sense.pga`,
 `cal.stored`, `ble.conns`, `ble.bonds`, `profile.pair_us`.
+
+The last four are the pack's lifetime record, and they are **not** cleared by
+`soc reset`: `soc.cycles` counts equivalent full cycles (lifetime discharge divided by
+the nameplate capacity, so ten 10 % draws are one), `soc.cycle_permille` is how far into
+the next one, and `soc.in_uah` / `soc.out_uah` are the raw coulombs that have passed
+through the shunt since the pack was fitted. From 0.11.15.
 
 The three span keys are the open capacity measurement, enough to tell someone what has
 to happen next (CAPACITY.md): `soc.have_ref` 0 means no span is open and the next full,
@@ -648,6 +655,7 @@ a span needs, and why a board may never learn -- is [CAPACITY.md](CAPACITY.md).
 | `soc full` | | Declare the pack full now |
 | `soc reset` | | Forget the count; re-seed from voltage |
 | `soc reset all` | | The same, and clear the SoC history (`hist`) with it |
+| `life` | | The pack's black box: what it is, what it was sold as, what it has measured, and how hard it has been worked |
 | `soc cap <uAh>` | | Design capacity |
 | `soc v0 <uV>` / `v100 <uV>` | v0 < v100 | Resting-OCV endpoints of the SoC map |
 | `soc vfull <uV>` | ≥ v100 | Absorption voltage for full detection |

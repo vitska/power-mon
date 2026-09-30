@@ -38,7 +38,11 @@ Verified against a 12 V / 44 A·h flooded lead-acid battery.
 - **Calibration**: guided two-point flow (`cal zero` / `cal top`), all of it written
   to flash and restored at boot.
 - **Fuel gauge**: coulomb counting with I·R-compensated OCV re-anchoring, Peukert
-  compensation, capacity learning, full/empty/rest anchors. How the pack's real
+  compensation, capacity learning, full/empty/rest anchors.
+  - **A black box for the pack** (`life`): chemistry and cells, nameplate against
+    measured capacity, state of health, equivalent full cycles and lifetime amp-hours
+    in and out. Kept in flash across every kind of restart, shown on all three
+    devices, and not cleared by `soc reset`. How the pack's real
   capacity gets measured, and what has to happen for it to: [CAPACITY.md](CAPACITY.md).
   - It counts as resting (SETTLING) below a settable fraction of capacity (`soc irest`,
     1.5 % of C by default: 0.68 A on 45 Ah, over a 10 s average), not below the 3 mA

@@ -181,6 +181,9 @@ static void reset_link_model(void)
     s.model.capacity_design_uah   = 0;
     s.model.capacity_learned_uah  = 0;
     s.model.learn_count           = -1;
+    s.model.cycles                = 0;
+    s.model.cycle_permille        = 0;
+    s.model.in_uah = s.model.out_uah = 0;
     unlock();
     s.cap_design_uah = s.cap_learned_uah = 0;
     s.last_fast_ms   = 0;
@@ -313,6 +316,14 @@ static void on_line(char *line)
             s.cap_learned_uah = strtoul(v, NULL, 10);
         } else if (strcmp(k, "soc.learn_count") == 0) {
             s.model.learn_count = atoi(v);
+        } else if (strcmp(k, "soc.cycles") == 0) {
+            s.model.cycles = strtoul(v, NULL, 10);
+        } else if (strcmp(k, "soc.cycle_permille") == 0) {
+            s.model.cycle_permille = strtoul(v, NULL, 10);
+        } else if (strcmp(k, "soc.in_uah") == 0) {
+            s.model.in_uah = strtoul(v, NULL, 10);
+        } else if (strcmp(k, "soc.out_uah") == 0) {
+            s.model.out_uah = strtoul(v, NULL, 10);
         } else if (strcmp(k, "battery.chem") == 0) {
             snprintf(s.model.chem, sizeof(s.model.chem), "%s", v);
         } else if (strcmp(k, "battery.cells") == 0) {

@@ -502,6 +502,7 @@ void cli_start(app_ctx_t *ctx)
 #endif
     register_cmd("hist",    "SoC over time for graphs: 288 points, settable interval", "[clear | every <s>]", cmd_hist);
     register_cmd("battery", "Battery chemistry and cells: the SoC curve and endpoints", "[list | <chemistry> [cells]]", cmd_battery);
+    register_cmd("life",    "The pack's black box: what it is, and what it has been through", NULL, cmd_life);
     register_cmd("soc",     "State of charge, endpoints and accumulators",   "[set|full|reset [all]|cap|v0|v100|vfull|rint|taper|rest|irest] [v]", cmd_soc);
     register_cmd("options", "Everything that is set, in one place",         NULL,             cmd_options);
     register_cmd("config",  "Every setting as key=value, for programs",   NULL,             cmd_config);

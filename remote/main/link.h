@@ -58,6 +58,12 @@ typedef struct {
      */
     uint32_t capacity_design_uah;  /* the nameplate, `soc.cap_uah` */
     uint32_t capacity_learned_uah; /* what the gauge has learned; 0 until it reports */
+    /* The pack's black box, from `config`: what it has been through since it was
+     * fitted. Kept in the monitor's flash across every kind of restart; the remote
+     * only reports it. 0 against firmware that does not send it (before 0.11.15). */
+    uint32_t cycles;               /* equivalent full cycles */
+    uint32_t cycle_permille;       /* how far into the next one */
+    uint32_t in_uah, out_uah;      /* lifetime charge in and out */
     /* How many times the monitor has measured capacity. 0 = the learned figure is the
      * nameplate copied, not a measurement, and must not be shown as one. -1 = the
      * monitor's firmware predates the key (before 0.11.7) and cannot say. */

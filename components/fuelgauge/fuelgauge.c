@@ -57,6 +57,20 @@ static struct {
     int64_t  rem_frac;      /* §5.2: exact remainder, no cumulative truncation */
     int64_t  cum_in_uas;
     int64_t  cum_out_uas;
+    /*
+     * Equivalent full cycles, the standard definition: discharge throughput divided by
+     * the DESIGN capacity, so ten 10 % discharges count as one cycle and the number
+     * means the same thing as the figure on a datasheet's cycle-life curve. The
+     * remainder carries in cycle_charge_uas rather than being dropped, or a pack cycled
+     * shallowly would never age at all.
+     *
+     * Against design rather than learned capacity: learned shrinks as the pack ages,
+     * and dividing by a shrinking denominator would count cycles faster the older the
+     * battery got -- which is backwards, and would make the number incomparable with
+     * its own history.
+     */
+    uint32_t cycles;
+    int64_t  cycle_charge_uas;
     uint32_t full_capacity_uah;
     /*
      * The DESIGN capacity that full_capacity_uah was measured against. Persisted,
@@ -450,6 +464,8 @@ static esp_err_t store(void)
     if (err == ESP_OK) err = nvs_set_i64 (h, "q",   s_fg.charge_uas);
     if (err == ESP_OK) err = nvs_set_i64 (h, "in",  s_fg.cum_in_uas);
     if (err == ESP_OK) err = nvs_set_i64 (h, "out", s_fg.cum_out_uas);
+    if (err == ESP_OK) err = nvs_set_u32 (h, "cyc", s_fg.cycles);
+    if (err == ESP_OK) err = nvs_set_i64 (h, "cq",  s_fg.cycle_charge_uas);
     if (err == ESP_OK) err = nvs_set_u32 (h, "cap", s_fg.full_capacity_uah);
     if (err == ESP_OK) err = nvs_set_u32 (h, "dcap", s_fg.design_ref_uah);
     if (err == ESP_OK) err = nvs_set_u32 (h, "lrn", s_fg.learn_count);
@@ -511,6 +527,8 @@ esp_err_t fg_init(void)
     }
     if (nvs_get_i64(h, "in",  &i64) == ESP_OK) s_fg.cum_in_uas  = i64;
     if (nvs_get_i64(h, "out", &i64) == ESP_OK) s_fg.cum_out_uas = i64;
+    if (nvs_get_u32(h, "cyc", &u32) == ESP_OK) s_fg.cycles = u32;
+    if (nvs_get_i64(h, "cq",  &i64) == ESP_OK) s_fg.cycle_charge_uas = i64;
     if (nvs_get_u32(h, "lrn", &u32) == ESP_OK) s_fg.learn_count = u32;
     if (nvs_get_u8 (h, "hr",  &u8)  == ESP_OK) s_fg.have_ref = (u8 != 0);
     if (nvs_get_u32(h, "rsc", &u32) == ESP_OK) s_fg.ref_soc_permille = u32;
@@ -765,7 +783,13 @@ void fg_update(const power_sample_t *s)
             s_fg.cum_in_uas         += dq;
             s_fg.q_in_since_ref_uas += dq;
         } else {
-            s_fg.cum_out_uas -= dq;
+            s_fg.cum_out_uas       -= dq;
+            s_fg.cycle_charge_uas  -= dq;
+            const int64_t one = (int64_t)s_fg.cfg.design_capacity_uah * 3600;
+            while (one > 0 && s_fg.cycle_charge_uas >= one) {
+                s_fg.cycle_charge_uas -= one;
+                s_fg.cycles++;
+            }
         }
 
         /* The SoC count takes the Peukert-adjusted value, which answers the different
@@ -1002,6 +1026,11 @@ void fg_get(fg_status_t *out)
     }
     out->state             = s_fg.state;
     out->rest_current_ua   = rest_current_ua();
+    out->cycles            = s_fg.cycles;
+    out->cycle_permille    = s_fg.cfg.design_capacity_uah
+                                 ? (uint32_t)((s_fg.cycle_charge_uas * 1000) /
+                                              ((int64_t)s_fg.cfg.design_capacity_uah * 3600))
+                                 : 0;
     out->taper_current_ua  = taper_current_ua();
     out->t_full_s          = s_fg.t_full_s;
     out->t_empty_s         = s_fg.t_empty_s;

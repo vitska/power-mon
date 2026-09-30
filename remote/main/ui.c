@@ -45,7 +45,7 @@
 #include "touch.h"
 
 typedef enum { SCR_MAIN, SCR_SETTINGS, SCR_DEVICES, SCR_NUMPAD, SCR_CONFIRM, SCR_UPDATE,
-               SCR_PASSKEY } screen_t;
+               SCR_PASSKEY, SCR_BATTERY } screen_t;
 
 #define STALE_US (5LL * 1000000) /* no record for this long: the numbers are old */
 
@@ -873,10 +873,13 @@ static const action_def_t ACTIONS[] = {
                     "V", 4000},
 };
 
-#define SET_ROW_Y(i) (24 + (i) * 31)
-#define SET_ROW_H    29
-#define SET_ROWS     6 /* the board, the four calibration actions, firmware update */
+/* Seven rows between the header and the status lines at y=212: 26 apiece, which is a
+ * 16-pixel title and an 8-pixel subtitle with a pixel to spare. */
+#define SET_ROW_Y(i) (24 + (i) * 26)
+#define SET_ROW_H    25
+#define SET_ROWS     7 /* board, four calibration actions, firmware update, battery */
 #define ROW_UPDATE   5
+#define ROW_BATTERY  6
 
 static action_t s_action;
 static char     s_entry[12];
@@ -925,9 +928,9 @@ static void settings_row(int i, const char *title, const char *sub, bool enabled
     const int      y  = SET_ROW_Y(i);
     const uint16_t fg = enabled ? C_WHITE : C_GREY;
     lcd_fill(0, y, LCD_W, SET_ROW_H, C_PANEL);
-    lcd_text(8, y + 2, title, 2, fg, C_PANEL);
-    lcd_text(8, y + 20, sub, 1, C_GREY, C_PANEL);
-    lcd_text(300, y + 7, ">", 2, C_GREY, C_PANEL);
+    lcd_text(8, y + 1, title, 2, fg, C_PANEL);
+    lcd_text(8, y + 17, sub, 1, C_GREY, C_PANEL);
+    lcd_text(300, y + 5, ">", 2, C_GREY, C_PANEL);
 }
 
 static void settings_draw(const link_model_t *m, bool force)
@@ -949,6 +952,7 @@ static void settings_draw(const link_model_t *m, bool force)
             settings_row(a + 1, ACTIONS[a].title, ACTIONS[a].sub, ready);
         }
         settings_row(ROW_UPDATE, "FIRMWARE UPDATE", "update this display from the phone app", true);
+        settings_row(ROW_BATTERY, "BATTERY LOG", "what this pack has been through", ready);
         ready_last = ready;
         snprintf(name_last, sizeof(name_last), "%s", m->name);
     }
@@ -1098,6 +1102,77 @@ static bool confirm_tap(int tx, int ty)
         return true;
     }
     return false;
+}
+
+/* --- the pack's black box ------------------------------------------------------------- */
+
+/*
+ * What this battery has been through, as the monitor has recorded it: what it is, what
+ * it was sold as, what it has measured itself to be, and how hard it has been worked.
+ *
+ * Every figure here is the monitor's, kept in its flash and restored at every boot
+ * whatever caused the boot. The remote computes none of it -- two devices watching one
+ * pack must not arrive at two histories -- and shows it beside the pack's identity,
+ * because 300 cycles is a long life for a flooded lead-acid and barely run-in for
+ * LiFePO4.
+ *
+ * A screen rather than a line on the dashboard: this changes over months, and the
+ * dashboard is for what changes now.
+ */
+static void battery_row(int y, const char *label, const char *value)
+{
+    lcd_text(10, y, label, 1, C_GREY, C_BLACK);
+    lcd_text(120, y, value, 2, C_WHITE, C_BLACK);
+}
+
+static void battery_draw(const link_model_t *m)
+{
+    char b[40], chem[16];
+
+    lcd_fill(0, 0, LCD_W, LCD_H, C_BLACK);
+    lcd_fill(0, 0, LCD_W, 22, C_HEADER);
+    lcd_text(6, 3, "BATTERY LOG", 2, C_WHITE, C_HEADER);
+    button(240, 0, 80, 22, "BACK", 2, C_HEADER, C_WHITE);
+
+    snprintf(chem, sizeof(chem), "%s", m->chem[0] ? m->chem : "?");
+    for (char *p = chem; *p; p++) {
+        if (*p >= 'a' && *p <= 'z') *p -= 32;
+    }
+    snprintf(b, sizeof(b), "%s %dS", chem, m->cells);
+    battery_row(32, "PACK", b);
+
+    snprintf(b, sizeof(b), "%.1f Ah", m->capacity_design_uah / 1000000.0);
+    battery_row(60, "NAMEPLATE", b);
+
+    if (m->learn_count == 0) {
+        snprintf(b, sizeof(b), "not yet");
+    } else {
+        snprintf(b, sizeof(b), "%.2f Ah", m->capacity_learned_uah / 1000000.0);
+    }
+    battery_row(88, "MEASURED", b);
+
+    if (m->learn_count > 0 && m->capacity_design_uah) {
+        snprintf(b, sizeof(b), "%lu %%",
+                 (unsigned long)((uint64_t)m->capacity_learned_uah * 100 /
+                                 m->capacity_design_uah));
+    } else {
+        snprintf(b, sizeof(b), "--");
+    }
+    battery_row(116, "HEALTH", b);
+
+    /* Equivalent full cycles: ten 10 % draws are one, so it compares with a datasheet's
+     * cycle-life curve rather than with a count of times a charger was plugged in. */
+    snprintf(b, sizeof(b), "%lu.%lu", (unsigned long)m->cycles,
+             (unsigned long)(m->cycle_permille / 100));
+    battery_row(144, "CYCLES", b);
+
+    snprintf(b, sizeof(b), "%.1f / %.1f Ah", m->in_uah / 1000000.0, m->out_uah / 1000000.0);
+    battery_row(172, "IN / OUT", b);
+
+    lcd_text(10, 202, "Kept in the monitor's flash, across every restart.", 1, C_GREY,
+             C_BLACK);
+    lcd_text(10, 214, "'soc reset' clears the count and the learning, not these.", 1,
+             C_DIM, C_BLACK);
 }
 
 /* --- firmware update of the remote itself --------------------------------------------- */
@@ -1349,6 +1424,8 @@ void ui_run(void)
                         go(SCR_DEVICES);
                     } else if (i == ROW_UPDATE) {
                         go(SCR_UPDATE);
+                    } else if (i == ROW_BATTERY) {
+                        if (m.state == LINK_READY) go(SCR_BATTERY);
                     } else if (m.state == LINK_READY) {
                         link_cmd_t c;
                         link_command_status(&c);
@@ -1406,6 +1483,22 @@ void ui_run(void)
                 update_draw(s_full);
                 s_full           = false;
                 next_update_draw = now + 250 * 1000;
+            }
+            break;
+        }
+
+        case SCR_BATTERY: {
+            /* Redrawn on entry and once a second: every figure comes from `config`,
+             * which the link re-reads every five minutes, so there is nothing here that
+             * moves faster than the eye can follow. */
+            static int64_t next_batt_draw;
+            if (s_full || now >= next_batt_draw) {
+                next_batt_draw = now + 1000000;
+                battery_draw(&m);
+                s_full = false;
+            }
+            if (tap && (ty < 22 || hit(tx, ty, 240, 0, 80, 22))) {
+                go(SCR_SETTINGS);
             }
             break;
         }
