@@ -548,10 +548,36 @@ static void main_draw(const link_model_t *m)
             lit = SOC_BRICKS;
         }
     }
-    if (s_full || lit != bar_last || bar_col != soc_c) {
+    /*
+     * The furniture -- the frame, the black behind the gaps, and the half-scale mark --
+     * is drawn once, when the screen is. None of it ever changes, and blanking the bar
+     * to black before redrawing it is what made the blink flicker the whole gauge
+     * rather than the one brick that was blinking.
+     *
+     * The mark sits in the gap between the fifth and sixth bricks, which no brick
+     * rectangle covers, so a brick repaint can never rub it out. Counting five bricks
+     * is slower than seeing which side of the middle the lit ones end on, and half is
+     * the threshold most decisions about a lead-acid pack are made against.
+     */
+    if (s_full) {
         lcd_fill(6, 96, 164, 12, C_GREY);   /* a one-pixel frame around the slots */
-        lcd_fill(7, 97, 162, 10, C_BLACK);
-        for (int i = 0; i < SOC_BRICKS; i++) {
+        lcd_fill(7, 97, 162, 10, C_BLACK);  /* the gaps between the bricks */
+        lcd_fill(7 + (162 * (SOC_BRICKS / 2)) / SOC_BRICKS - 2, 96, 2, 12, C_GREY);
+    }
+    if (s_full || lit != bar_last || bar_col != soc_c) {
+        /*
+         * Only the bricks that changed. A blink moves the count by one, so one brick
+         * is sent; a colour change (the sub-10 % warning) repaints them all, since
+         * every lit brick changes shade at once.
+         */
+        int lo = 0, hi = SOC_BRICKS;
+        if (!s_full && bar_col == soc_c) {
+            lo = lit < bar_last ? lit : bar_last;
+            hi = lit > bar_last ? lit : bar_last;
+        }
+        if (lo < 0) lo = 0;
+        if (hi > SOC_BRICKS) hi = SOC_BRICKS;
+        for (int i = lo; i < hi; i++) {
             /* Pitch from the box width, not a constant: 162 does not divide by ten,
              * and rounding each edge separately spreads the odd pixels evenly rather
              * than piling them all into the last brick. */
@@ -559,13 +585,6 @@ static void main_draw(const link_model_t *m)
             const int x1 = 7 + ((i + 1) * 162) / SOC_BRICKS - (i + 1 < SOC_BRICKS ? 2 : 0);
             lcd_fill(x0, 97, x1 - x0, 10, i < lit ? soc_c : C_DIM);
         }
-        /*
-         * Half-scale mark, through the gap between the fifth and sixth bricks and the
-         * full height of the frame. Counting five bricks is slower than seeing which
-         * side of the middle the lit ones end on, and half is the threshold most of
-         * the decisions about a lead-acid pack are made against.
-         */
-        lcd_fill(7 + (162 * (SOC_BRICKS / 2)) / SOC_BRICKS - 2, 96, 2, 12, C_GREY);
         bar_last = lit;
         bar_col  = soc_c;
     }
