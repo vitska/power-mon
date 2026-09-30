@@ -56,6 +56,16 @@ sealed interface Record {
         val settleS: Long? = null,
     ) : Record
 
+    /** The open capacity measurement (CAPACITY.md), on the calculated group's tick. */
+    data class Learn(
+        override val ms: Long,
+        val learns: Int,
+        val haveRef: Boolean,
+        val refPct: Double,
+        val spanAh: Double,
+        val lastLearnAh: Double,
+    ) : Record
+
     data class Diag(
         override val ms: Long,
         val shuntMv: Double,
@@ -187,6 +197,14 @@ class StreamParser(
                 shuntMv = num(2) ?: 0.0,
                 pga = f.getOrNull(3) ?: "",
                 saturated = (f.getOrNull(4)?.trim() == "1"),
+            )
+            "l" -> Record.Learn(
+                ms,
+                learns = f.getOrNull(2)?.trim()?.toIntOrNull() ?: 0,
+                haveRef = (f.getOrNull(3)?.trim() == "1"),
+                refPct = num(4) ?: 0.0,
+                spanAh = num(5) ?: 0.0,
+                lastLearnAh = num(6) ?: 0.0,
             )
             "e" -> Record.Env(ms, num(2), num(3), num(4))
             else -> null   // an unknown record type: drop it, do not fail

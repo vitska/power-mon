@@ -188,6 +188,7 @@ static void emit_headers(app_ctx_t *ctx)
     ctx->stream_csv_header_done = true;
     if (config()->rate_fast_ms) stream_emit("#f,ms,volts,amps");
     if (config()->rate_calc_ms) stream_emit("#c,ms,watts,soc_pct,charge_ah,state,ocv_v,peukert,t_full_s,t_empty_s,settle_s");
+    if (config()->rate_calc_ms) stream_emit("#l,ms,learns,have_ref,ref_pct,span_ah,last_learn_ah");
     if (config()->rate_diag_ms) stream_emit("#d,ms,shunt_mv,pga,sat");
     if (config()->rate_env_ms)  stream_emit("#e,ms,temp_c,humid_pct,press_hpa");
 }
@@ -222,6 +223,40 @@ static void emit_calc(const power_sample_t *s)
              fg_state_str(fg.state),
              FMT_V(bo, fg.ocv_uv),
              fixed_fmt(bk, sizeof(bk), fg.peukert_factor_q16, 65536, 3), tf, te, ts);
+    stream_emit(line);
+}
+
+/*
+ * The open capacity measurement (CAPACITY.md): how many times capacity has been
+ * measured, and the span in progress -- where it started and how much has come out of
+ * it since.
+ *
+ * A record rather than `config` keys alone, because it MOVES. `config` is read once on
+ * connect and after a setter, which is right for settings and wrong for a figure that
+ * accumulates with every amp-hour: a client showing "0.00 Ah drawn" from a snapshot
+ * taken an hour ago is reporting the past as the present. The keys stay for a one-shot
+ * read; this is what keeps a screen honest.
+ *
+ * Its own record, not three more fields on `c`: a new record type is the documented
+ * way to extend the stream (CLI.md 5 -- skip what you do not know), while widening an
+ * existing one changes a shape clients have already been told is fixed.
+ *
+ * On the calc group's tick, because it is the same gauge state read at the same moment.
+ * `have_ref` 0 means no span is open at all, and span_ah is then meaningless rather
+ * than zero.
+ */
+static void emit_learn(void)
+{
+    fg_status_t fg;
+    fg_get(&fg);
+
+    char line[128], bref[24], bspan[24], blast[24];
+    snprintf(line, sizeof(line), "l,%lu,%lu,%d,%s,%s,%s",
+             (unsigned long)(esp_timer_get_time() / 1000),
+             (unsigned long)fg.learn_count, fg.have_ref ? 1 : 0,
+             fixed_fmt(bref, sizeof(bref), fg.ref_soc_permille, 10, 1),
+             fixed_fmt(bspan, sizeof(bspan), -fg.q_since_ref_uas / 3600, 1000000, 3),
+             fixed_fmt(blast, sizeof(blast), fg.last_learn_uah, 1000000, 2));
     stream_emit(line);
 }
 
@@ -392,6 +427,7 @@ static void sampler_task(void *arg)
                     next_calc_us = now + (int64_t)config()->rate_calc_ms * 1000;
                     last_calc_t  = values()->last.t_us;
                     emit_calc(&values()->last);
+                    emit_learn();
                 }
                 if (config()->rate_diag_ms) {
                     /* Change-or-deadline, whichever comes first. The change test is

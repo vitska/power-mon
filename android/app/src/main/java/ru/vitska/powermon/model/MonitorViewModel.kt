@@ -61,6 +61,21 @@ data class Telemetry(
     val tFullS: Long? = null,
     val tEmptyS: Long? = null,
     val settleS: Long? = null,
+    /*
+     * The open capacity measurement, from the `l` record (CAPACITY.md). It lives here
+     * rather than being read from `config` because it MOVES: `config` is fetched on
+     * connect and after a setter, so a screen fed from it shows an hour-old span as
+     * though it were current, which is exactly how it read.
+     *
+     * haveLearn stays false against firmware that sends no `l` record (before 0.11.14),
+     * and the screen falls back to the config keys there.
+     */
+    val haveLearn: Boolean = false,
+    val learns: Int = 0,
+    val haveRef: Boolean = false,
+    val refPct: Double = 0.0,
+    val spanAh: Double = 0.0,
+    val lastLearnAh: Double = 0.0,
 )
 
 data class Handshake(
@@ -361,6 +376,10 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
                 watts = r.watts, socPct = r.socPct, chargeAh = r.chargeAh,
                 state = r.state, ocvV = r.ocvV, peukert = r.peukert,
                 tFullS = r.tFullS, tEmptyS = r.tEmptyS, settleS = r.settleS,
+            )
+            is Record.Learn -> _tel.value.copy(
+                learns = r.learns, haveRef = r.haveRef, refPct = r.refPct,
+                spanAh = r.spanAh, lastLearnAh = r.lastLearnAh, haveLearn = true,
             )
             is Record.Diag -> _tel.value.copy(
                 shuntMv = r.shuntMv, pga = r.pga, saturated = r.saturated,

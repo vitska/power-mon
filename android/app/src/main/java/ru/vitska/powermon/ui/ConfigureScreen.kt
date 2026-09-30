@@ -45,6 +45,7 @@ import ru.vitska.powermon.ble.Link
 import ru.vitska.powermon.ble.Micro
 import ru.vitska.powermon.ble.RawSensor
 import ru.vitska.powermon.model.MonitorViewModel
+import ru.vitska.powermon.model.Telemetry
 
 /**
  * The Configure tab's sub-pages. One screen of controls each, because the alternative
@@ -482,7 +483,7 @@ fun ConfigureScreen(vm: MonitorViewModel) {
                 },
             )
             Spacer(Modifier.height(8.dp))
-            LearningState(cfg)
+            LearningState(cfg, t)
             Spacer(Modifier.height(8.dp))
             Wrap {
                 OutlinedButton(onClick = { guarded("soc full") }) { Text("soc full") }
@@ -1008,22 +1009,38 @@ private fun summary(p: CfgPage, cfg: ConfigState): String? = when (p) {
  * firmware compares against, and is the whole answer to "how far down".
  */
 @Composable
-private fun LearningState(cfg: ConfigState) {
+private fun LearningState(cfg: ConfigState, t: Telemetry) {
     val depth = cfg.int("soc.depth_permille") ?: return
-    val learns = cfg.int("soc.learn_count")
-    val haveRef = cfg.bool("soc.have_ref")
+
+    /*
+     * The `l` telemetry record where there is one, the `config` snapshot otherwise.
+     *
+     * Only the depth comes from `config` unconditionally, because it is a setting and
+     * changes when someone changes it. Everything else here MOVES -- the span
+     * accumulates with every amp-hour drawn -- and `config` is read on connect and
+     * after a setter, so a screen fed from it reported an hour-old span as the present
+     * one. That is what this looked like: a figure that never changed.
+     */
+    val live = t.haveLearn
+    val learns = if (live) t.learns else cfg.int("soc.learn_count")
+    val haveRef = if (live) t.haveRef else cfg.bool("soc.have_ref")
     if (learns == null || haveRef == null) {
-        // Firmware before 0.11.10 does not report the span.
+        // Firmware before 0.11.10 reports the span in neither place.
         return
     }
 
     Text("CAPACITY LEARNING", style = MaterialTheme.typography.labelSmall)
     val head = when {
         learns == 0 -> "Never measured. The figure above is the nameplate copied."
-        learns == 1 -> "Measured once" + (cfg.micro("soc.last_learn_uah", 2)
-            ?.let { "; last raw result $it Ah" } ?: "")
-        else -> "Measured $learns times" + (cfg.micro("soc.last_learn_uah", 2)
-            ?.let { "; last raw result $it Ah" } ?: "")
+        else -> {
+            val last = if (live) {
+                if (t.lastLearnAh > 0) String.format("%.2f", t.lastLearnAh) else null
+            } else {
+                cfg.micro("soc.last_learn_uah", 2)
+            }
+            (if (learns == 1) "Measured once" else "Measured $learns times") +
+                (last?.let { "; last raw result $it Ah" } ?: "")
+        }
     }
     Text(head, style = MaterialTheme.typography.bodySmall)
 
@@ -1037,8 +1054,8 @@ private fun LearningState(cfg: ConfigState) {
         return
     }
 
-    val ref = cfg.int("soc.ref_permille") ?: return
-    val drawn = cfg.long("soc.span_uah")?.let { it / 1_000_000.0 } ?: 0.0
+    val ref = (if (live) (t.refPct * 10).toInt() else cfg.int("soc.ref_permille")) ?: return
+    val drawn = if (live) t.spanAh else cfg.long("soc.span_uah")?.let { it / 1_000_000.0 } ?: 0.0
     val target = ref - depth
 
     /*

@@ -367,13 +367,33 @@ parser can either use them or skip them on that one character.
 ```
 #f,ms,volts,amps
 #c,ms,watts,soc_pct,charge_ah,state,ocv_v,peukert,t_full_s,t_empty_s,settle_s
+#l,ms,learns,have_ref,ref_pct,span_ah,last_learn_ah
 #d,ms,shunt_mv,pga,sat
 #e,ms,temp_c,humid_pct,press_hpa
 f,7073,13.113,-0.0006
 c,7213,-0.007,90.2,39.696,REST,13.117,1.000,,,
+l,7213,0,1,100.0,2.140,0.00
 d,19203,0.030,/1 (+/-40mV),0
 e,7033,26.97,48.9,1001.64
 ```
+
+`l` is the open capacity measurement (CAPACITY.md), on the calculated group's tick
+because it is the same gauge state read at the same moment:
+
+- `learns` — how many times capacity has been measured. **While it is 0 the learned
+  capacity is the nameplate copied**, not a result.
+- `have_ref` — 1 when a span is open. When 0 there is nothing to measure yet and
+  `ref_pct` and `span_ah` mean nothing; the next full, empty or settled rest opens one.
+- `ref_pct` — the SoC the span started at.
+- `span_ah` — charge drawn since, positive out of the pack. Held at 0 while the gauge
+  sits at FULL or EMPTY, deliberately: time spent held at an endpoint must not count
+  against the discharge that follows.
+- `last_learn_ah` — the last raw measurement, before it was blended into the capacity.
+
+The same figures are in `config` as `soc.learn_count`, `soc.have_ref`,
+`soc.ref_permille`, `soc.span_uah` and `soc.last_learn_uah`, for a one-shot read. Use
+the record for anything displayed continuously: `config` is read on connect and after a
+setter, so a screen fed from it shows an hour-old span as though it were current.
 
 **Ignore record prefixes you do not recognise.** New types may be added without a
 protocol bump — that is the point of prefixing them, and a client that skips unknown
