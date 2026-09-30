@@ -10,7 +10,7 @@
  *   +----------------------------+---------------------------+ 22
  *   | STATE OF CHARGE            |  12.432 V                 |
  *   |  72.4 %                    |  -0.0089 A                |
- *   |  [##.##.##.##.##|##.##.--.--.--] |  -0.110 W           |
+ *   |  [##.##.##.##.##|##.##.::.--.--] |  -0.110 W           |  :: = part way in
  *   | TIME TO EMPTY              |  DISCHARGE   (device state)|
  *   |  3d 04h                    |  FLOODED 6S               |
  *   |                            |  CAP 44.0AH (43.97)       |
@@ -499,7 +499,11 @@ static void main_draw(const link_model_t *m)
                      : soc >= 50.0f ? C_GREEN
                      : soc >= 30.0f ? C_YELLOW
                                     : C_RED;
-    if (have_soc && soc < 10.0f && ((now / 500000) & 1)) {
+    /* One phase for both blinks -- the partial brick below and the low-SoC colour here
+     * -- so a pack under 10 % does not have a brick appearing while the colour is in
+     * its dark half, which reads as two faults rather than one warning. */
+    const bool blink_half = ((now / 500000) & 1) == 0;
+    if (have_soc && soc < 10.0f && !blink_half) {
         soc_c = C_RED_DIM;
     }
     if (!have_soc)          snprintf(b, sizeof(b), "--");
@@ -508,24 +512,42 @@ static void main_draw(const link_model_t *m)
     field(&f_soc, 6, 40, 150, 6, soc_c, C_BLACK, b);
 
     /*
-     * Ten bricks, one per 10 %, lit to the NEAREST tenth rather than the one below.
-     * Truncating cost the tenth brick at 99 %, and a pack one percent off full that
-     * displays as nine tenths reads as a fault in the gauge -- the eye checks a full
-     * pack against "all ten lit", not against the digits. Rounding puts each brick's
-     * boundary in the middle of its band instead: the top one goes out below 95 %, the
-     * next below 85, and so on down to the first below 5.
+     * Ten bricks, one per 10 %, and the brick a pack is part way into BLINKS until it
+     * is earned. Through the first half of a tenth -- 70.0 to 74.9 -- the eighth brick
+     * flashes; from 75 it is solid. So a brick fades in over its band instead of
+     * appearing at one edge of it, and a gauge that reads seven-and-a-blink is saying
+     * something the digits would otherwise have to be read for.
      *
-     * The floor of one brick survives that: a pack at 2 % would round to none and look
-     * identical to a flat one, and those are not the same thing. It is also what the
-     * sub-10 % blink needs in order to blink.
+     * It also fixes what rounding alone could not. Rounding to the nearest tenth puts
+     * each boundary in the middle of its band, which is right -- a pack at 99 % must
+     * not show nine bricks, because the eye checks a full pack against "all ten lit"
+     * and never against the digits. But it still snapped: 74.9 showed seven bricks and
+     * 75.0 showed eight, with nothing in between. The blink is that in-between.
+     *
+     * Below 5 % the first brick blinks rather than sitting solid, which supersedes the
+     * old floor of one always-lit brick: a nearly flat pack should not claim a whole
+     * tenth. At a true zero nothing lights at all, blink included.
      *
      * Unlit bricks are drawn dim rather than left black: the ten slots stay visible,
      * so the lit ones read as a proportion at a glance instead of as a bar of unknown
      * length.
      */
-    int lit = !have_soc ? -1 : (int)((soc + 5.0f) / 10.0f);
-    if (lit > SOC_BRICKS) lit = SOC_BRICKS;
-    if (have_soc && lit == 0 && soc > 0.0f) lit = 1;
+    int lit = -1;
+    if (have_soc) {
+        const int   tenths = (int)(soc / 10.0f);      /* whole tenths earned */
+        const float rem    = soc - (float)tenths * 10.0f;
+        lit = tenths;
+        if (soc <= 0.0f) {
+            lit = 0;                                  /* empty is empty */
+        } else if (rem >= 5.0f) {
+            lit++;                                    /* past the middle: solid */
+        } else if (tenths < SOC_BRICKS && blink_half) {
+            lit++;                                    /* part way in: blinks */
+        }
+        if (lit > SOC_BRICKS) {
+            lit = SOC_BRICKS;
+        }
+    }
     if (s_full || lit != bar_last || bar_col != soc_c) {
         lcd_fill(6, 96, 164, 12, C_GREY);   /* a one-pixel frame around the slots */
         lcd_fill(7, 97, 162, 10, C_BLACK);

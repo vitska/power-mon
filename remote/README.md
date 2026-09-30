@@ -41,12 +41,17 @@ humidity and pressure on the line above it. **Tap the graph** to change the span
     first, and a coarser display calls them identical for the whole early life of a pack.
   - Both are computed on the monitor and only reported here -- two devices watching one
     pack must not quote two capacities.
-- **The gauge is ten bricks, one per 10 %**, lit to the nearest tenth: the top brick
-  goes out below 95 %, the next below 85, down to the first below 5. Truncating instead
-  would drop the tenth brick at 99 %, and a pack one percent off full showing nine
-  tenths reads as a fault. Anything above zero keeps one brick lit, because a pack at
-  2 % must not look identical to a flat one. Unlit bricks stay visible as dim slots, so
-  the lit ones read as a proportion rather than as a bar of unknown length.
+- **The gauge is ten bricks, one per 10 %**, and the brick the pack is part way into
+  **blinks until it is earned**: through 70.0-74.9 % the eighth flashes, from 75 % it is
+  solid. A brick fades in across its band rather than appearing at one edge of it, so
+  seven-and-a-blink says what the digits would otherwise have to be read for.
+  - Solid bricks follow the nearest tenth: the top goes out below 95 %, the next below
+    85, down to the first below 5. Truncating instead would drop the tenth brick at
+    99 %, and a pack one percent off full showing nine tenths reads as a fault.
+  - Below 5 % the first brick blinks rather than sitting solid -- a nearly flat pack
+    should not claim a whole tenth -- and at a true zero nothing lights at all.
+  - Unlit bricks stay visible as dim slots, so the lit ones read as a proportion rather
+    than as a bar of unknown length.
   A mark through the middle of the frame splits it at 50 %: which side of the middle
   the lit bricks end on is faster to see than counting five of them, and half is the
   threshold most decisions about a lead-acid pack are made against.
