@@ -398,9 +398,17 @@ int cmd_config(int argc, char **argv)
          * the next full, empty or settled rest starts one. */
         printf("soc.have_ref=%d\n", st.have_ref ? 1 : 0);
         printf("soc.ref_permille=%lu\n", (unsigned long)st.ref_soc_permille);
-        /* Charge drawn since the reference, in uAh: positive means out of the pack,
-         * which is the direction that can be learned from. */
-        printf("soc.span_uah=%lld\n", (long long)(-st.q_since_ref_uas / 3600));
+        /*
+         * Charge drawn since the reference, in uAh: positive means out of the pack,
+         * which is the direction that can be learned from.
+         *
+         * 32-bit, NOT %lld. CONFIG_NEWLIB_NANO_FORMAT drops %ll support, so that
+         * conversion printed nothing usable -- which is how this reported a span of
+         * 0 Ah on a pack that had drawn several. Micro-amp-hours fit an int32 to
+         * 2147 Ah. The console's own `soc` was right throughout, because fixed_fmt()
+         * takes the int64 and formats it itself rather than handing it to printf.
+         */
+        printf("soc.span_uah=%ld\n", (long)(-st.q_since_ref_uas / 3600));
         printf("soc.v0_uv=%lu\n", (unsigned long)c.v_0pct_uv);
         printf("soc.v100_uv=%lu\n", (unsigned long)c.v_100pct_uv);
         printf("soc.vfull_uv=%lu\n", (unsigned long)c.v_full_uv);

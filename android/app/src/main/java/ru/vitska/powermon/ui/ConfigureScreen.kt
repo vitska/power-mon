@@ -1040,6 +1040,27 @@ private fun LearningState(cfg: ConfigState) {
     val ref = cfg.int("soc.ref_permille") ?: return
     val drawn = cfg.long("soc.span_uah")?.let { it / 1_000_000.0 } ?: 0.0
     val target = ref - depth
+
+    /*
+     * At FULL or EMPTY the device pins the span to the endpoint and holds the charge
+     * counter at zero, deliberately: hours on a float charger after FULL would
+     * otherwise count as charge going in and disqualify the discharge that follows.
+     *
+     * Reported bare, "0.00 Ah drawn" under "span open from 100 %" reads as a broken
+     * counter -- which is exactly the complaint that found the %lld bug alongside it.
+     * So say which of the two is happening.
+     */
+    val state = cfg.str("soc.state")
+    if (state == "FULL" || state == "EMPTY") {
+        Text(
+            "Span pinned at " + pct(ref) + " while the pack reads " + state +
+                ". Counting starts when it leaves, so that time spent held at the " +
+                "endpoint does not count against the discharge that follows.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        return
+    }
+
     Text(
         "Span open from " + pct(ref) + ", " + String.format("%.2f", drawn) + " Ah drawn.",
         style = MaterialTheme.typography.bodySmall,
