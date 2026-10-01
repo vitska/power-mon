@@ -13,6 +13,7 @@ Verified against a 12 V / 44 A·h flooded lead-acid battery.
 | Document | What it is for |
 |---|---|
 | [DESIGN.md](DESIGN.md) | why everything is the way it is |
+| [SCHEMATIC.md](SCHEMATIC.md) | wiring as built: pin maps, addresses, the shunt, grounding |
 | [CALIBRATION.md](CALIBRATION.md) | bench procedure: meter readings → firmware constants |
 | [CAPACITY.md](CAPACITY.md) | how the gauge measures the pack's real capacity, and when |
 | [CLI.md](CLI.md) | command and protocol reference, sufficient to write a client |

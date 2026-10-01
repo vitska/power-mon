@@ -1,7 +1,8 @@
 # Calibration procedure (M1/M2)
 
 You have a trustworthy meter. This is how its readings become the firmware's
-constants.
+constants. What is wired to what, and the bring-up that comes before any of this, is
+[SCHEMATIC.md](SCHEMATIC.md).
 
 Everything is entered through the console — over USB, or over BLE if that is easier
 where the shunt is mounted. Nothing here needs a rebuild, and **the device records
