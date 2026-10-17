@@ -150,9 +150,29 @@ it is the only way.
 | `forget` | drops the remembered board and every bond |
 | `passkey <digits>` / `passkey cancel` | answers or refuses the monitor's pairing request |
 | `monitor <command ...>` | runs a command on the monitor (CLI.md) and prints its reply (up to its last 16 lines), e.g. `monitor cal zero i`. Calibration waits up to two minutes. |
+| `monitor-ota <bytes> <sha256>` | updates the **monitor's** firmware through this remote; the image comes over the serial port. Serial only, and driven by `tools/flash-via-remote.ps1` (below) |
 | `update on` / `update off` | firmware update mode: visible to the phone app |
 | `pin <gpio> <0\|1>` | drives a GPIO, for finding a board's wiring (refused on the flash and UART pins) |
 | `ver`, `ota [...]`, `reboot`, `help` | as on the monitor (CLI.md §6) |
+
+### Updating the monitor through the remote
+
+For a monitor with no USB within reach and no phone at hand: the remote already holds
+a BLE link to it, and passes an image on through the monitor's own OTA protocol, the
+same one the phone app uses (CLI.md §6).
+
+```powershell
+.\tools\idf.ps1 build                            # the monitor's image, build\bat-monitor.bin
+.\tools\flash-via-remote.ps1 -Port COM22         # the remote's serial port
+```
+
+It checks the image, runs `ota begin` on the monitor and sends the image in 4 KB frames,
+each with a CRC-32. The remote acknowledges a frame once it is in and intact, or asks for
+it again, and forwards it in acknowledged writes while the next one arrives. Then
+`ota end`, a reboot, a check that the new version is the one running, and `ota confirm`.
+`-NoReboot` stops after `ota end`. For the duration the remote asks for a 7.5–15 ms
+connection interval and a 20 s supervision timeout, and restores the normal ones after.
+Measured: 840 KB in 129 s, 6.4 KB/s.
 
 The calibrations behind `monitor cal ...` have the same preconditions as the Settings
 screen states: no load for `cal zero i`, VBUS tied to ground for `cal zero v`, a meter

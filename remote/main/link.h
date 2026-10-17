@@ -144,7 +144,7 @@ typedef struct {
     bool    done;         /* finished; the fields below describe it */
     bool    answered;     /* false: timed out or the link dropped */
     int     exit;         /* the command's exit status; 0 is success */
-    char    cmd[48];
+    char    cmd[100];      /* long enough for `ota begin <bytes> <sha256>` */
     int64_t started_us;
     int     timeout_ms;
     /* The last lines of output, oldest first, "" if unused: enough for `stream` or a
@@ -157,6 +157,28 @@ typedef struct {
 bool link_command(const char *cmd, int timeout_ms);
 
 void link_command_status(link_cmd_t *out);
+
+/* --- firmware update of the monitor ------------------------------------------------- */
+
+/*
+ * The monitor's OTA characteristic (CLI.md §6), for updating the monitor THROUGH the
+ * remote (console.c, `monitor-ota`). The session itself -- `ota begin`, `ota end` --
+ * goes as console commands (link_command()); only the image data comes here.
+ */
+#define LINK_OTA_NO_LINK -1 /* no link, or a monitor with no OTA characteristic */
+#define LINK_OTA_TIMEOUT -2
+
+/** One data write, with response: `data` is the 4-byte offset and the bytes. Blocks
+ *  until the monitor acknowledges. Returns 0, a LINK_OTA_ code, or the monitor's ATT
+ *  error (0x80 no session, 0x81 bad offset, 0x82 too long, 0x83 busy, 0x84 flash). */
+int link_ota_write(const uint8_t *data, size_t len, int timeout_ms);
+
+/** Image bytes that fit in one write after the offset: MTU less 7. 0 if no link. */
+size_t link_ota_chunk(void);
+
+/** Short connection interval and a long supervision timeout for an update (true), or
+ *  back to normal (false). */
+void link_ota_fast(bool on);
 
 /** While pairing: true, with the board's name in `who`. */
 bool link_passkey_wanted(char *who, size_t n);

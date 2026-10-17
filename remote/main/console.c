@@ -22,6 +22,7 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_ota_ops.h"
+#include "esp_rom_crc.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
@@ -293,21 +294,12 @@ static int cmd_passkey(int argc, char **argv, console_out_t out)
 
 /*
  * A console command on the MONITOR, through the link's one-at-a-time command slot --
- * the same one the Settings screen's calibrations use. Calibration takes up to about
- * 70 s, so the wait is long; the monitor answers only once a command has finished.
+ * the same one the Settings screen's calibrations use. The monitor answers only once a
+ * command has finished, so the wait is as long as the command can take. Prints the
+ * reply; returns the monitor's exit status, or 1 when there was none.
  */
-static int cmd_monitor(int argc, char **argv, console_out_t out)
+static int monitor_run(const char *cmd, int timeout_ms, console_out_t out)
 {
-    if (argc < 2) {
-        out("usage: monitor <command ...>   e.g. monitor cal zero i\n");
-        return 1;
-    }
-    char cmd[48] = "";
-    for (int i = 1; i < argc; i++) {
-        if (i > 1) strlcat(cmd, " ", sizeof(cmd));
-        strlcat(cmd, argv[i], sizeof(cmd));
-    }
-    const int timeout_ms = strncmp(cmd, "cal", 3) == 0 ? 120000 : 15000;
     if (!link_command(cmd, timeout_ms)) {
         out("cannot: no monitor connected, or a command is already running\n");
         return 1;
@@ -333,7 +325,201 @@ static int cmd_monitor(int argc, char **argv, console_out_t out)
         if (c.reply[i][0]) out("%s\n", c.reply[i]);
     }
     out("monitor: exit %d\n", c.exit);
-    return c.exit == 0 ? 0 : 1;
+    return c.exit;
+}
+
+static int cmd_monitor(int argc, char **argv, console_out_t out)
+{
+    if (argc < 2) {
+        out("usage: monitor <command ...>   e.g. monitor cal zero i\n");
+        return 1;
+    }
+    char cmd[100] = "";
+    for (int i = 1; i < argc; i++) {
+        if (i > 1) strlcat(cmd, " ", sizeof(cmd));
+        strlcat(cmd, argv[i], sizeof(cmd));
+    }
+    /* Calibration takes up to about 70 s. */
+    const int timeout_ms = strncmp(cmd, "cal", 3) == 0 ? 120000 : 15000;
+    return monitor_run(cmd, timeout_ms, out) == 0 ? 0 : 1;
+}
+
+/*
+ * UPDATING THE MONITOR THROUGH THE REMOTE, for a monitor with no USB within reach.
+ * tools/flash-via-remote.ps1 drives this; by hand it is not practical.
+ *
+ *   host:   monitor-ota <bytes> <sha256>
+ *   remote: asks for a fast connection, runs `ota begin` on the monitor (erasing its
+ *           spare slot takes seconds), then "READY <frame>"
+ *   host:   a frame: <frame> image bytes (the last one shorter), then their CRC-32,
+ *           4 bytes little-endian
+ *   remote: "OK <bytes so far>" as soon as the frame is in and intact -- and only then
+ *           does the host send the next one -- or "RESEND <offset>" if it came short or
+ *           corrupt, and the host sends that frame again. Then it forwards the frame to
+ *           the monitor's OTA characteristic in MTU-sized writes, each acknowledged,
+ *           while the next frame arrives into the UART driver's buffer behind it.
+ *   remote: any failure on the monitor's side: "ERR <why> at <offset>", and the session
+ *           there is abandoned. After the last frame, `ota end` on the monitor -- size,
+ *           SHA-256, the image's own checks -- then "DONE".
+ *
+ * Two kinds of flow control, one per side. The frame acknowledgement keeps the UART
+ * buffer to one frame in flight, so a host that writes faster than the radio drains
+ * loses nothing; the write responses pace the radio. Acknowledging a frame on arrival
+ * rather than after forwarding it is what overlaps the two: the serial line is the
+ * slower half, and it never waits for the radio.
+ *
+ * The CRC is there because the serial line DOES drop bytes now and then -- seen on the
+ * first full run, 600 KB in. Without it one lost byte stalled the frame for good; with
+ * it, that frame goes again. The SHA-256 at `ota end` remains the check on the whole.
+ *
+ * Serial only: the image comes in on the same port the command did. Rebooting into the
+ * new image and confirming it afterwards are separate commands (`monitor reboot`, then
+ * `monitor ota confirm` once it is back), as in the phone app.
+ */
+#define OTA_FRAME 4096
+
+static void serial_out(const char *fmt, ...);
+
+static const char *ota_err(int st)
+{
+    switch (st) {
+    case LINK_OTA_NO_LINK: return "link lost";
+    case LINK_OTA_TIMEOUT: return "no acknowledgement";
+    case 0x80:             return "no session on the monitor";
+    case 0x81:             return "wrong offset";
+    case 0x82:             return "past the end of the image";
+    case 0x84:             return "monitor's flash refused it";
+    case 0x05:             return "monitor wants a paired link";
+    default:               return "refused";
+    }
+}
+
+/* One frame and its CRC off the serial line. False if it came short or corrupt -- the
+ * line is then drained of whatever else was on the way, ready for the frame again. */
+static bool frame_in(uart_port_t port, uint8_t *buf, size_t want)
+{
+    uint8_t crc_le[4];
+    size_t  got = 0;
+    while (got < want + 4) {
+        uint8_t *dst = got < want ? buf + got : crc_le + (got - want);
+        size_t   n   = got < want ? want - got : want + 4 - got;
+        /* 3 s with nothing: the host is waiting on us, so the frame is short. */
+        const int r = uart_read_bytes(port, dst, n, pdMS_TO_TICKS(3000));
+        if (r <= 0) break;
+        got += r;
+    }
+    if (got == want + 4) {
+        const uint32_t crc = crc_le[0] | crc_le[1] << 8 | crc_le[2] << 16 | (uint32_t)crc_le[3] << 24;
+        if (esp_rom_crc32_le(0, buf, want) == crc) return true;
+    }
+    vTaskDelay(pdMS_TO_TICKS(300)); /* let the rest of anything in flight land */
+    uart_flush_input(port);
+    return false;
+}
+
+/* A frame to the monitor, in acknowledged writes. 0, or the failing status. */
+static int frame_out(const uint8_t *buf, size_t len, uint32_t off, size_t chunk, uint32_t *at)
+{
+    static uint8_t pkt[4 + 508];
+    for (size_t p = 0; p < len; p += chunk) {
+        const size_t   n = len - p < chunk ? len - p : chunk;
+        const uint32_t o = off + p;
+        pkt[0] = o & 0xFF;
+        pkt[1] = (o >> 8) & 0xFF;
+        pkt[2] = (o >> 16) & 0xFF;
+        pkt[3] = o >> 24;
+        memcpy(pkt + 4, buf + p, n);
+        /* Busy (erasing, finishing) means try again shortly; a lost acknowledgement
+         * means send the same chunk again, which the monitor accepts and ignores. */
+        int st = -1;
+        for (int tries = 0; tries < 50; tries++) {
+            st = link_ota_write(pkt, 4 + n, 5000);
+            if (st == 0) break;
+            if (st == 0x83 || (st == LINK_OTA_TIMEOUT && tries < 3)) {
+                vTaskDelay(pdMS_TO_TICKS(100));
+                continue;
+            }
+            break;
+        }
+        if (st != 0) {
+            *at = o;
+            return st;
+        }
+    }
+    return 0;
+}
+
+static int cmd_monitor_ota(int argc, char **argv, console_out_t out)
+{
+    if (out != serial_out) {
+        out("monitor-ota takes the image on the serial port; run it there\n");
+        return 1;
+    }
+    char         *end  = NULL;
+    unsigned long size = argc >= 3 ? strtoul(argv[1], &end, 10) : 0;
+    if (argc < 3 || !size || !end || *end || strlen(argv[2]) != 64) {
+        out("usage: monitor-ota <bytes> <sha256 as 64 hex digits>  (tools/flash-via-remote.ps1)\n");
+        return 1;
+    }
+    size_t chunk = link_ota_chunk();
+    if (chunk > 508) chunk = 508;
+    if (!chunk) {
+        out("ERR no monitor connected\n");
+        return 1;
+    }
+
+    link_ota_fast(true);
+    char cmd[100];
+    snprintf(cmd, sizeof(cmd), "ota begin %lu %s", size, argv[2]);
+    if (monitor_run(cmd, 60000, out) != 0) {
+        link_ota_fast(false);
+        out("ERR the monitor refused 'ota begin'\n");
+        return 1;
+    }
+
+    const uart_port_t port = CONFIG_ESP_CONSOLE_UART_NUM;
+    static uint8_t    frame[OTA_FRAME];
+    uart_flush_input(port);
+    out("READY %d\n", OTA_FRAME);
+
+    uint32_t off = 0, at = 0;
+    int      st  = 0;
+    while (off < size) {
+        const size_t want = size - off < OTA_FRAME ? size - off : OTA_FRAME;
+        int tries = 0;
+        while (!frame_in(port, frame, want)) {
+            if (++tries >= 5) {
+                out("ERR serial: frame at %lu would not arrive intact\n", (unsigned long)off);
+                goto abandon;
+            }
+            out("RESEND %lu\n", (unsigned long)off);
+        }
+        /* In and intact: the host may send the next while this one goes to the radio. */
+        out("OK %lu\n", (unsigned long)(off + want));
+        st = frame_out(frame, want, off, chunk, &at);
+        if (st != 0) {
+            out("ERR %s (0x%02X) at %lu\n", ota_err(st), st & 0xFF, (unsigned long)at);
+            goto abandon;
+        }
+        off += want;
+    }
+
+    link_ota_fast(false);
+    if (monitor_run("ota end", 60000, out) != 0) {
+        out("ERR the monitor refused the image\n");
+        return 1;
+    }
+    out("DONE\n");
+    return 0;
+
+abandon:
+    /* Whatever the host still had on the way would read as commands: let it land and
+     * drop it, then close the session on the monitor if the link is still there. */
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    uart_flush_input(port);
+    link_ota_fast(false);
+    monitor_run("ota abort", 10000, out);
+    return 1;
 }
 
 static int cmd_update(int argc, char **argv, console_out_t out)
@@ -382,6 +568,8 @@ static void help(console_out_t out)
     out("  forget                     drop the remembered board and every bond\n");
     out("  passkey <digits>|cancel    answer the monitor's pairing request\n");
     out("  monitor <command ...>      run a command on the monitor, e.g. cal zero i\n");
+    out("  monitor-ota <bytes> <sha>  update the monitor through this remote\n");
+    out("                             (serial only; tools/flash-via-remote.ps1)\n");
     out("  update on|off              firmware update mode, for the phone app\n");
     out("  pin <gpio> <0|1>           drive a GPIO (finding a board's wiring)\n");
     out("  ver, ota [...], reboot, help\n");
@@ -402,6 +590,7 @@ int console_exec(int argc, char **argv, console_out_t out)
     if (strcmp(c, "connect") == 0) return cmd_connect(argc, argv, out);
     if (strcmp(c, "passkey") == 0) return cmd_passkey(argc, argv, out);
     if (strcmp(c, "monitor") == 0) return cmd_monitor(argc, argv, out);
+    if (strcmp(c, "monitor-ota") == 0) return cmd_monitor_ota(argc, argv, out);
     if (strcmp(c, "update") == 0)  return cmd_update(argc, argv, out);
     if (strcmp(c, "pin") == 0)     return cmd_pin(argc, argv, out);
     if (strcmp(c, "forget") == 0) {
@@ -473,7 +662,9 @@ void console_start(void)
      * which the log uses too, so the driver gets no TX buffer. */
     const uart_port_t port = CONFIG_ESP_CONSOLE_UART_NUM;
     if (!uart_is_driver_installed(port)) {
-        ESP_ERROR_CHECK(uart_driver_install(port, 256, 0, 0, NULL, 0));
+        /* Room for a whole monitor-ota frame and a little: the host sends one at a
+         * time, so this never has to hold more. */
+        ESP_ERROR_CHECK(uart_driver_install(port, OTA_FRAME + 512, 0, 0, NULL, 0));
     }
     xTaskCreate(console_task, "console", 4096, NULL, 2, NULL);
     ESP_LOGI("console", "serial console ready: type 'help'");

@@ -17,6 +17,9 @@
  *   passkey <six digits>       answer a pairing request; `passkey cancel` refuses it
  *   monitor <command ...>      run a console command on the monitor (CLI.md), e.g.
  *                              `monitor cal zero i`; prints its reply (the last 16 lines)
+ *   monitor-ota <bytes> <sha>  update the MONITOR's firmware through this remote, the
+ *                              image coming in on the serial port (serial only;
+ *                              tools/flash-via-remote.ps1 drives it)
  *   update on | off            firmware update mode: visible to the phone app
  *   ota [...]                  the OTA session, as on the monitor (CLI.md §6)
  *   reboot

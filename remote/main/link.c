@@ -54,6 +54,8 @@ static const char *TAG = "link";
 static const ble_uuid128_t UUID_SVC = NUS_UUID(0x01);
 static const ble_uuid128_t UUID_RX  = NUS_UUID(0x02);
 static const ble_uuid128_t UUID_TX  = NUS_UUID(0x03);
+/* The monitor's firmware-update data (CLI.md §6): write with response only. */
+static const ble_uuid128_t UUID_OTA = NUS_UUID(0x04);
 
 #define EV_READY BIT0 /* subscribed: the handshake may run */
 #define EV_EOT   BIT1 /* the command in flight has been answered */
@@ -81,6 +83,11 @@ static struct {
     peer_t   target;     /* what we are connecting / connected to */
     uint16_t svc_end;
     uint16_t rx_handle, tx_handle, cccd_handle;
+    uint16_t ota_handle;  /* 0 on a monitor from before BLE updates */
+
+    /* One OTA data write in flight (link_ota_write()), and how it ended. */
+    SemaphoreHandle_t ota_sem;
+    volatile int      ota_status;
     bool     need_handshake;
     bool     pending;     /* a command is awaiting its 0x04 */
     bool     browse;      /* keep scanning while connected, for the Devices screen */
@@ -426,7 +433,7 @@ static bool run(const char *cmd, int timeout_ms)
     if (s.conn == BLE_HS_CONN_HANDLE_NONE || !s.rx_handle) {
         return false;
     }
-    char buf[64];
+    char buf[112];
     const int n = snprintf(buf, sizeof(buf), "%s\n", cmd);
     xEventGroupClearBits(s.ev, EV_EOT);
     s.pending = true;
@@ -495,7 +502,7 @@ static void link_task(void *arg)
             s.user_res.exit       = -1;
             s.user_res.started_us = esp_timer_get_time();
             memset(s.user_res.reply, 0, sizeof(s.user_res.reply));
-            char cmd[48];
+            char cmd[sizeof(s.user_res.cmd)];
             snprintf(cmd, sizeof(cmd), "%s", s.user_res.cmd);
             const int timeout = s.user_res.timeout_ms;
             unlock();
@@ -563,6 +570,7 @@ static int on_chr(uint16_t conn, const struct ble_gatt_error *err, const struct 
     if (err->status == 0) {
         if (ble_uuid_cmp(&chr->uuid.u, &UUID_RX.u) == 0) s.rx_handle = chr->val_handle;
         if (ble_uuid_cmp(&chr->uuid.u, &UUID_TX.u) == 0) s.tx_handle = chr->val_handle;
+        if (ble_uuid_cmp(&chr->uuid.u, &UUID_OTA.u) == 0) s.ota_handle = chr->val_handle;
         return 0;
     }
     if (err->status == BLE_HS_EDONE && s.rx_handle && s.tx_handle) {
@@ -723,7 +731,7 @@ static int gap_event(struct ble_gap_event *e, void *arg)
             return 0;
         }
         s.conn        = e->connect.conn_handle;
-        s.svc_end     = s.rx_handle = s.tx_handle = s.cccd_handle = 0;
+        s.svc_end     = s.rx_handle = s.tx_handle = s.cccd_handle = s.ota_handle = 0;
         reset_link_model();
         set_state(LINK_SETUP);
         ble_gattc_exchange_mtu(s.conn, on_mtu, NULL);
@@ -741,6 +749,8 @@ static int gap_event(struct ble_gap_event *e, void *arg)
         s.want_passkey = false;
         xEventGroupClearBits(s.ev, EV_READY);
         xEventGroupSetBits(s.ev, EV_EOT); /* release a command waiting on a dead link */
+        s.ota_status = -4;                /* and an OTA write */
+        xSemaphoreGive(s.ota_sem);
         note("link lost; looking for the board");
         start_scan();
         return 0;
@@ -828,8 +838,9 @@ static void host_task(void *arg)
 
 void link_start(void)
 {
-    s.lock = xSemaphoreCreateMutex();
-    s.ev   = xEventGroupCreate();
+    s.lock    = xSemaphoreCreateMutex();
+    s.ev      = xEventGroupCreate();
+    s.ota_sem = xSemaphoreCreateBinary();
     peer_load();
     if (s.have_peer) {
         snprintf(s.model.name, sizeof(s.model.name), "%s", s.peer.name);
@@ -968,6 +979,73 @@ void link_command_status(link_cmd_t *out)
     lock();
     *out = s.user_res;
     unlock();
+}
+
+/* --- firmware update of the monitor ------------------------------------------------- */
+
+static int on_ota_write(uint16_t conn, const struct ble_gatt_error *err, struct ble_gatt_attr *a,
+                        void *arg)
+{
+    s.ota_status = err->status;
+    xSemaphoreGive(s.ota_sem);
+    return 0;
+}
+
+int link_ota_write(const uint8_t *data, size_t len, int timeout_ms)
+{
+    if (s.conn == BLE_HS_CONN_HANDLE_NONE || !s.ota_handle) {
+        return LINK_OTA_NO_LINK;
+    }
+    xSemaphoreTake(s.ota_sem, 0); /* a stale give from an earlier disconnect */
+    s.ota_status = -1;
+    /* Out of mbufs is a moment's congestion with the stream's notifications, not a
+     * failure: wait it out a little rather than abandon a 2-minute transfer. */
+    int rc = BLE_HS_ENOMEM;
+    for (int tries = 0; tries < 50 && rc == BLE_HS_ENOMEM; tries++) {
+        rc = ble_gattc_write_flat(s.conn, s.ota_handle, data, len, on_ota_write, NULL);
+        if (rc == BLE_HS_ENOMEM) vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    if (rc != 0) return LINK_OTA_NO_LINK;
+    if (xSemaphoreTake(s.ota_sem, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        return LINK_OTA_TIMEOUT;
+    }
+    lock();
+    s.model.tx_packets++;
+    unlock();
+    const int st = s.ota_status;
+    if (st == 0) return 0;
+    if (st < 0) return LINK_OTA_NO_LINK;
+    /* An ATT error from the monitor: its own code, which CLI.md §6 names. */
+    return st >= BLE_HS_ERR_ATT_BASE ? st - BLE_HS_ERR_ATT_BASE : st;
+}
+
+void link_ota_fast(bool on)
+{
+    if (s.conn == BLE_HS_CONN_HANDLE_NONE) return;
+    /*
+     * One acknowledged write per two connection events is the whole of the update's
+     * throughput, so for its duration the events come every 7.5-15 ms instead of
+     * 30-50. And the supervision timeout goes to 20 s: the monitor erases its spare
+     * slot in one go at `ota begin`, seconds in which its radio may go quiet, and the
+     * normal 2.56 s would call that a lost link. Both back to NimBLE's defaults after.
+     * The monitor may settle on something else; the request is a request.
+     */
+    const struct ble_gap_upd_params p = {
+        .itvl_min            = on ? 6 : 24,     /* x 1.25 ms */
+        .itvl_max            = on ? 12 : 40,
+        .latency             = 0,
+        .supervision_timeout = on ? 2000 : 256, /* x 10 ms */
+    };
+    const int rc = ble_gap_update_params(s.conn, &p);
+    ESP_LOGI(TAG, "connection %s (rc %d)", on ? "fast, for the monitor's update" : "back to normal",
+             rc);
+}
+
+size_t link_ota_chunk(void)
+{
+    if (s.conn == BLE_HS_CONN_HANDLE_NONE) return 0;
+    const uint16_t mtu = ble_att_mtu(s.conn);
+    return mtu > 3 + 4 ? mtu - 3 - 4 : 0; /* one ATT write, less the 4-byte offset */
 }
 
 bool link_passkey_wanted(char *who, size_t n)
