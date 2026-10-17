@@ -172,7 +172,12 @@ it again, and forwards it in acknowledged writes while the next one arrives. The
 `ota end`, a reboot, a check that the new version is the one running, and `ota confirm`.
 `-NoReboot` stops after `ota end`. For the duration the remote asks for a 7.5–15 ms
 connection interval and a 20 s supervision timeout, and restores the normal ones after.
-Measured: 840 KB in 129 s, 6.4 KB/s.
+Measured: 840 KB in 123-129 s, 6.4-6.7 KB/s.
+
+While it runs, the dashboard's header shows it: a yellow download arrow left of the
+version column, and the percentage sent to the monitor in place of this display's own
+version. Whoever looks at the remote sees that the monitor is being updated, though the
+person who started it is at a computer.
 
 The calibrations behind `monitor cal ...` have the same preconditions as the Settings
 screen states: no load for `cal zero i`, VBUS tied to ground for `cal zero v`, a meter

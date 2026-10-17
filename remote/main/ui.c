@@ -67,6 +67,14 @@ void ui_update_mode(bool on)
     s_req_update = on ? 1 : 0;
 }
 
+/* The monitor being updated through this remote: percent, or -1. */
+static volatile int s_mota_pct = -1;
+
+void ui_monitor_ota(int pct)
+{
+    s_mota_pct = pct;
+}
+
 /* --- small widgets --------------------------------------------------------------- */
 
 #if BOARD_HAS_TOUCH
@@ -152,6 +160,40 @@ static void bt_icon(uint16_t color)
         }
     }
     lcd_blit(BT_X, BT_Y, BT_W, BT_H, px);
+}
+
+/* --- the download icon: the monitor being updated through this remote --------------- */
+
+/* An arrow down into a tray, 8 x 13, drawn thickened like the Bluetooth rune. */
+static const char *const DL_RUNE[13] = {
+    "...#....",
+    "...#....",
+    "...#....",
+    "...#....",
+    "...#....",
+    "#..#..#.",
+    ".#.#.#..",
+    "..###...",
+    "...#....",
+    "........",
+    "#.....#.",
+    "#.....#.",
+    "#######.",
+};
+#define DL_X 182 /* between the board's name and the version column */
+#define DL_Y 4
+
+static void dl_icon(uint16_t color)
+{
+    static uint16_t px[BT_W * BT_H];
+    for (int y = 0; y < BT_H; y++) {
+        for (int x = 0; x < BT_W; x++) {
+            const bool on = (x < 8 && DL_RUNE[y][x] == '#') ||
+                            (x > 0 && x - 1 < 8 && DL_RUNE[y][x - 1] == '#');
+            px[y * BT_W + x] = on ? color : C_HEADER;
+        }
+    }
+    lcd_blit(DL_X, DL_Y, BT_W, BT_H, px);
 }
 
 /* --- the signal-strength antenna ------------------------------------------------------ */
@@ -447,7 +489,9 @@ static void main_draw(const link_model_t *m)
     char b[32];
 
     /* Header. */
-    field(&f_name, 6, 3, 186, 2, C_WHITE, C_HEADER, m->name[0] ? m->name : "tap: pick a board");
+    /* 174 wide, not the 186 up to the version column: the download icon sits in the
+     * last 12 while the monitor is being updated. "batmon-XXXX" takes 132. */
+    field(&f_name, 6, 3, 174, 2, C_WHITE, C_HEADER, m->name[0] ? m->name : "tap: pick a board");
     const char *st;
     uint16_t    sc;
     switch (m->state) {
@@ -492,9 +536,27 @@ static void main_draw(const link_model_t *m)
     if (!self_ver) {
         self_ver = esp_app_get_description()->version;
     }
-    char selfb[24];
-    snprintf(selfb, sizeof(selfb), "%.10s", self_ver);
-    field(&f_self, 196, 3, 84, 1, C_GREY, C_HEADER, selfb);
+    /*
+     * Except while the MONITOR is being updated through this remote (`monitor-ota`):
+     * then a download arrow left of the column, and the transfer's percentage in place
+     * of this display's version, in yellow -- the update is what is going on, and the
+     * person who started it is at the computer, not here, so the screen has to say so
+     * to anyone else who looks at it.
+     */
+    static int dl_last = -2;
+    const int  dl      = s_mota_pct;
+    char       selfb[24];
+    if (dl >= 0) {
+        snprintf(selfb, sizeof(selfb), "%d%%", dl);
+    } else {
+        snprintf(selfb, sizeof(selfb), "%.10s", self_ver);
+    }
+    if (s_full || (dl >= 0) != (dl_last >= 0)) {
+        if (dl >= 0) dl_icon(C_YELLOW);
+        else         lcd_fill(DL_X, DL_Y, BT_W, BT_H, C_HEADER);
+    }
+    dl_last = dl;
+    field(&f_self, 196, 3, 84, 1, dl >= 0 ? C_YELLOW : C_GREY, C_HEADER, selfb);
 
     char status[24];
     if (live && m->firmware[0]) snprintf(status, sizeof(status), "%.8s %d/s", m->firmware,

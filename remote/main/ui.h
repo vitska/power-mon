@@ -12,3 +12,7 @@ void ui_run(void);
 /** Opens (true) or leaves (false) the firmware update screen, which is what makes the
  *  remote visible to the phone app. For the console; safe from any task. */
 void ui_update_mode(bool on);
+
+/** The monitor's firmware update through this remote (console.c, `monitor-ota`): its
+ *  progress in percent, shown in the dashboard's header, or -1 when none is running. */
+void ui_monitor_ota(int pct);

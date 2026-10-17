@@ -480,6 +480,7 @@ static int cmd_monitor_ota(int argc, char **argv, console_out_t out)
     const uart_port_t port = CONFIG_ESP_CONSOLE_UART_NUM;
     static uint8_t    frame[OTA_FRAME];
     uart_flush_input(port);
+    ui_monitor_ota(0); /* the dashboard's header shows it from here (ui.c) */
     out("READY %d\n", OTA_FRAME);
 
     uint32_t off = 0, at = 0;
@@ -502,10 +503,14 @@ static int cmd_monitor_ota(int argc, char **argv, console_out_t out)
             goto abandon;
         }
         off += want;
+        /* As forwarded to the monitor, not as received: that is what is done. */
+        ui_monitor_ota((int)((uint64_t)off * 100 / size));
     }
 
     link_ota_fast(false);
-    if (monitor_run("ota end", 60000, out) != 0) {
+    const int ended = monitor_run("ota end", 60000, out);
+    ui_monitor_ota(-1);
+    if (ended != 0) {
         out("ERR the monitor refused the image\n");
         return 1;
     }
@@ -517,6 +522,7 @@ abandon:
      * drop it, then close the session on the monitor if the link is still there. */
     vTaskDelay(pdMS_TO_TICKS(1000));
     uart_flush_input(port);
+    ui_monitor_ota(-1);
     link_ota_fast(false);
     monitor_run("ota abort", 10000, out);
     return 1;
