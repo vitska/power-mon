@@ -124,7 +124,7 @@ In order of likelihood:
 `life` on the console prints the pack's whole history in one place: its chemistry and
 cell count, the nameplate, the measured capacity and the state of health between them,
 the equivalent full cycles, and the lifetime amp-hours in and out. The app carries it on
-Configure - Battery, the remote on Settings - BATTERY LOG.
+Configure - Battery, the remote on Settings - BATTERY LOG, or `battery` on its console.
 
 **Cycles are equivalent full cycles**: lifetime discharge divided by the *nameplate*
 capacity, so ten 10 % discharges count as one and the number can be read against a

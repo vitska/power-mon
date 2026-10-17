@@ -242,12 +242,15 @@ The board is compiled in, so each one has its own build. `-Board` picks it:
 - **Each board builds separately**, into `remote/build/<board>/`, with its settings in
   `remote/sdkconfig.<board>`. A board's fragment, `boards/<board>.defaults`, picks it.
   `--project-dir remote` without `-Board` builds `cyd`.
-- **`flash.ps1` can detect the board.** Without `-Board`, it resets the board and reads
-  `board: <name>` from the boot log of the remote firmware already on it. That is the
-  board the image was *built* for, so the first flash of each board needs `-Board`: a
-  new board, one running other firmware, or one running remote firmware from 0.4.24 or
-  older, which does not say. A CYD image runs on a JC2432W328R (dark, still logging
-  `ILI9341 panel up`), so its panel line identifies the image, not the board.
+- **`flash.ps1` reads the board off the device, every time.** It resets the board and
+  reads `board: <name>` from the boot log of the remote firmware already on it. Without
+  `-Board` that is the board flashed. With `-Board` it is the guard: a device that says it
+  is another board is refused (`-Force` overrides, for a device whose firmware was the
+  wrong one to begin with). The boot log names the board the image was *built* for, so
+  the first flash of each board needs `-Board`: a new board, one running other firmware,
+  or one running remote firmware from 0.4.24 or older, which does not say. A CYD image
+  runs on a JC2432W328R (dark, still logging `ILI9341 panel up`), so its panel line
+  identifies the image, not the board.
 - **`flash.ps1` checks the image.** It refuses a build whose sdkconfig was switched to
   another board in menuconfig: the wrong image gives a dark screen or dead touch.
 

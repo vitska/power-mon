@@ -871,12 +871,19 @@ another:
 - **The Android app**, [`android/`](android/README.md). It uses every surface: `ver` and
   `config` on connect, the CSV stream, every setter, calibration with confirmation
   dialogs, and the firmware update of §6.
-- **The remote display**, [`remote/`](remote/README.md), a BLE central on an
-  ESP32-2432S028. It sends `ver`, `config` and `stream csv`, parses `f` and `c`, and runs
-  calibration. It pairs by passkey entry when the board is in `bonded` mode.
+- **The remote display**, [`remote/`](remote/README.md), a BLE central on one of four
+  ESP32 display boards. It sends `ver`, `config`, `hist` and `stream csv`, parses `f`, `c`
+  and `e`, and skips every other record. It runs calibration, and any other command a
+  person types on its console (`monitor <command>`). It pairs by passkey entry when the
+  board is in `bonded` mode. And it can run the §6 firmware update of the monitor itself,
+  forwarding an image it receives over its own USB serial port (`monitor-ota`,
+  `tools/flash-via-remote.ps1`).
 
-The remote display also *serves* a subset of this protocol, for its own firmware updates.
-While its update screen is open it advertises as `batmon-remote-XXXX` and answers `ver`
-(with `device remote`), the `ota` commands, `reboot` and `help` on the same service, with
-the same framing and OTA characteristic. Everything else answers `exit -2`. A client
+The remote display also *serves* this protocol's framing, for its own firmware updates
+and settings: over BLE while its update screen is open, advertising as
+`batmon-remote-XXXX`, with the same service and OTA characteristic; and on its USB serial
+port always. It answers `ver` (with `device remote` and `board <name>`, which says which
+image fits it), the `ota` commands, `reboot` and `help`, and the display's own commands --
+`status`, `battery`, `scan`, `connect`, `forget`, `passkey`, `monitor`, `update`,
+`touch`, `pin` (remote/README.md, "Console"). Anything else answers `exit -2`. A client
 tells the two apart by the name prefix, or by `device remote` in `ver`.

@@ -15,7 +15,9 @@ stated before each step:
 - **The phone app:** Configure → Calibration, which shows the live readings next to
   the fields.
 - **The remote display:** Settings → Zero current, Zero voltage, Measured current,
-  Measured voltage. Its keypad's USE key starts from the board's own reading.
+  Measured voltage. Its keypad's USE key starts from the board's own reading. On the
+  JC1732W319, which has no touch, the same from its serial console: `monitor cal zero i`,
+  `monitor cal zero v`, `monitor cal top i <amps>`, `monitor cal top v <volts>`.
 
 This document is still worth reading first. The steps are the same, and the reasons
 behind them, especially the zero-point preconditions, are what keep a calibration

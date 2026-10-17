@@ -3,7 +3,7 @@
 Battery monitor for the Seeed XIAO ESP32-C6 with dual INA219 shunt sensors.
 Coulomb-counting fuel gauge with voltage re-anchoring for eight battery chemistries, OLED
 readout, and the whole console reachable over BLE. The monitor has two clients: an
-Android app, and a touch-screen remote display on a second board. Full design:
+Android app, and a remote display on one of four ESP32 display boards. Full design:
 [DESIGN.md](DESIGN.md).
 
 **Current state: running on hardware.** Firmware updates reach the board over BLE from the
@@ -18,7 +18,7 @@ Verified against a 12 V / 44 A·h flooded lead-acid battery.
 | [CAPACITY.md](CAPACITY.md) | how the gauge measures the pack's real capacity, and when |
 | [CLI.md](CLI.md) | command and protocol reference, sufficient to write a client |
 | [android/README.md](android/README.md) | the phone app, **Battery monitor**: monitor, configure, console, firmware updates. The APK is on the `app-v…` GitHub releases |
-| [remote/README.md](remote/README.md) | the touch-screen remote display on the ESP32-2432S028, a second firmware |
+| [remote/README.md](remote/README.md) | the remote display, a second firmware for four ESP32 display boards: screens, console, boards, updates |
 
 ## Milestones
 
@@ -76,11 +76,18 @@ Verified against a 12 V / 44 A·h flooded lead-acid battery.
   - **Firmware:** checks GitHub for a newer release and flashes it over BLE.
 
   Tapping a board connects to it straight away, and a dropped link reconnects on its own.
-- **Remote display** (`remote/`): an ESP32-2432S028 touch screen that connects over BLE.
+- **Remote display** (`remote/`): a screen next to the battery that connects over BLE, on
+  one of four boards -- the ESP32-2432S028 ("Cheap Yellow Display", two panel variants),
+  the GUITION JC2432W328R, or the 1.9" GUITION JC1732W319 without touch.
   - It shows SoC as a ten-brick gauge and large digits, voltage, current, power, mode,
     time to empty/full, the pack's set and measured capacity, temperature, humidity
     and pressure, and the monitor's SoC history -- tap the graph to step between the
-    full span the monitor holds, a half of it and a quarter.
+    full span the monitor holds, a half of it and a quarter. The 1.9" board shows the
+    history as a line coloured by the gauge's state.
+  - Every board has a serial console with what the touch screens do: pick and pair a
+    board, calibrate, read the battery log, open the update screen.
+  - It can update the monitor's firmware itself, from a computer on its USB port
+    (`tools\flash-via-remote.ps1`), for a monitor no cable reaches.
   - Both clients rule the graph at every 25 % and on whole hours, with the hour step
     taken from the recording interval rather than assumed.
   - The header carries this display's own firmware version, the monitor's under it,
@@ -161,11 +168,12 @@ Pin a different IDF version with `$env:BATMON_IDF_IMAGE` / `BATMON_IDF_IMAGE`.
 
 | Script | What it does |
 |---|---|
-| `tools\idf.ps1 build` | Build the monitor in Docker. `--project-dir remote build` builds the remote display |
-| `tools\flash.ps1` | Flash the monitor over USB. `-Remote` flashes the remote display. Auto-detect picks only USB serial ports |
+| `tools\idf.ps1 build` | Build the monitor in Docker. `-Board <name> build` builds the remote display for one board |
+| `tools\flash.ps1` | Flash the monitor over USB. `-Remote` flashes the remote display, reading which board it is off the device; `-Board` names it, and is refused if the device says it is another (`-Force` overrides). Auto-detect picks only USB serial ports |
+| `tools\flash-via-remote.ps1` | Update the monitor through a remote display on USB: the remote passes the image on over its BLE link. Reboots and confirms the new image |
 | `tools\monitor.ps1` | Serial console |
 | `tools\android.ps1` | Build the Android app, install it on a USB-attached phone and launch it. `-Logcat` follows its log |
-| `tools\release.ps1` | Bump, build, verify, tag and publish a monitor release. `-Remote` does the same for the remote display, `-App` for the Android app's APK |
+| `tools\release.ps1` | Bump, build, verify, tag and publish a monitor release. `-Remote` does the same for the remote display, one image per board; `-App` for the Android app's APK |
 
 ### Option B — local ESP-IDF
 
@@ -194,8 +202,8 @@ attached as `bat-monitor.bin`. That is exactly what the app looks for: the newes
 release, compared numerically against what the board reports. Cut one with:
 
 ```powershell
-.	oolselease.ps1 -Bump patch -DryRun   # bump + build + verify; publishes nothing
-.	oolselease.ps1 -Bump minor           # commit, build, tag, push, publish
+.\tools\release.ps1 -Bump patch -DryRun   # bump + build + verify; publishes nothing
+.\tools\release.ps1 -Bump minor           # commit, build, tag, push, publish
 ```
 
 It refuses a dirty tree, and it reads the version back out of the built image before
@@ -208,7 +216,7 @@ board attached, and is
 cut with `-Remote`:
 
 ```powershell
-.	oolselease.ps1 -Remote -Bump patch
+.\tools\release.ps1 -Remote -Bump patch
 ```
 
 A monitor release is always published as GitHub's *latest* release, and a remote release
@@ -226,7 +234,7 @@ before that — a crash, a hang, no reconnect within ten minutes — puts the bo
 the previous firmware by itself.
 
 **The first time needs USB.** A board running firmware before 0.6.0 has one app slot
-and a bootloader without rollback. `.	oolslash.ps1` once writes the new bootloader,
+and a bootloader without rollback. `.\tools\flash.ps1` once writes the new bootloader,
 the two-slot partition table and the firmware; calibration, gauge state and bonds are
 kept, because the NVS partition stays where it was. Every update after that can go over
 the air.

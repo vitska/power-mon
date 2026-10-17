@@ -1467,15 +1467,26 @@ The JBD service above is not implemented yet. Everything today speaks the NUS co
   share one serialised write path, because Android refuses a second GATT write while one
   is in flight. It dials the chosen board directly and redials after any drop, rather
   than scanning first: a board picked from a list is already known.
-- **Remote display** (`remote/`), a second firmware on an ESP32-2432S028: a classic
-  ESP32 with a 320×240 SPI panel and resistive touch. It is a NimBLE central. Its IO
+- **Remote display** (`remote/`), a second firmware for four ESP32 display boards, the
+  board a build-time choice (`remote/main/board.h`): the ESP32-2432S028 in its ILI9341 and
+  ST7789 variants, the GUITION JC2432W328R, and the 1.9" GUITION JC1732W319, which has no
+  touch. All are a classic ESP32 driving an SPI panel. It is a NimBLE central. Its IO
   capability is keyboard-only, and against the monitor's display-only one that makes LE
   Secure Connections use passkey entry: the monitor shows six digits and the remote's
-  keypad takes them.
+  keypad takes them -- or, on the board without touch, its console's `passkey`.
   - It has no framebuffer (150 KB of the ESP32's RAM would starve the BLE stack), so
     fields redraw only on change and the SoC graph is rendered in strips.
-  - The monitor keeps no history, so the remote records its own SoC history, one point a
-    minute for 24 hours.
+  - The SoC history is the monitor's own (`hist`, §6), fetched on connect and every two
+    minutes; the remote keeps none. On the 170-row panel it is drawn as a line coloured
+    by the gauge's state instead of a graph.
+  - Every board has a serial console that does what the touch screens do; on the board
+    without touch it is the only way in.
+  - Each image carries its board's name in a tag after the app descriptor, and nothing
+    installs another board's image: not the remote's own OTA, not the app, not
+    `tools/flash.ps1` (which reads the board off the running firmware first).
+  - It can carry a firmware update TO the monitor: `tools/flash-via-remote.ps1` hands it
+    the image over its USB serial port, and it runs the monitor's own OTA protocol over the
+    link it already holds -- for a monitor with no USB in reach.
 
 The monitor accepts three connections, so a phone and a remote can watch the same pack.
 Telemetry is broadcast to both, and command replies are unicast to whichever sent the

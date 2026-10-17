@@ -208,9 +208,13 @@ fixed offsets, so a wrong file is refused on the phone, not discovered on the bo
 **Remote displays too.** A remote display in its Firmware update screen appears in the
 device list as `batmon-remote-XXXX`, labelled as such, and is never connected to
 automatically. Connected to one, the Firmware tab looks in the remote's release series
-(`remote-vX.Y.Z`, `batmon-remote.bin`) rather than the monitor's. It checks an image for
-the classic ESP32 and the `batmon-remote` project, and the update runs exactly as for a
-monitor. The other tabs say that a remote has nothing to show or configure. Releases are
+(`remote-vX.Y.Z`) rather than the monitor's, for the image of **that remote's board**: its
+`ver` says `board <name>`, and each release carries one `batmon-remote-<board>.bin` per
+board. A remote too old to say (before 0.4.30) was built for the classic CYD and gets
+`batmon-remote-cyd.bin`. An image is checked for the classic ESP32, the `batmon-remote`
+project and the board tag it carries, so another board's image -- which boots into a dark
+screen or dead touch -- is refused on the phone, and again on the remote. The update then
+runs exactly as for a monitor. The other tabs say that a remote has nothing to show or configure. Releases are
 found by listing them, not by asking for GitHub's "latest", which only ever points at the
 monitor series.
 
