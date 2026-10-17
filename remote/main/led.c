@@ -1,8 +1,13 @@
 /*
  * led.c — see led.h.
  *
- * Plain GPIO, no PWM: three on/off colours say all this needs to. The LED is common
- * anode, so a channel is lit with its pin LOW; BOARD_LED_ON carries that.
+ * Still three on/off colours, but "on" is PWM at BOARD_LED_DUTY_PCT, not the pin held
+ * fully on: at full drive the LED is glaring in a dim room and lights the bench around
+ * it. LEDC, 5 kHz -- far above any flicker the eye or a phone camera picks up -- one
+ * timer for all three channels.
+ *
+ * The LED is common anode, so a channel is lit with its pin LOW (BOARD_LED_ON 0). LEDC
+ * inverts the output for that, so a duty here is always the share of time LIT.
  */
 
 #include "led.h"
@@ -11,24 +16,49 @@
 
 #if BOARD_HAS_RGB_LED
 
-#include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "esp_timer.h"
 
-static void set(int pin, bool on)
+#define LED_MODE   LEDC_LOW_SPEED_MODE
+#define LED_TIMER  LEDC_TIMER_1             /* 0 left free for anything else */
+#define LED_RES    LEDC_TIMER_8_BIT
+#define LED_FULL   ((1u << 8) - 1)
+#define LED_DUTY   ((LED_FULL * BOARD_LED_DUTY_PCT + 50) / 100)
+
+enum { CH_R, CH_G, CH_B };
+static const int      PINS[3] = {BOARD_LED_R, BOARD_LED_G, BOARD_LED_B};
+static bool           s_on[3];
+
+static void set(int ch, bool on)
 {
-    gpio_set_level(pin, on ? BOARD_LED_ON : !BOARD_LED_ON);
+    if (s_on[ch] == on) return; /* every 30 ms from the UI loop: touch LEDC on change only */
+    s_on[ch] = on;
+    ledc_set_duty(LED_MODE, (ledc_channel_t)ch, on ? LED_DUTY : 0);
+    ledc_update_duty(LED_MODE, (ledc_channel_t)ch);
 }
 
 void led_init(void)
 {
-    const gpio_config_t io = {
-        .pin_bit_mask = (1ULL << BOARD_LED_R) | (1ULL << BOARD_LED_G) | (1ULL << BOARD_LED_B),
-        .mode         = GPIO_MODE_OUTPUT,
+    const ledc_timer_config_t t = {
+        .speed_mode      = LED_MODE,
+        .duty_resolution = LED_RES,
+        .timer_num       = LED_TIMER,
+        .freq_hz         = 5000,
+        .clk_cfg         = LEDC_AUTO_CLK,
     };
-    gpio_config(&io);
-    set(BOARD_LED_R, true); /* not connected yet */
-    set(BOARD_LED_G, false);
-    set(BOARD_LED_B, false);
+    ESP_ERROR_CHECK(ledc_timer_config(&t));
+    for (int ch = 0; ch < 3; ch++) {
+        const ledc_channel_config_t c = {
+            .gpio_num   = PINS[ch],
+            .speed_mode = LED_MODE,
+            .channel    = (ledc_channel_t)ch,
+            .timer_sel  = LED_TIMER,
+            .duty       = 0,
+            .flags.output_invert = BOARD_LED_ON == 0,
+        };
+        ESP_ERROR_CHECK(ledc_channel_config(&c));
+    }
+    set(CH_R, true); /* not connected yet */
 }
 
 void led_update(const link_model_t *m)
@@ -40,7 +70,7 @@ void led_update(const link_model_t *m)
     /* Connected is anything from SETUP on: the link is up, whether or not the
      * handshake or the pairing has finished. */
     const bool connected = m->state != LINK_SCANNING && m->state != LINK_CONNECTING;
-    set(BOARD_LED_R, !connected);
+    set(CH_R, !connected);
 
     /* The same blink lengths as the header's icon (ui.c): a command outlasts the
      * notifications that answer it, so it shows. */
@@ -51,7 +81,7 @@ void led_update(const link_model_t *m)
     }
     seen_tx = m->tx_packets;
     seen_rx = m->rx_packets;
-    set(BOARD_LED_B, now < blink_until);
+    set(CH_B, now < blink_until);
 }
 
 #else

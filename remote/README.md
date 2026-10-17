@@ -113,7 +113,7 @@ no live progress, just the elapsed time against the expected duration.
 saved and connected. Tap one to switch to it; it is remembered. **FORGET** (tap twice)
 drops the saved board and every pairing bond. **BACK** returns to Settings.
 
-**Status LED** (JC2432W328R). **Red** while there is no connection to the monitor. **Blue**
+**Status LED** (JC2432W328R), at half brightness (PWM, 50 % duty: full drive glares). **Red** while there is no connection to the monitor. **Blue**
 blinks with Bluetooth traffic, like the header's icon: a short blink for every notification
 received, a longer one for every command sent. A steady blue flicker means a working link.
 
