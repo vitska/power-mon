@@ -29,6 +29,7 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 
+#include "board.h"
 #include "ota.h"
 
 static const char *TAG = "rcon";
@@ -132,6 +133,8 @@ static int cmd_ver(void)
     out("firmware %s\n", esp_app_get_description()->version);
     out("build %s\n", build);
     out("device remote\n");
+    /* Which image fits this display: the app picks the release asset by it. */
+    out("board %s\n", BOARD_NAME);
     out("chip esp32\n");
     out("mac %02X:%02X:%02X:%02X:%02X:%02X\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     return 0;

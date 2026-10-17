@@ -33,6 +33,7 @@
 #include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
+#include "esp_partition.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -178,6 +179,18 @@ static void refresh_cache(void)
         snprintf(s_cache.spare_version, sizeof(s_cache.spare_version), "%.31s", d.version);
     }
     s_cache.can_rollback = esp_ota_check_rollback_is_possible();
+}
+
+/* The board tag an image in `p` carries (ota.h, BOARD TAG); false if it has none. A
+ * plain partition read, not the shared mapping above. */
+static bool read_board_tag(const esp_partition_t *p, ota_board_tag_t *out)
+{
+    if (!p || esp_partition_read(p, OTA_BOARD_TAG_OFFSET, out, sizeof(*out)) != ESP_OK ||
+        out->magic != OTA_BOARD_MAGIC) {
+        return false;
+    }
+    out->name[sizeof(out->name) - 1] = '\0';
+    return true;
 }
 
 /* --- boot ---------------------------------------------------------------------- */
@@ -360,6 +373,23 @@ esp_err_t ota_finish(char *why, size_t why_len)
                  mine);
         err = ESP_ERR_INVALID_VERSION;
         goto out;
+    }
+
+    /* Nor is the right project necessarily built for THIS board (ota.h, BOARD TAG). */
+    ota_board_tag_t have, got_tag;
+    if (read_board_tag(esp_ota_get_running_partition(), &have)) {
+        if (!read_board_tag(s.part, &got_tag)) {
+            snprintf(why, why_len, "image names no board, and this is a %.28s -- refusing",
+                     have.name);
+            err = ESP_ERR_INVALID_VERSION;
+            goto out;
+        }
+        if (strncmp(got_tag.name, have.name, sizeof(have.name)) != 0) {
+            snprintf(why, why_len, "image is for the %.28s board, not this %.28s -- refusing",
+                     got_tag.name, have.name);
+            err = ESP_ERR_INVALID_VERSION;
+            goto out;
+        }
     }
 
     err = esp_ota_set_boot_partition(s.part);

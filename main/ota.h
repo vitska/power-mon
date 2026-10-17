@@ -33,6 +33,26 @@ extern "C" {
  * that on its own. */
 #define OTA_PROBATION_S 600
 
+/*
+ * BOARD TAG. One project can build for several boards that share a chip and differ in
+ * wiring -- the remote display does (remote/main/board.h). Every such image is a valid
+ * "batmon-remote" for the chip, and the wrong one boots fine into a dark screen or dead
+ * touch, so the project name cannot be what tells them apart.
+ *
+ * Such a firmware puts this tag in ".rodata_custom_desc", which ESP-IDF links straight
+ * after the app descriptor: image offset OTA_BOARD_TAG_OFFSET, fixed. When the RUNNING
+ * image carries a tag, ota_end() refuses a new one that does not carry the same.
+ * Firmware without a tag (the monitor) is unaffected. The phone app and release.ps1
+ * read the tag at the same offset.
+ */
+#define OTA_BOARD_MAGIC      0x44524f42u /* "BORD", little-endian */
+#define OTA_BOARD_TAG_OFFSET 0x120       /* 24 image header + 8 segment header + 256 desc */
+
+typedef struct {
+    uint32_t magic;    /**< OTA_BOARD_MAGIC */
+    char     name[28]; /**< the board, e.g. "jc2432w328r"; NUL-terminated */
+} ota_board_tag_t;
+
 typedef enum {
     OTA_IDLE = 0,
     OTA_RECEIVING,

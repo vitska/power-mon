@@ -228,10 +228,13 @@ this screen, and the app reconnects and confirms it.
   framing, OTA characteristic and `ver` / `ota ...` / `reboot` commands (CLI.md §6). It
   also runs the monitor's own `ota.c`, which checks an image against this firmware's
   project name, so a monitor image is refused here, and a remote image there.
-- **Releases carry only the classic CYD's image (`cyd`).** The image cannot tell boards
-  apart yet: `ota.c` checks only the project name. Installing a release on a `cyd2usb` or
-  `jc2432w328r` gives a dark or negative screen, so update those over USB
-  (`flash.ps1 -Board`), or over BLE with a local `remote/build/<board>/batmon-remote.bin`.
+- **Each board takes only its own image.** Every image carries its board's name right
+  after its app descriptor (`main/ota.h`, BOARD TAG), and the remote reports its board in
+  `ver` (`board jc2432w328r`). The app downloads `batmon-remote-<board>.bin` for that
+  board, and refuses a file built for another one. The remote's `ota.c` refuses it too,
+  since the wrong board's image boots into a dark or negative screen. A remote running
+  0.4.29 or older names no board: it was a CYD image, and the app gives it plain
+  `batmon-remote.bin`, the `cyd` image.
 - **The first time needs USB.** Remote firmware 0.1.0 had one app slot. `flash.ps1 -Remote`
   once installs the two-slot partition table and the rollback bootloader. The remembered
   board and pairing bonds survive it.
@@ -239,8 +242,10 @@ this screen, and the app reconnects and confirms it.
 ## Versions and releases
 
 `remote/version.txt` is the remote's version, separate from the monitor's. It shows on
-the boot splash and in the serial log. A release is tagged `remote-vX.Y.Z`, with
-`batmon-remote.bin` attached:
+the boot splash and in the serial log. A release is tagged `remote-vX.Y.Z`. It builds
+every board and attaches one image per board, `batmon-remote-<board>.bin`, plus
+`batmon-remote.bin`, a copy of the `cyd` image for apps from before per-board images.
+Each image's version, project and board tag are checked before anything is published:
 
 ```powershell
 .\tools\release.ps1 -Remote -Bump patch -DryRun   # bump, build, verify; publish nothing

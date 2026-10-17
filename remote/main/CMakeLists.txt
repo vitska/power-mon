@@ -14,3 +14,5 @@ idf_component_register(
     PRIV_INCLUDE_DIRS "../../main"
     REQUIRES     driver esp_lcd esp_timer bt nvs_flash esp_app_format app_update mbedtls
 )
+# The board tag is never referenced, and its section is not KEEP in the linker script.
+target_link_libraries(${COMPONENT_LIB} "-u remote_board_tag")

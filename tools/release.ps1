@@ -8,7 +8,8 @@
     release series:
 
       monitor  version.txt         tag vX.Y.Z          asset bat-monitor.bin
-      remote   remote/version.txt  tag remote-vX.Y.Z   asset batmon-remote.bin
+      remote   remote/version.txt  tag remote-vX.Y.Z   assets batmon-remote-<board>.bin,
+               one per board, and batmon-remote.bin (= cyd) for older apps
       app      android/app/build.gradle.kts (versionName; a bump also raises
                versionCode)       tag app-vX.Y.Z      asset battery-monitor-X.Y.Z.apk
 
@@ -76,17 +77,23 @@ $t = if ($App) {
     @{
         Label       = 'remote display'
         VersionFile = 'remote\version.txt'
-        # The classic CYD's image (cyd): idf.ps1 builds remote/ for it when no -Board is
-        # given. The other boards are flashed over USB with flash.ps1 -Board.
-        BuildArgs   = @('--project-dir', 'remote', 'build')
+        # One image per board (remote/main/board.h), each published as
+        # batmon-remote-<board>.bin; the app picks the one the display's `ver` names.
+        # The first is ALSO published as plain batmon-remote.bin, which is all an app
+        # from before boards looks for -- and what every remote before them ran.
+        Boards      = @('cyd', 'cyd2usb', 'jc2432w328r')
         Bin         = 'remote\build\cyd\batmon-remote.bin'
         Project     = 'batmon-remote'
         TagPrefix   = 'remote-v'
         Title       = 'Remote display'
         Paths       = @('remote')
         Latest      = $false
-        Blurb       = 'Remote display firmware for the ESP32-2432S028 ("Cheap Yellow Display").' +
-                      "`n`nFlash over USB with tools/flash.ps1 -Remote."
+        Blurb       = 'Remote display firmware, one image per board:' +
+                      "`n`n- ``batmon-remote-cyd.bin``: ESP32-2432S028R, single micro-USB (ILI9341)" +
+                      "`n- ``batmon-remote-cyd2usb.bin``: ESP32-2432S028R, USB-C + micro-USB (ST7789)" +
+                      "`n- ``batmon-remote-jc2432w328r.bin``: GUITION JC2432W328R" +
+                      "`n- ``batmon-remote.bin``: the same as cyd, for apps older than per-board images" +
+                      "`n`nThe power-mon app picks the right one by itself. Over USB: tools/flash.ps1 -Board <board>."
     }
 } else {
     @{
@@ -120,6 +127,29 @@ function Get-Version {
 function Fail([string]$msg) {
     Write-Host $msg -ForegroundColor Red
     exit 1
+}
+
+# Reads the version and project name back out of a built image, and its board tag when
+# a board is expected, and stops on any mismatch -- a stale build dir, a PROJECT_VER
+# override, a board switched in menuconfig -- rather than publish a mislabelled image.
+# The app descriptor sits right after the 24-byte image header and the first 8-byte
+# segment header, on the C6 and the classic ESP32 alike; version is 16 bytes into it,
+# the project name 48. The board tag follows the 256-byte descriptor (main/ota.h,
+# BOARD TAG): "BORD", then the name. Same offsets the phone app reads.
+function Test-Image([string]$path, [string]$board) {
+    $bytes = [IO.File]::ReadAllBytes($path)
+    $built = [Text.Encoding]::ASCII.GetString($bytes, 48, 32).TrimEnd([char]0)
+    $name  = [Text.Encoding]::ASCII.GetString($bytes, 80, 32).TrimEnd([char]0)
+    if ($built -ne $version -or $name -ne $t.Project) {
+        Fail "$path says '$name' $built, not $($t.Project) $version. Try a fullclean."
+    }
+    if ($board) {
+        $magic = [Text.Encoding]::ASCII.GetString($bytes, 0x120, 4)
+        $tag   = [Text.Encoding]::ASCII.GetString($bytes, 0x124, 28).Split([char]0)[0]
+        if ($magic -ne 'BORD' -or $tag -ne $board) {
+            Fail "$path is tagged for board '$tag' ($magic), not $board."
+        }
+    }
 }
 
 Push-Location $proj
@@ -205,23 +235,35 @@ try {
         $asset = "battery-monitor-$version.apk"
         $named = Join-Path (Split-Path $bin) $asset
         Copy-Item $bin $named -Force
-        $bin = $named
+        $files = @([pscustomobject]@{ Asset = $asset; Path = $named })
+    } elseif ($t.Boards) {
+        # Every board, each built and checked on its own: a release missing one board's
+        # image would leave that board's app offering an update it cannot find.
+        $dist = Join-Path $proj 'remote\build\dist'
+        New-Item -ItemType Directory -Force $dist | Out-Null
+        $files = @()
+        foreach ($b in $t.Boards) {
+            & (Join-Path $PSScriptRoot 'idf.ps1') -Board $b build
+            if ($LASTEXITCODE -ne 0) { Fail "Build failed for $b." }
+            $built = Join-Path $proj "remote\build\$b\batmon-remote.bin"
+            Test-Image $built $b
+            $named = Join-Path $dist "batmon-remote-$b.bin"
+            Copy-Item $built $named -Force
+            $files += [pscustomobject]@{ Asset = "batmon-remote-$b.bin"; Path = $named }
+        }
+        $legacy = Join-Path $dist 'batmon-remote.bin'
+        Copy-Item $files[0].Path $legacy -Force
+        $files += [pscustomobject]@{ Asset = 'batmon-remote.bin'; Path = $legacy }
     } else {
         & (Join-Path $PSScriptRoot 'idf.ps1') @($t.BuildArgs)
         if ($LASTEXITCODE -ne 0) { Fail "Build failed." }
-
-        # The app descriptor sits right after the 24-byte image header and the first
-        # 8-byte segment header, on the C6 and the classic ESP32 alike; version is 16
-        # bytes into it, the project name 48. Same offsets the phone app reads.
-        $bytes = [IO.File]::ReadAllBytes($bin)
-        $built = [Text.Encoding]::ASCII.GetString($bytes, 48, 32).TrimEnd([char]0)
-        $name  = [Text.Encoding]::ASCII.GetString($bytes, 80, 32).TrimEnd([char]0)
-        if ($built -ne $version -or $name -ne $t.Project) {
-            Fail "The built image says '$name' $built, not $($t.Project) $version. Try a fullclean."
-        }
+        Test-Image $bin $null
+        $files = @([pscustomobject]@{ Asset = $asset; Path = $bin })
     }
-    $sha = (Get-FileHash $bin -Algorithm SHA256).Hash.ToLower()
-    Write-Host "==> $asset  $version  $([math]::Round((Get-Item $bin).Length / 1KB)) KB  sha256 $sha" -ForegroundColor Green
+    foreach ($f in $files) {
+        $f | Add-Member Sha (Get-FileHash $f.Path -Algorithm SHA256).Hash.ToLower()
+        Write-Host "==> $($f.Asset)  $version  $([math]::Round((Get-Item $f.Path).Length / 1KB)) KB  sha256 $($f.Sha)" -ForegroundColor Green
+    }
 
     if ($DryRun) {
         Write-Host "==> dry run: not tagging, pushing or publishing." -ForegroundColor Yellow
@@ -258,15 +300,17 @@ try {
         $range = if ($prev) { "$prev..$tag" } else { $tag }
         $log   = @(git log --format='- %s' $range -- @($t.Paths))
         if ($log.Count -eq 0) { $log = @('- (no changes to this firmware since the last release)') }
+        $shas  = ($files | ForEach-Object { "SHA-256 of $($_.Asset): ``$($_.Sha)``" }) -join "`n"
         $Notes = "$($t.Blurb)`n`n" +
-                 "SHA-256 of ${asset}: ``$sha```n`n" +
+                 "$shas`n`n" +
                  "Changes:`n" + ($log -join "`n")
     }
 
     # --latest decides what /releases/latest returns, which is what the phone app reads.
     $latest = if ($t.Latest) { '--latest' } else { '--latest=false' }
-    gh release create $tag $bin --repo $repo --title "$($t.Title) $version" --notes $Notes $latest
-    if ($LASTEXITCODE -ne 0) { Fail "Creating the GitHub release failed; the tag is pushed. Retry with: gh release create $tag $bin --repo $repo $latest" }
+    $paths  = @($files | ForEach-Object Path)
+    gh release create $tag @paths --repo $repo --title "$($t.Title) $version" --notes $Notes $latest
+    if ($LASTEXITCODE -ne 0) { Fail "Creating the GitHub release failed; the tag is pushed. Retry with: gh release create $tag $($paths -join ' ') --repo $repo $latest" }
 
     Write-Host "==> released ${tag}: https://github.com/$repo/releases/tag/$tag" -ForegroundColor Green
 }

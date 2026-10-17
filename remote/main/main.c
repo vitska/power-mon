@@ -24,6 +24,15 @@
 
 static const char *TAG = "remote";
 
+/* Which board this image is for, at a fixed place in the image (ota.h, BOARD TAG): an
+ * update for another board is refused on the device, in the app and by release.ps1,
+ * which all read it there. Kept by `-u remote_board_tag` in CMakeLists.txt, since
+ * nothing references it. */
+const __attribute__((section(".rodata_custom_desc"))) ota_board_tag_t remote_board_tag = {
+    .magic = OTA_BOARD_MAGIC,
+    .name  = BOARD_NAME,
+};
+
 static void ui_task(void *arg)
 {
     ui_run();

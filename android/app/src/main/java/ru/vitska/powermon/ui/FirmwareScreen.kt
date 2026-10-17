@@ -115,6 +115,7 @@ fun FirmwareScreen(vm: MonitorViewModel) {
 
         Section(if (fw.target == FirmwareTarget.REMOTE) "On the remote display" else "On the board") {
             KV("firmware", fw.ota?.version ?: shake.firmware.ifEmpty { "—" })
+            fw.board?.let { KV("board", it) }
             fw.ota?.let { o ->
                 KV("slot", o.running ?: "—")
                 KV("state", if (o.onProbation) "on probation" else "confirmed")
@@ -159,7 +160,7 @@ fun FirmwareScreen(vm: MonitorViewModel) {
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
-                fw.checked -> Text("No release with ${fw.target.asset} is published yet.")
+                fw.checked -> Text("No release with ${fw.target.assetFor(fw.board)} is published yet.")
                 else -> Text("Not checked.")
             }
             Spacer(Modifier.height(8.dp))
@@ -198,8 +199,14 @@ fun FirmwareScreen(vm: MonitorViewModel) {
 
         Section("From a file") {
             Text(
-                "Flash a bat-monitor.bin built locally (build/bat-monitor.bin). Its version " +
-                    "and chip are checked before anything is sent.",
+                if (fw.target == FirmwareTarget.REMOTE) {
+                    "Flash a batmon-remote.bin built locally (remote/build/" +
+                        "${fw.board ?: "<board>"}/batmon-remote.bin). Its version, chip " +
+                        "and board are checked before anything is sent."
+                } else {
+                    "Flash a bat-monitor.bin built locally (build/bat-monitor.bin). Its version " +
+                        "and chip are checked before anything is sent."
+                },
                 style = MaterialTheme.typography.bodyMedium,
             )
             Spacer(Modifier.height(8.dp))

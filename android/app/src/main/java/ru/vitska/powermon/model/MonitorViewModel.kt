@@ -149,7 +149,10 @@ data class FirmwareState(
     val unsupported: Boolean = false,
     /** Which firmware the connected device runs: monitor or remote display. */
     val target: FirmwareTarget = FirmwareTarget.MONITOR,
-    /** The newest release of [target]'s series. */
+    /** The remote display's board, from `ver`; null for a monitor, or a remote from
+     *  before boards. Decides which release image fits ([FirmwareTarget.assetFor]). */
+    val board: String? = null,
+    /** The newest release of [target]'s series, for [board]. */
     val latest: Release? = null,
     val checking: Boolean = false,
     /** True once a check has completed, so "no release" can be told from "not asked". */
@@ -397,12 +400,14 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun onReady() = viewModelScope.launch {
         val ver = run("ver")
+        var board: String? = null
         if (ver != null) {
             val kv = ver.lines.mapNotNull {
                 val p = it.split(' ', limit = 2)
                 if (p.size == 2) p[0] to p[1] else null
             }.toMap()
             val proto = kv["protocol"]?.toIntOrNull()
+            board = kv["board"]?.trim()?.ifEmpty { null }
             _shake.value = Handshake(
                 protocol = proto,
                 firmware = kv["firmware"] ?: "",
@@ -422,9 +427,10 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
             knownRevision.value += 1
         }
         val target = FirmwareTarget.forDeviceName(client.deviceName.value)
-        if (target != _fw.value.target) {
-            // Another series: the release found for the previous device does not apply.
-            _fw.value = _fw.value.copy(target = target, latest = null, checked = false)
+        if (target != _fw.value.target || board != _fw.value.board) {
+            // Another series, or another board's image: the release found for the
+            // previous device does not apply.
+            _fw.value = _fw.value.copy(target = target, board = board, latest = null, checked = false)
         }
         if (target == FirmwareTarget.REMOTE) {
             // A remote display serves only `ver`, `ota` and `reboot`: no settings to
@@ -508,7 +514,8 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
     fun checkLatest() = viewModelScope.launch {
         _fw.value = _fw.value.copy(checking = true, error = null)
         val target = _fw.value.target
-        val result = runCatching { withContext(Dispatchers.IO) { FirmwareReleases.latest(target) } }
+        val board = _fw.value.board
+        val result = runCatching { withContext(Dispatchers.IO) { FirmwareReleases.latest(target, board) } }
         _fw.value = _fw.value.copy(
             checking = false,
             checked = result.isSuccess,
@@ -521,12 +528,12 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
         val rel = _fw.value.latest ?: return
         startUpdate("downloading ${rel.tag}") {
             val bytes = withContext(Dispatchers.IO) { FirmwareReleases.download(rel) }
-            FirmwareImage.parse(bytes, _fw.value.target)
+            FirmwareImage.parse(bytes, _fw.value.target, _fw.value.board)
         }
     }
 
     fun updateFromFile(bytes: ByteArray) = startUpdate("checking the file") {
-        FirmwareImage.parse(bytes, _fw.value.target)
+        FirmwareImage.parse(bytes, _fw.value.target, _fw.value.board)
     }
 
     /** Asks GitHub for the newest app-vX.Y.Z release. Off the main thread. */

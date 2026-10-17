@@ -54,6 +54,15 @@ enum class FirmwareTarget(
     MONITOR("battery monitor", "bat-monitor", 13, "ESP32-C6", "v", "bat-monitor.bin"),
     REMOTE("remote display", "batmon-remote", 0, "ESP32", "remote-v", "batmon-remote.bin");
 
+    /**
+     * The release asset for a device that reported `board` in `ver`. The remote display
+     * is built once per board (remote/main/board.h) and published as
+     * `batmon-remote-<board>.bin`; a remote that names no board predates them, and ran
+     * the one image there was then, still published under the plain [asset] name.
+     */
+    fun assetFor(board: String?): String =
+        if (this == REMOTE && !board.isNullOrEmpty()) "batmon-remote-$board.bin" else asset
+
     companion object {
         /** A remote display in update mode advertises as batmon-remote-XXXX. */
         fun forDeviceName(name: String?): FirmwareTarget =
@@ -73,6 +82,8 @@ class FirmwareImage private constructor(
     val bytes: ByteArray,
     val version: String,
     val project: String,
+    /** The board the image was built for (main/ota.h, BOARD TAG), or null if it names none. */
+    val board: String?,
 ) {
     val parsedVersion: FwVersion? get() = FwVersion.parse(version)
 
@@ -85,9 +96,17 @@ class FirmwareImage private constructor(
         private const val IMAGE_MAGIC = 0xE9
         private const val DESC_OFFSET = 32
         private const val DESC_MAGIC = 0xABCD5432L
+        // Right after the 256-byte app descriptor: "BORD", then the board's name.
+        private const val BOARD_OFFSET = DESC_OFFSET + 256
+        private const val BOARD_MAGIC = 0x44524F42L
 
-        /** Returns the image, or throws with a sentence saying what is wrong with it. */
-        fun parse(bytes: ByteArray, target: FirmwareTarget): FirmwareImage {
+        /**
+         * Returns the image, or throws with a sentence saying what is wrong with it.
+         * `board` is what the device said it is in `ver`; when it says, the image must
+         * be built for the same board -- the wrong one boots, into a dark screen. A
+         * device that does not say predates boards and cannot be checked.
+         */
+        fun parse(bytes: ByteArray, target: FirmwareTarget, board: String? = null): FirmwareImage {
             require(bytes.size > DESC_OFFSET + 112) { "too short to be a firmware image" }
             require((bytes[0].toInt() and 0xFF) == IMAGE_MAGIC) {
                 "not an ESP32 app image (a merged or bootloader .bin will not work here)"
@@ -100,9 +119,19 @@ class FirmwareImage private constructor(
             val version = cstr(bytes, DESC_OFFSET + 16, 32)
             val project = cstr(bytes, DESC_OFFSET + 48, 32)
             require(project == target.project) {
-                "image is '$project', not ${target.project} -- the ${target.label} needs ${target.asset}"
+                "image is '$project', not ${target.project} -- the ${target.label} needs ${target.assetFor(board)}"
             }
-            return FirmwareImage(bytes, version, project)
+            val imageBoard =
+                if (bytes.size >= BOARD_OFFSET + 32 && u32(bytes, BOARD_OFFSET) == BOARD_MAGIC) {
+                    cstr(bytes, BOARD_OFFSET + 4, 28)
+                } else null
+            if (!board.isNullOrEmpty()) {
+                require(imageBoard == board) {
+                    (if (imageBoard == null) "image names no board" else "image is for the $imageBoard board") +
+                        ", and this ${target.label} is a $board -- it needs ${target.assetFor(board)}"
+                }
+            }
+            return FirmwareImage(bytes, version, project, imageBoard)
         }
 
         private fun u16(b: ByteArray, o: Int) =
@@ -132,15 +161,18 @@ data class Release(
 /**
  * Releases live on GitHub, as README.md "Versioning" describes, in two series: the
  * monitor's `vX.Y.Z` with `bat-monitor.bin`, and the remote display's `remote-vX.Y.Z`
- * with `batmon-remote.bin`. Only monitor releases are ever GitHub's "latest", so this
+ * with one `batmon-remote-<board>.bin` per board (and `batmon-remote.bin`, the classic
+ * CYD's, which is all a remote from before boards knows). Only monitor releases are
+ * ever GitHub's "latest", so this
  * lists recent releases and takes the newest of the wanted series rather than asking
  * for "latest". Blocking calls -- run them off the main thread.
  */
 object FirmwareReleases {
     const val REPO = "vitska/power-mon"
 
-    /** The newest published release of `target`'s series that has its image, or null. */
-    fun latest(target: FirmwareTarget): Release? {
+    /** The newest published release of `target`'s series that has the image for
+     *  `board` ([FirmwareTarget.assetFor]), or null. */
+    fun latest(target: FirmwareTarget, board: String? = null): Release? {
         val c = open("https://api.github.com/repos/$REPO/releases?per_page=30")
         c.setRequestProperty("Accept", "application/vnd.github+json")
         return try {
@@ -151,7 +183,7 @@ object FirmwareReleases {
             (0 until list.length())
                 .map { list.getJSONObject(it) }
                 .filter { !it.optBoolean("draft") && !it.optBoolean("prerelease") }
-                .mapNotNull { parse(it, target) }
+                .mapNotNull { parse(it, target, target.assetFor(board)) }
                 // The API sorts by creation date; the version number is what counts.
                 .maxWithOrNull(compareBy(nullsFirst()) { it.version })
         } finally {
@@ -170,7 +202,7 @@ object FirmwareReleases {
         }
     }
 
-    private fun parse(j: JSONObject, target: FirmwareTarget): Release? {
+    private fun parse(j: JSONObject, target: FirmwareTarget, asset: String): Release? {
         val tag = j.optString("tag_name")
         // "v1.2.3" is a monitor tag and "remote-v1.2.3" a remote one; requiring a digit
         // straight after the prefix keeps the two series from matching each other.
@@ -180,7 +212,7 @@ object FirmwareReleases {
         val assets = j.optJSONArray("assets") ?: return null
         for (i in 0 until assets.length()) {
             val a = assets.getJSONObject(i)
-            if (a.optString("name") == target.asset) {
+            if (a.optString("name") == asset) {
                 return Release(
                     tag = tag,
                     name = j.optString("name"),
