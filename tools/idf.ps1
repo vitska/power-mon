@@ -30,7 +30,8 @@
     ESP-IDF version. The project needs >= 5.3 (see README).
 #>
 
-[CmdletBinding()]
+# Not positional: every bare word is an idf.py argument, never the -Board value.
+[CmdletBinding(PositionalBinding = $false)]
 param(
     # The remote display's board (remote/main/board.h). Implies --project-dir remote.
     [ValidateSet('cyd', 'cyd2usb', 'jc2432w328r', 'jc1732w319')]
