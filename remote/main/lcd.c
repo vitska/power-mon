@@ -1,14 +1,14 @@
 /*
  * lcd.c — see lcd.h.
  *
- * ESP32-2432S028 wiring (fixed on the board): SPI2 on SCLK 14, MOSI 13, MISO 12,
- * CS 15, DC 2, reset tied to EN, backlight on GPIO 21 (active high).
+ * Wiring (fixed on the board, board.h): SPI2 on SCLK 14, MOSI 13, MISO 12, CS 15,
+ * DC 2, reset tied to EN, backlight active high on GPIO 21 (CYD) or 27 (JC2432W328R).
  *
  * The controller is driven with our own few commands rather than a panel driver:
  * ESP-IDF ships an ST7789 driver but not an ILI9341 one (that is a managed component),
  * and the two controllers agree on every command used here -- window, memory write,
  * pixel format, access order, inversion. What differs between the two board variants
- * is only the MADCTL value and inversion, which is what the Kconfig choice sets.
+ * is only the MADCTL value and inversion, which is what the board sets.
  *
  * PIXELS GO OUT DOUBLE-BUFFERED. A transfer is queued and NOT waited for; the caller
  * fills the other buffer while the DMA drains this one, and the wait happens only when
@@ -37,33 +37,15 @@
 #include "freertos/task.h"
 #include "sdkconfig.h"
 
+#include "board.h"
 #include "font5x8.h"
 
 static const char *TAG = "lcd";
 
-#define PIN_SCLK 14
-#define PIN_MOSI 13
-#define PIN_MISO 12
-#define PIN_CS   15
-#define PIN_DC   2
-
-#if CONFIG_REMOTE_PANEL_ST7789
-#define MADCTL_BASE 0x68 /* MX | MV | BGR: landscape on the 2USB board */
-#define INVERT      1
-#else
-/* MX | MV, RGB order: landscape, verified on the board. With MV (row/column exchange)
- * set, MX flips the picture vertically and MY horizontally -- the reverse of what the
- * names suggest, which is how 0x28 (upside down) became 0xE8 (mirrored left-right)
- * before landing here. The BGR bit (0x08) is off: with it, red and blue swapped and
- * orange showed as blue. Touch is mapped for the picture the right way up. */
-#define MADCTL_BASE 0x60
-#define INVERT      0
-#endif
-
 #if CONFIG_REMOTE_ROTATE_180
-#define MADCTL (MADCTL_BASE ^ 0xC0) /* flip both axes */
+#define MADCTL (BOARD_PANEL_MADCTL ^ 0xC0) /* flip both axes */
 #else
-#define MADCTL MADCTL_BASE
+#define MADCTL BOARD_PANEL_MADCTL
 #endif
 
 static esp_lcd_panel_io_handle_t s_io;
@@ -124,9 +106,9 @@ static void send_px(size_t n, bool first)
 void lcd_init(void)
 {
     const spi_bus_config_t bus = {
-        .sclk_io_num     = PIN_SCLK,
-        .mosi_io_num     = PIN_MOSI,
-        .miso_io_num     = PIN_MISO,
+        .sclk_io_num     = BOARD_LCD_SCLK,
+        .mosi_io_num     = BOARD_LCD_MOSI,
+        .miso_io_num     = BOARD_LCD_MISO,
         .quadwp_io_num   = -1,
         .quadhd_io_num   = -1,
         .max_transfer_sz = LCD_STRIP_PX * 2 + 16,
@@ -135,8 +117,8 @@ void lcd_init(void)
 
     s_done = xSemaphoreCreateBinary();
     const esp_lcd_panel_io_spi_config_t io = {
-        .cs_gpio_num         = PIN_CS,
-        .dc_gpio_num         = PIN_DC,
+        .cs_gpio_num         = BOARD_LCD_CS,
+        .dc_gpio_num         = BOARD_LCD_DC,
         .spi_mode            = 0,
         .pclk_hz             = 40 * 1000 * 1000,
         .trans_queue_depth   = 4,
@@ -158,19 +140,20 @@ void lcd_init(void)
     cmd(0x3A, &colmod, 1);
     const uint8_t madctl = MADCTL;
     cmd(0x36, &madctl, 1);
-    cmd(INVERT ? 0x21 : 0x20, NULL, 0); /* INVON / INVOFF */
+    cmd(BOARD_PANEL_INVERT ? 0x21 : 0x20, NULL, 0); /* INVON / INVOFF */
     cmd(0x13, NULL, 0);                 /* NORON */
 
     lcd_fill(0, 0, LCD_W, LCD_H, C_BLACK); /* before the display turns on: no garbage */
     cmd(0x29, NULL, 0);                    /* DISPON */
 
     gpio_config_t bl = {
-        .pin_bit_mask = 1ULL << CONFIG_REMOTE_BACKLIGHT_GPIO,
+        .pin_bit_mask = 1ULL << BOARD_LCD_BL,
         .mode         = GPIO_MODE_OUTPUT,
     };
     gpio_config(&bl);
-    gpio_set_level(CONFIG_REMOTE_BACKLIGHT_GPIO, 1);
-    ESP_LOGI(TAG, "%s panel up, MADCTL 0x%02X", INVERT ? "ST7789" : "ILI9341", MADCTL);
+    gpio_set_level(BOARD_LCD_BL, 1);
+    ESP_LOGI(TAG, "%s panel up, MADCTL 0x%02X%s", BOARD_PANEL_ST7789 ? "ST7789" : "ILI9341",
+             MADCTL, BOARD_PANEL_INVERT ? ", inverted" : "");
 }
 
 /*

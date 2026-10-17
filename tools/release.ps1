@@ -76,8 +76,10 @@ $t = if ($App) {
     @{
         Label       = 'remote display'
         VersionFile = 'remote\version.txt'
+        # The classic CYD's image (cyd): idf.ps1 builds remote/ for it when no -Board is
+        # given. The other boards are flashed over USB with flash.ps1 -Board.
         BuildArgs   = @('--project-dir', 'remote', 'build')
-        Bin         = 'remote\build\batmon-remote.bin'
+        Bin         = 'remote\build\cyd\batmon-remote.bin'
         Project     = 'batmon-remote'
         TagPrefix   = 'remote-v'
         Title       = 'Remote display'

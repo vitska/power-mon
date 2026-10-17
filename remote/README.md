@@ -1,7 +1,8 @@
 # batmon-remote
 
 A touch display for the battery monitor, running on the **ESP32-2432S028** ("Cheap Yellow
-Display": classic ESP32, 2.8" 320×240 ILI9341 or ST7789, XPT2046 resistive touch). It
+Display": classic ESP32, 2.8" 320×240 ILI9341 or ST7789, XPT2046 resistive touch) or the
+**GUITION JC2432W328R** (the same ESP32-WROOM-32, ST7789 and XPT2046, wired differently). It
 connects to a `batmon-*` board over BLE and shows what the phone app's Monitor tab shows,
 on a screen that can live next to the battery. A separate firmware from the monitor in the
 repository root: different chip, different BLE role, its own `version.txt`.
@@ -111,6 +112,10 @@ no live progress, just the elapsed time against the expected duration.
 saved and connected. Tap one to switch to it; it is remembered. **FORGET** (tap twice)
 drops the saved board and every pairing bond. **BACK** returns to Settings.
 
+**Status LED** (JC2432W328R). **Red** while there is no connection to the monitor. **Blue**
+blinks with Bluetooth traffic, like the header's icon: a short blink for every notification
+received, a longer one for every command sent. A steady blue flicker means a working link.
+
 **Pairing keypad.** Appears by itself when the board asks for pairing: type the six digits
 the board shows on its OLED.
 
@@ -153,20 +158,44 @@ out (a BMP280 has no humidity), and nothing is shown without a sensor.
 
 ## Build and flash
 
+The board is compiled in, so each one has its own build. `-Board` picks it:
+
+| `-Board` | Board | Panel | Backlight | Touch bus |
+|---|---|---|---|---|
+| `cyd` | ESP32-2432S028R, single micro-USB | ILI9341 | 21 | its own (SPI3) |
+| `cyd2usb` | ESP32-2432S028R, USB-C + micro-USB | ST7789 | 21 | its own (SPI3) |
+| `jc2432w328r` | GUITION JC2432W328R | ST7789 | 27 | shared with the panel (SPI2) |
+
 ```powershell
-.\tools\idf.ps1 --project-dir remote build     # Docker, like the monitor
-.\tools\flash.ps1 -Remote                      # finds the CYD's CH340
-.\tools\idf.ps1 --project-dir remote menuconfig   # "batmon remote display"
+.\tools\idf.ps1 -Board jc2432w328r build        # Docker, like the monitor
+.\tools\flash.ps1 -Board jc2432w328r            # finds the CH340
+.\tools\flash.ps1 -Remote                       # the board read off the device itself
+.\tools\idf.ps1 -Board jc2432w328r menuconfig   # "batmon remote display"
 ```
 
-`menuconfig` → **batmon remote display** has the settings that differ between boards:
+- **Each board builds separately**, into `remote/build/<board>/`, with its settings in
+  `remote/sdkconfig.<board>`. A board's fragment, `boards/<board>.defaults`, picks it.
+  `--project-dir remote` without `-Board` builds `cyd`.
+- **`flash.ps1` can detect the board.** Without `-Board`, it resets the board and reads
+  `board: <name>` from the boot log of the remote firmware already on it. That is the
+  board the image was *built* for, so the first flash of each board needs `-Board`: a
+  new board, one running other firmware, or one running remote firmware from 0.4.24 or
+  older, which does not say. A CYD image runs on a JC2432W328R (dark, still logging
+  `ILI9341 panel up`), so its panel line identifies the image, not the board.
+- **`flash.ps1` checks the image.** It refuses a build whose sdkconfig was switched to
+  another board in menuconfig: the wrong image gives a dark screen or dead touch.
 
-- **Display controller.** ILI9341 for the original single-micro-USB board. ST7789 for the
-  later board with USB-C plus micro-USB. The wrong one gives a mirrored or negative picture.
+`menuconfig` → **batmon remote display**:
+
+- **Board.** Normally set by `-Board`. The pins and panel settings for each board are in
+  `main/board.h`.
 - **Rotate 180°.** Touch follows the picture.
+- **Panel overrides.** *Invert colours the other way* fixes a negative picture, and *swap
+  red and blue* fixes orange showing as blue. Both apply on top of the board's settings.
 - **Touch calibration.** Raw XPT2046 limits, and an option to log every touch, raw and
   mapped, on the serial console. If taps land in the wrong place, turn the logging on, tap
-  the corners, and put the raw values in.
+  the corners, and put the raw values in. If touch is mirrored on one axis, swap that
+  axis's MIN and MAX.
 
 The serial console (`.\tools\monitor.ps1 -Port COMn`, 115200) logs what the dashboard
 shows every 30 seconds:
@@ -183,7 +212,7 @@ In the app:
 1. Tap the Bluetooth button and pick `batmon-remote-XXXX`. It is labelled "remote display —
    firmware update", and the app never connects to one on its own.
 2. On the Firmware tab, tap **Update to remote-vX.Y.Z**, or flash a local
-   `remote/build/batmon-remote.bin`.
+   `remote/build/<board>/batmon-remote.bin`.
 
 The remote shows the transfer's progress itself. It restarts into the new image, reopens
 this screen, and the app reconnects and confirms it.
@@ -199,6 +228,10 @@ this screen, and the app reconnects and confirms it.
   framing, OTA characteristic and `ver` / `ota ...` / `reboot` commands (CLI.md §6). It
   also runs the monitor's own `ota.c`, which checks an image against this firmware's
   project name, so a monitor image is refused here, and a remote image there.
+- **Releases carry only the classic CYD's image (`cyd`).** The image cannot tell boards
+  apart yet: `ota.c` checks only the project name. Installing a release on a `cyd2usb` or
+  `jc2432w328r` gives a dark or negative screen, so update those over USB
+  (`flash.ps1 -Board`), or over BLE with a local `remote/build/<board>/batmon-remote.bin`.
 - **The first time needs USB.** Remote firmware 0.1.0 had one app slot. `flash.ps1 -Remote`
   once installs the two-slot partition table and the rollback bootloader. The remembered
   board and pairing bonds survive it.
@@ -210,8 +243,8 @@ the boot splash and in the serial log. A release is tagged `remote-vX.Y.Z`, with
 `batmon-remote.bin` attached:
 
 ```powershell
-.	oolselease.ps1 -Remote -Bump patch -DryRun   # bump, build, verify; publish nothing
-.	oolselease.ps1 -Remote -Bump minor           # commit, tag, push, publish
+.\tools\release.ps1 -Remote -Bump patch -DryRun   # bump, build, verify; publish nothing
+.\tools\release.ps1 -Remote -Bump minor           # commit, tag, push, publish
 ```
 
 Remote releases are never marked "latest" on GitHub; that spot belongs to the monitor
@@ -220,10 +253,14 @@ device, and installs it over BLE as described above.
 
 ## Board wiring (fixed on the PCB)
 
-| | Pins |
-|---|---|
-| Display (SPI2) | SCLK 14, MOSI 13, MISO 12, CS 15, DC 2, backlight 21 |
-| Touch (SPI3) | CLK 25, MOSI 32, MISO 39, CS 33 (IRQ 36 unused; pressure is read instead) |
+| | ESP32-2432S028R (`cyd`, `cyd2usb`) | JC2432W328R (`jc2432w328r`) |
+|---|---|---|
+| Display (SPI2) | SCLK 14, MOSI 13, MISO 12, CS 15, DC 2 | the same |
+| Backlight | 21 | 27 |
+| Touch | SPI3: CLK 25, MOSI 32, MISO 39, CS 33 | on the display's SPI2, CS 33 |
+| RGB LED (common anode) | not used | red 4, green 16, blue 17 |
+
+IRQ (36) is not used on either board; the firmware reads the pressure instead.
 
 ## Layout
 
@@ -232,6 +269,8 @@ device, and installs it over BLE as described above.
 | `main/link.c` | BLE central: scan, connect, discover NUS, subscribe, pair, the command conversation, telemetry parsing into one model |
 | `main/ui.c` | The three screens; every field redraws only when its text changes |
 | `main/lcd.c` | Panel init and drawing (rectangles, 5×7 text scaled, strip-rendered bitmaps). No framebuffer: 150 KB is too much of the ESP32's RAM beside the BLE stack |
+| `main/board.h` | What differs between the boards: panel controller, MADCTL, inversion, backlight pin, touch bus |
+| `main/led.c` | The status LED, on boards that have one: red while disconnected, blue blinking with BLE traffic |
 | `main/touch.c` | XPT2046: pressure check, median of five conversions, taps on the press edge |
 | `main/rcon.c` | The peripheral side: advertising in update mode, the small console (`ver`, `ota`, `reboot`) and the OTA characteristic |
 | `../main/ota.c` | The OTA session and probation, shared with the monitor |

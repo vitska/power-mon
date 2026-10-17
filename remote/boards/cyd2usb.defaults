@@ -1,0 +1,2 @@
+# ESP32-2432S028R, USB-C + micro-USB: ST7789, backlight 21, touch on its own SPI.
+CONFIG_REMOTE_BOARD_CYD2USB=y

@@ -39,6 +39,7 @@
 #include "freertos/task.h"
 
 #include "lcd.h"
+#include "led.h"
 #include "link.h"
 #include "ota.h"
 #include "rcon.h"
@@ -1309,6 +1310,7 @@ void ui_run(void)
     for (;;) {
         link_get(&m);
         const int64_t now = esp_timer_get_time();
+        led_update(&m); /* on every screen, not only the dashboard's icon */
 
         /* Pairing interrupts whatever is on screen, and ends back on the dashboard. */
         char who[24];

@@ -1,10 +1,16 @@
 /*
  * touch.c — see touch.h.
  *
- * ESP32-2432S028 wiring: the XPT2046 has its own SPI pins, separate from the display's
- * -- CLK 25, MOSI 32, MISO 39, CS 33 (IRQ on 36, unused: pressure says the same thing
- * and needs no extra pin). It runs on SPI3 at 1 MHz; the chip's limit is ~2.5 MHz and
+ * Wiring (board.h). On the ESP32-2432S028 the XPT2046 has its own SPI pins, separate
+ * from the display's -- CLK 25, MOSI 32, MISO 39, CS 33 -- and runs on SPI3. On the
+ * JC2432W328R it shares the display's SPI2 bus, with only CS 33 its own, and lcd_init()
+ * must have brought that bus up first. Either way IRQ (36) is unused: pressure says the
+ * same thing and needs no extra pin. It runs at 1 MHz; the chip's limit is ~2.5 MHz and
  * a resistive panel gains nothing from speed.
+ *
+ * Sharing the bus with the panel needs nothing more than a second device on it: the SPI
+ * driver's bus lock makes a polling read here wait out a colour transfer the panel still
+ * has in flight, and both are driven from the UI task anyway.
  *
  * Each read is a pressure check and then several X/Y conversions, keeping the median.
  * A resistive panel's first conversion after the press edge is routinely wild, and a
@@ -20,14 +26,10 @@
 #include "esp_timer.h"
 #include "sdkconfig.h"
 
+#include "board.h"
 #include "lcd.h"
 
 static const char *TAG __attribute__((unused)) = "touch";
-
-#define PIN_CLK  25
-#define PIN_MOSI 32
-#define PIN_MISO 39
-#define PIN_CS   33
 
 #define Z_THRESHOLD 400  /* pressure below this is no touch */
 #define SAMPLES     5
@@ -50,21 +52,26 @@ static int conv(uint8_t command)
 
 void touch_init(void)
 {
+#if BOARD_TOUCH_SHARED
+    const spi_host_device_t host = SPI2_HOST; /* the panel's, already initialised */
+#else
+    const spi_host_device_t host = SPI3_HOST;
     const spi_bus_config_t bus = {
-        .sclk_io_num   = PIN_CLK,
-        .mosi_io_num   = PIN_MOSI,
-        .miso_io_num   = PIN_MISO,
+        .sclk_io_num   = BOARD_TOUCH_SCLK,
+        .mosi_io_num   = BOARD_TOUCH_MOSI,
+        .miso_io_num   = BOARD_TOUCH_MISO,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
     };
-    ESP_ERROR_CHECK(spi_bus_initialize(SPI3_HOST, &bus, SPI_DMA_DISABLED));
+    ESP_ERROR_CHECK(spi_bus_initialize(host, &bus, SPI_DMA_DISABLED));
+#endif
     const spi_device_interface_config_t dev = {
         .clock_speed_hz = 1000 * 1000,
         .mode           = 0,
-        .spics_io_num   = PIN_CS,
+        .spics_io_num   = BOARD_TOUCH_CS,
         .queue_size     = 1,
     };
-    ESP_ERROR_CHECK(spi_bus_add_device(SPI3_HOST, &dev, &s_dev));
+    ESP_ERROR_CHECK(spi_bus_add_device(host, &dev, &s_dev));
 }
 
 static int cmp_int(const void *a, const void *b)

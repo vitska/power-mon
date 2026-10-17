@@ -15,14 +15,26 @@
     .\tools\idf.ps1 build
     .\tools\idf.ps1 menuconfig
     .\tools\idf.ps1 fullclean
+.EXAMPLE
+    .\tools\idf.ps1 -Board jc2432w328r build      # the remote display, for one board
+    .\tools\idf.ps1 -Board cyd menuconfig
 
 .NOTES
+    The remote display (remote/) builds once per board, because the board is compiled
+    in (remote/main/board.h). -Board <name> builds remote/ with boards/<name>.defaults
+    into remote/build/<name>/ and keeps its settings in remote/sdkconfig.<name>, so the
+    boards never share a configuration. `--project-dir remote` without -Board means the
+    classic CYD (cyd). tools\flash.ps1 picks the build for the board it is flashing.
+
     Override the image with $env:BATMON_IDF_IMAGE if you need a different
     ESP-IDF version. The project needs >= 5.3 (see README).
 #>
 
 [CmdletBinding()]
 param(
+    # The remote display's board (remote/main/board.h). Implies --project-dir remote.
+    [ValidateSet('cyd', 'cyd2usb', 'jc2432w328r')]
+    [string]$Board,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$IdfArgs
 )
@@ -47,6 +59,27 @@ try { docker info *> $null } catch {
 
 if (-not $IdfArgs -or $IdfArgs.Count -eq 0) {
     $IdfArgs = @('build')
+}
+
+# The remote display: --project-dir remote (or -C remote), or anything with -Board.
+$i = [array]::IndexOf($IdfArgs, '--project-dir')
+if ($i -lt 0) { $i = [array]::IndexOf($IdfArgs, '-C') }
+$remote = ($i -ge 0 -and $IdfArgs[$i + 1] -match '^remote') -or [bool]$Board
+if ($remote) {
+    if (-not $Board) {
+        $Board = 'cyd'
+        Write-Host "==> no -Board: the remote for the classic CYD (cyd)" -ForegroundColor DarkGray
+    }
+    # Each board gets its own build directory and sdkconfig. A shared one would carry
+    # the last board's choice into the next: a defaults file only fills in what an
+    # existing sdkconfig lacks, and never changes a choice already made.
+    # Absolute container paths, so it does not matter whether idf.py resolves them
+    # against the working directory or the project.
+    $boardArgs = @('-B', "/project/remote/build/$Board",
+                   '-D', "SDKCONFIG=/project/remote/sdkconfig.$Board",
+                   '-D', "SDKCONFIG_DEFAULTS=/project/remote/sdkconfig.defaults;/project/remote/boards/$Board.defaults")
+    if ($i -lt 0) { $boardArgs += @('--project-dir', 'remote') }
+    $IdfArgs = $boardArgs + $IdfArgs
 }
 
 # Two ninjas in one build/ corrupt it. They do not fail cleanly: both write the
@@ -112,13 +145,9 @@ if ($code -ne 0) {
 }
 
 if ($IdfArgs -contains 'build') {
-    # Report the project that was actually built: the monitor at the root, or the
-    # remote display with --project-dir remote (or -C remote).
-    $i = [array]::IndexOf($IdfArgs, '--project-dir')
-    if ($i -lt 0) { $i = [array]::IndexOf($IdfArgs, '-C') }
-    $remote = $i -ge 0 -and $IdfArgs[$i + 1] -match '^remote'
-    $bin    = if ($remote) { 'remote\build\batmon-remote.bin' } else { 'build\bat-monitor.bin' }
-    $flash  = if ($remote) { '.\tools\flash.ps1 -Remote' } else { '.\tools\flash.ps1' }
+    # Report the project that was actually built.
+    $bin    = if ($remote) { "remote\build\$Board\batmon-remote.bin" } else { 'build\bat-monitor.bin' }
+    $flash  = if ($remote) { ".\tools\flash.ps1 -Board $Board" } else { '.\tools\flash.ps1' }
     $path   = Join-Path $proj $bin
     if (Test-Path $path) {
         $kb = [math]::Round((Get-Item $path).Length / 1KB)

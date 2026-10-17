@@ -1,0 +1,2 @@
+# GUITION JC2432W328R: ST7789, backlight 27, touch sharing the panel's SPI bus.
+CONFIG_REMOTE_BOARD_JC2432W328R=y

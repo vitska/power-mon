@@ -1,5 +1,6 @@
 /*
- * batmon-remote — a touch display for the battery monitor, on the ESP32-2432S028.
+ * batmon-remote — a touch display for the battery monitor, on the ESP32-2432S028 or the
+ * GUITION JC2432W328R (board.h).
  *
  * It does what the phone app's Monitor tab does, on a screen that can live next to the
  * battery: connects to one `batmon-*` board over BLE, pairs with it if the board asks,
@@ -13,7 +14,9 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
+#include "board.h"
 #include "lcd.h"
+#include "led.h"
 #include "link.h"
 #include "ota.h"
 #include "touch.h"
@@ -41,11 +44,14 @@ void app_main(void)
 
     lcd_init();
     touch_init();
+    led_init();
 
     const char *ver = esp_app_get_description()->version;
     lcd_text(60, 100, "batmon remote", 3, C_WHITE, C_BLACK);
     lcd_text(60, 130, ver, 2, C_GREY, C_BLACK);
-    ESP_LOGI(TAG, "batmon-remote %s", ver);
+    /* "board: <name>" is what tools/flash.ps1 reads off the boot log to tell which
+     * board it is about to flash. Keep the wording. */
+    ESP_LOGI(TAG, "batmon-remote %s, board: %s", ver, BOARD_NAME);
 
     link_start();
     xTaskCreate(ui_task, "ui", 6144, NULL, 3, NULL);
