@@ -31,6 +31,7 @@
 #include "link.h"
 #include "ota.h"
 #include "rcon.h"
+#include "touch.h"
 #include "ui.h"
 
 #define CON_LINE_MAX  160
@@ -564,6 +565,40 @@ static int cmd_pin(int argc, char **argv, console_out_t out)
     return 0;
 }
 
+/* Every touch on the console, raw and mapped: tap the four corners and the raw values
+ * are the board's calibration (board.h, BOARD_TOUCH_*). */
+static int cmd_touch(int argc, char **argv, console_out_t out)
+{
+#if BOARD_HAS_TOUCH
+    if (argc >= 3 && strcmp(argv[1], "log") == 0 &&
+        (strcmp(argv[2], "on") == 0 || strcmp(argv[2], "off") == 0)) {
+        const bool on = strcmp(argv[2], "on") == 0;
+        touch_log(on);
+        if (on) out("touch log on: each tap logged as 'raw X,Y z Z -> x,y' and NOT acted on.\n"
+                    "Tap the corners; 'touch log off' to use the screen again.\n");
+        else    out("touch log off\n");
+        return 0;
+    }
+    if (argc >= 2 && strcmp(argv[1], "z") == 0) {
+        /* Ten seconds of the pressure the UI task reads, five times a second: press and
+         * release while it runs. A panel that never moves these is not being read. */
+        for (int i = 0; i < 50; i++) {
+            int z1, z2;
+            touch_pressure(&z1, &z2);
+            out("z1 %4d  z2 %4d  z %5d%s\n", z1, z2, z1 + 4095 - z2,
+                z1 + 4095 - z2 >= 400 ? "  PRESSED" : "");
+            vTaskDelay(pdMS_TO_TICKS(200));
+        }
+        return 0;
+    }
+    out("usage: touch log on | off | touch z\n");
+    return 1;
+#else
+    out("this board has no touch\n");
+    return 1;
+#endif
+}
+
 static void help(console_out_t out)
 {
     out("batmon remote display (%s). Commands:\n", BOARD_NAME);
@@ -578,6 +613,7 @@ static void help(console_out_t out)
     out("                             (serial only; tools/flash-via-remote.ps1)\n");
     out("  update on|off              firmware update mode, for the phone app\n");
     out("  pin <gpio> <0|1>           drive a GPIO (finding a board's wiring)\n");
+    out("  touch log on|off           every touch, raw and mapped (calibrating)\n");
     out("  ver, ota [...], reboot, help\n");
 }
 
@@ -599,6 +635,7 @@ int console_exec(int argc, char **argv, console_out_t out)
     if (strcmp(c, "monitor-ota") == 0) return cmd_monitor_ota(argc, argv, out);
     if (strcmp(c, "update") == 0)  return cmd_update(argc, argv, out);
     if (strcmp(c, "pin") == 0)     return cmd_pin(argc, argv, out);
+    if (strcmp(c, "touch") == 0)   return cmd_touch(argc, argv, out);
     if (strcmp(c, "forget") == 0) {
         link_forget();
         out("forgotten: no board, no bonds. 'scan' and 'connect' to pick one\n");

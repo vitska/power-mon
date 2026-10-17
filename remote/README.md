@@ -152,6 +152,7 @@ it is the only way.
 | `monitor <command ...>` | runs a command on the monitor (CLI.md) and prints its reply (up to its last 16 lines), e.g. `monitor cal zero i`. Calibration waits up to two minutes. |
 | `monitor-ota <bytes> <sha256>` | updates the **monitor's** firmware through this remote; the image comes over the serial port. Serial only, and driven by `tools/flash-via-remote.ps1` (below) |
 | `update on` / `update off` | firmware update mode: visible to the phone app |
+| `touch log on` / `touch log off` / `touch z` | every tap logged raw and mapped, and not acted on, for calibrating; `touch z` shows live pressure |
 | `pin <gpio> <0\|1>` | drives a GPIO, for finding a board's wiring (refused on the flash and UART pins) |
 | `ver`, `ota [...]`, `reboot`, `help` | as on the monitor (CLI.md §6) |
 
@@ -257,10 +258,13 @@ The board is compiled in, so each one has its own build. `-Board` picks it:
 - **Rotate 180°.** Touch follows the picture.
 - **Panel overrides.** *Invert colours the other way* fixes a negative picture, and *swap
   red and blue* fixes orange showing as blue. Both apply on top of the board's settings.
-- **Touch calibration.** Raw XPT2046 limits, and an option to log every touch, raw and
-  mapped, on the serial console. If taps land in the wrong place, turn the logging on, tap
-  the corners, and put the raw values in. If touch is mirrored on one axis, swap that
-  axis's MIN and MAX.
+- **Touch calibration is per board**, in `main/board.h` (`BOARD_TOUCH_*`), not in
+  menuconfig: it belongs to the hardware. The JC2432W328R's axes run the opposite way from
+  the 2432S028's, and with the CYD's numbers every tap landed mirrored through the centre.
+  To measure a board: `touch log on` on the console, tap the four corners, read the raw
+  values, `touch log off`. While logging, taps are only logged, not acted on, so tapping
+  the corners cannot open Settings or forget a board. `touch z` shows the live pressure,
+  for a panel that registers nothing.
 
 The serial console (`.\tools\monitor.ps1 -Port COMn`, 115200) logs what the dashboard
 shows every 30 seconds:

@@ -37,6 +37,27 @@ static const char *TAG __attribute__((unused)) = "touch";
 #define SAMPLES     5
 
 static spi_device_handle_t s_dev;
+/* Every press logged, raw and mapped: for calibrating (touch_log(), the console's
+ * `touch log on`). Starts as menuconfig says. */
+#if CONFIG_REMOTE_TOUCH_LOG
+static bool                s_log = true;
+#else
+static bool                s_log = false;
+#endif
+
+static int s_raw_x, s_raw_y, s_raw_z; /* the last press, before mapping */
+static volatile int s_z1, s_z2;       /* the last pressure reading, pressed or not */
+
+void touch_pressure(int *z1, int *z2)
+{
+    *z1 = s_z1;
+    *z2 = s_z2;
+}
+
+void touch_log(bool on)
+{
+    s_log = on;
+}
 static bool                s_was_down;
 static int64_t             s_last_tap_us;
 
@@ -101,6 +122,8 @@ static bool read(int *x, int *y)
     const int z1 = conv(0xB1);
     const int z2 = conv(0xC1);
     const int z  = z1 + 4095 - z2;
+    s_z1 = z1;
+    s_z2 = z2;
     if (z < Z_THRESHOLD) {
         return false;
     }
@@ -114,18 +137,18 @@ static bool read(int *x, int *y)
     conv(0x90); /* last command powers the ADC down between reads */
 
     int raw_x = median(rx, SAMPLES), raw_y = median(ry, SAMPLES);
-#if CONFIG_REMOTE_TOUCH_SWAP_XY
+#if BOARD_TOUCH_SWAP_XY
     const int t = raw_x; raw_x = raw_y; raw_y = t;
 #endif
-    int sx = map(raw_x, CONFIG_REMOTE_TOUCH_X_MIN, CONFIG_REMOTE_TOUCH_X_MAX, LCD_W);
-    int sy = map(raw_y, CONFIG_REMOTE_TOUCH_Y_MIN, CONFIG_REMOTE_TOUCH_Y_MAX, LCD_H);
+    int sx = map(raw_x, BOARD_TOUCH_X_MIN, BOARD_TOUCH_X_MAX, LCD_W);
+    int sy = map(raw_y, BOARD_TOUCH_Y_MIN, BOARD_TOUCH_Y_MAX, LCD_H);
 #if CONFIG_REMOTE_ROTATE_180
     sx = LCD_W - 1 - sx;
     sy = LCD_H - 1 - sy;
 #endif
-#if CONFIG_REMOTE_TOUCH_LOG
-    ESP_LOGI(TAG, "raw %d,%d z %d -> %d,%d", raw_x, raw_y, z, sx, sy);
-#endif
+    s_raw_x = raw_x;
+    s_raw_y = raw_y;
+    s_raw_z = z;
     *x = sx;
     *y = sy;
     return true;
@@ -144,6 +167,12 @@ bool touch_tap(int *x, int *y)
         return false;
     }
     s_last_tap_us = now;
+    if (s_log) {
+        /* Calibrating: report the tap and swallow it. Tapping the corners must not
+         * also open Settings, pick a row, or arm FORGET in the Devices screen. */
+        ESP_LOGI(TAG, "raw %d,%d z %d -> %d,%d", s_raw_x, s_raw_y, s_raw_z, tx, ty);
+        return false;
+    }
     *x = tx;
     *y = ty;
     return true;
@@ -154,6 +183,8 @@ bool touch_tap(int *x, int *y)
 /* A board without touch (board.h): nothing to read, and never a tap. Everything the
  * touch screens did is on the console instead (console.c). */
 void touch_init(void) {}
+void touch_log(bool on) { (void)on; }
+void touch_pressure(int *z1, int *z2) { *z1 = *z2 = 0; }
 
 bool touch_tap(int *x, int *y)
 {

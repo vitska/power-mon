@@ -74,6 +74,15 @@
 /* No touch bus of its own: the XPT2046 sits on the panel's SCLK/MOSI/MISO, which is
  * what frees GPIO 25 and 32 for the capacitive JC2432W328C's I2C controller. */
 #define BOARD_TOUCH_SHARED  1
+/* Both axes run the other way from the 2432S028's: raw X is high at the left, raw Y high
+ * at the top. With the CYD's calibration every tap landed mirrored through the centre.
+ * Measured on the board with `touch log on`, taps just inside the corners: top-left
+ * 3651,3500  top-right 562,3241  bottom-right 541,548  bottom-left 3710,747. */
+#define BOARD_TOUCH_X_MIN   3700
+#define BOARD_TOUCH_X_MAX   550
+#define BOARD_TOUCH_Y_MIN   3400
+#define BOARD_TOUCH_Y_MAX   650
+#define BOARD_TOUCH_SWAP_XY 0
 
 #elif CONFIG_REMOTE_BOARD_JC1732W319
 
@@ -138,6 +147,18 @@
 #define BOARD_HAS_TOUCH     1
 #endif
 #define BOARD_TOUCH_CS      33
+
+/* Touch calibration: the XPT2046's raw reading at the picture's left, right, top and
+ * bottom edges, after the optional X/Y swap. A pair given high-to-low mirrors that axis.
+ * Measured per board with the console's `touch log on`: tap the corners, read the raw
+ * values. These are the ESP32-2432S028's. */
+#ifndef BOARD_TOUCH_X_MIN
+#define BOARD_TOUCH_X_MIN   200
+#define BOARD_TOUCH_X_MAX   3700
+#define BOARD_TOUCH_Y_MIN   240
+#define BOARD_TOUCH_Y_MAX   3800
+#define BOARD_TOUCH_SWAP_XY 0
+#endif
 
 /* The status LED (led.c) is on only where a board says it has one. */
 #ifndef BOARD_HAS_RGB_LED

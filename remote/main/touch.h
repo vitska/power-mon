@@ -12,3 +12,10 @@ void touch_init(void);
 
 /** True once per new press, with its screen position in (*x, *y). */
 bool touch_tap(int *x, int *y);
+
+/** Log every press on the console, raw and mapped (for calibrating). */
+void touch_log(bool on);
+
+/** The XPT2046's last two pressure conversions, as the UI task last read them: a press
+ *  is z1 + 4095 - z2 above 400. For diagnosing a panel that never registers one. */
+void touch_pressure(int *z1, int *z2);

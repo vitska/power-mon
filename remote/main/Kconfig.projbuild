@@ -39,27 +39,12 @@ menu "batmon remote display"
                 For orange showing as blue. Flips the panel's RGB/BGR order.
     endmenu
 
-    menu "Touch calibration (XPT2046)"
+    # The calibration itself is per board, in main/board.h: it is the hardware's.
+    config REMOTE_TOUCH_LOG
+        bool "Log every touch, raw and mapped, from boot (for calibrating)"
         depends on !REMOTE_BOARD_JC1732W319
-        config REMOTE_TOUCH_X_MIN
-            int "Raw X at the left edge"
-            default 200
-        config REMOTE_TOUCH_X_MAX
-            int "Raw X at the right edge"
-            default 3700
-        config REMOTE_TOUCH_Y_MIN
-            int "Raw Y at the top edge"
-            default 240
-        config REMOTE_TOUCH_Y_MAX
-            int "Raw Y at the bottom edge"
-            default 3800
-        # Touch mirrored on one axis: swap that axis's MIN and MAX.
-        config REMOTE_TOUCH_SWAP_XY
-            bool "Swap X and Y"
-            default n
-        config REMOTE_TOUCH_LOG
-            bool "Log every touch, raw and mapped (for calibrating)"
-            default n
-    endmenu
+        default n
+        help
+            The console's `touch log on` does the same without a rebuild.
 
 endmenu
