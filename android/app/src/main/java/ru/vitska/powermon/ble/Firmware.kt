@@ -52,16 +52,25 @@ enum class FirmwareTarget(
     val asset: String,
 ) {
     MONITOR("battery monitor", "bat-monitor", 13, "ESP32-C6", "v", "bat-monitor.bin"),
-    REMOTE("remote display", "batmon-remote", 0, "ESP32", "remote-v", "batmon-remote.bin");
+    REMOTE("remote display", "batmon-remote", 0, "ESP32", "remote-v", "batmon-remote-cyd.bin");
 
     /**
      * The release asset for a device that reported `board` in `ver`. The remote display
      * is built once per board (remote/main/board.h) and published as
-     * `batmon-remote-<board>.bin`; a remote that names no board predates them, and ran
-     * the one image there was then, still published under the plain [asset] name.
+     * `batmon-remote-<board>.bin` only -- there is no plain `batmon-remote.bin` any more.
+     * A remote that names no board predates boards, and every one of those was built for
+     * the classic CYD: it gets [boardOf] its image, cyd's.
      */
     fun assetFor(board: String?): String =
-        if (this == REMOTE && !board.isNullOrEmpty()) "batmon-remote-$board.bin" else asset
+        if (this == REMOTE) "batmon-remote-${boardOf(board)}.bin" else asset
+
+    /** The board a device is taken to be: what it said, or for a remote that said
+     *  nothing, the classic CYD, the only board there was before it could say. */
+    fun boardOf(board: String?): String? = when {
+        this != REMOTE -> null
+        board.isNullOrEmpty() -> "cyd"
+        else -> board
+    }
 
     companion object {
         /** A remote display in update mode advertises as batmon-remote-XXXX. */
@@ -125,10 +134,15 @@ class FirmwareImage private constructor(
                 if (bytes.size >= BOARD_OFFSET + 32 && u32(bytes, BOARD_OFFSET) == BOARD_MAGIC) {
                     cstr(bytes, BOARD_OFFSET + 4, 28)
                 } else null
-            if (!board.isNullOrEmpty()) {
-                require(imageBoard == board) {
+            // The guard: the wrong board's image boots, into a dark screen or dead touch.
+            // A remote that names no board is a CYD (boardOf), and takes cyd's image or
+            // one from before boards; one that names its board takes that board's only.
+            val want = target.boardOf(board)
+            if (want != null) {
+                val fits = imageBoard == want || (board.isNullOrEmpty() && imageBoard == null)
+                require(fits) {
                     (if (imageBoard == null) "image names no board" else "image is for the $imageBoard board") +
-                        ", and this ${target.label} is a $board -- it needs ${target.assetFor(board)}"
+                        ", and this ${target.label} is a $want -- it needs ${target.assetFor(board)}"
                 }
             }
             return FirmwareImage(bytes, version, project, imageBoard)
@@ -161,9 +175,9 @@ data class Release(
 /**
  * Releases live on GitHub, as README.md "Versioning" describes, in two series: the
  * monitor's `vX.Y.Z` with `bat-monitor.bin`, and the remote display's `remote-vX.Y.Z`
- * with one `batmon-remote-<board>.bin` per board (and `batmon-remote.bin`, the classic
- * CYD's, which is all a remote from before boards knows). Only monitor releases are
- * ever GitHub's "latest", so this
+ * with one `batmon-remote-<board>.bin` per board (a remote from before boards gets
+ * cyd's: [FirmwareTarget.boardOf]). Only monitor releases are ever GitHub's "latest",
+ * so this
  * lists recent releases and takes the newest of the wanted series rather than asking
  * for "latest". Blocking calls -- run them off the main thread.
  */

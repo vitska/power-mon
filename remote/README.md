@@ -298,8 +298,13 @@ this screen, and the app reconnects and confirms it.
   `ver` (`board jc2432w328r`). The app downloads `batmon-remote-<board>.bin` for that
   board, and refuses a file built for another one. The remote's `ota.c` refuses it too,
   since the wrong board's image boots into a dark or negative screen. A remote running
-  0.4.29 or older names no board: it was a CYD image, and the app gives it plain
-  `batmon-remote.bin`, the `cyd` image.
+  0.4.29 or older names no board: it was a CYD image, and the app gives it
+  `batmon-remote-cyd.bin`, and takes no other board's image for it.
+- **USB flashing has the same guard.** `flash.ps1` reads the board off the firmware
+  already running before it writes anything, and refuses to put another board's image
+  on it: `-Board cyd` on a device that says it is a `jc2432w328r` stops there. `-Force`
+  overrides it, for a device whose firmware was the wrong one to begin with. A device
+  whose firmware does not say (new, or from before boards) is taken at `-Board`'s word.
 - **The first time needs USB.** Remote firmware 0.1.0 had one app slot. `flash.ps1 -Remote`
   once installs the two-slot partition table and the rollback bootloader. The remembered
   board and pairing bonds survive it.
@@ -308,9 +313,8 @@ this screen, and the app reconnects and confirms it.
 
 `remote/version.txt` is the remote's version, separate from the monitor's. It shows on
 the boot splash and in the serial log. A release is tagged `remote-vX.Y.Z`. It builds
-every board and attaches one image per board, `batmon-remote-<board>.bin`, plus
-`batmon-remote.bin`, a copy of the `cyd` image for apps from before per-board images.
-Each image's version, project and board tag are checked before anything is published:
+every board and attaches one image per board, `batmon-remote-<board>.bin`, and nothing
+else: no plain `batmon-remote.bin`, which a client could take for any board. Each image's version, project and board tag are checked before anything is published:
 
 ```powershell
 .\tools\release.ps1 -Remote -Bump patch -DryRun   # bump, build, verify; publish nothing

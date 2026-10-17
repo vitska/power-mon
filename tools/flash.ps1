@@ -20,17 +20,21 @@
     offsets here means the partition layout can change without touching this file.
 
     The remote display is built once per board (remote/main/board.h), into
-    remote/build/<board>/. -Board names the board. Without it, -Remote works it out:
-    it resets the board and reads the boot log of the firmware already on it, which
-    says "board: <name>" -- the board that image was built for, which is right once
-    the board has been flashed with -Board. A board with no batmon-remote on it yet,
-    one with remote firmware from before boards (0.4.24 and older, which does not say),
-    or one that does not answer, needs -Board once.
+    remote/build/<board>/. Every remote flash first resets the board and reads the boot
+    log of the firmware already on it, which says "board: <name>":
+      - without -Board, that is the board flashed;
+      - with -Board, it is the GUARD: a device that says it is another board is refused,
+        since that image would boot into a dark screen or dead touch. -Force flashes it
+        anyway, for a device whose firmware was the wrong one to begin with.
+    A board with no batmon-remote on it yet, one with remote firmware from before boards
+    (0.4.24 and older, which does not say), or one that does not answer, needs -Board,
+    and has nothing to be checked against.
 
 .EXAMPLE
     .\tools\flash.ps1 -Remote                    # remote display, board read off the device
     .\tools\flash.ps1 -Board jc2432w328r         # remote display, GUITION JC2432W328R
     .\tools\flash.ps1 -Board cyd -Port COM7      # remote display, classic CYD
+    .\tools\flash.ps1 -Board cyd -Force          # even though the device says it is another
 .EXAMPLE
     .\tools\flash.ps1                       # auto-detect the port
     .\tools\flash.ps1 -Port COM5
@@ -50,7 +54,9 @@ param(
     # Which board the remote display is (remote/main/board.h). Implies -Remote.
     # Left out, it is read off the board itself.
     [ValidateSet('cyd', 'cyd2usb', 'jc2432w328r', 'jc1732w319')]
-    [string]$Board
+    [string]$Board,
+    # Flash -Board even though the device's firmware says it is another board.
+    [switch]$Force
 )
 
 $ErrorActionPreference = 'Stop'
@@ -202,21 +208,51 @@ print('seen ' + ('batmon-remote from before boards, which does not say' if 'batm
     finally { Remove-Item $tmp -ErrorAction SilentlyContinue }
 }
 
-if ($Remote -and -not $Board) {
+# THE GUARD. The board is read off the firmware already running, every time -- not only
+# when -Board is left out. Another board's image boots fine into a dark screen, dead
+# touch or a mirrored picture, and nothing on the way stops it: esptool checks only the
+# chip, which all the remote boards share. So -Board naming a different board from the
+# one the device says it is gets refused, and -Force is the deliberate way past that
+# (a board whose firmware was wrong in the first place, say). A device whose firmware
+# does not say -- a new board, other firmware, a remote from before boards -- has
+# nothing to check against: -Board is taken at its word, and is then required.
+if ($Remote) {
     Write-Host "==> reading the board off $Port (reset, boot log)" -ForegroundColor DarkGray
-    $probe = "$(Get-RunningBoard $Port)"
-    if ($probe -match '^board (\w+)$' -and $boards.Contains($Matches[1])) {
-        $Board = $Matches[1]
+    $probe   = "$(Get-RunningBoard $Port)"
+    $running = if ($probe -match '^board (\w+)$' -and $boards.Contains($Matches[1])) { $Matches[1] }
+    $why     = if ($probe -match '^seen (.+)$') { $Matches[1] } else { $probe }
+
+    if (-not $Board) {
+        if (-not $running) {
+            Write-Host ""
+            Write-Host "Cannot tell which board is on $Port ($why)." -ForegroundColor Red
+            Write-Host "The board is read off the batmon-remote firmware already on it; a new board,"
+            Write-Host "or one running something else, has to be named once:"
+            Write-Host ""
+            $boards.Keys | ForEach-Object { Write-Host ("  .\tools\flash.ps1 -Board {0,-12} # {1}" -f $_, $boards[$_]) }
+            exit 1
+        }
+        $Board = $running
         Write-Host "==> detected $Board  ($($boards[$Board]))" -ForegroundColor Yellow
+    } elseif ($running -and $running -ne $Board) {
+        Write-Host ""
+        if (-not $Force) {
+            Write-Host "Refusing: $Port is a $running, and this is the $Board image." -ForegroundColor Red
+            Write-Host "  on the device:  $running  ($($boards[$running]))" -ForegroundColor Red
+            Write-Host "  asked to flash: $Board  ($($boards[$Board]))" -ForegroundColor Red
+            Write-Host ""
+            Write-Host "Another board's image boots into a dark screen, dead touch or a wrong picture."
+            Write-Host "Flash the right one:  .\tools\flash.ps1 -Board $running -Port $Port"
+            Write-Host "If the firmware on it was the wrong one to begin with, and $Board really is"
+            Write-Host "the hardware, say so:  -Force"
+            exit 1
+        }
+        Write-Host "==> -Force: the device says $running, flashing $Board anyway" -ForegroundColor Yellow
+    } elseif ($running) {
+        Write-Host "==> the device is a $Board, as asked" -ForegroundColor DarkGray
     } else {
-        $why = if ($probe -match '^seen (.+)$') { $Matches[1] } else { $probe }
-        Write-Host ""
-        Write-Host "Cannot tell which board is on $Port ($why)." -ForegroundColor Red
-        Write-Host "The board is read off the batmon-remote firmware already on it; a new board,"
-        Write-Host "or one running something else, has to be named once:"
-        Write-Host ""
-        $boards.Keys | ForEach-Object { Write-Host ("  .\tools\flash.ps1 -Board {0,-12} # {1}" -f $_, $boards[$_]) }
-        exit 1
+        Write-Host "==> the device's firmware does not say which board it is ($why);" -ForegroundColor Yellow
+        Write-Host "    taking -Board $Board at its word" -ForegroundColor Yellow
     }
 }
 

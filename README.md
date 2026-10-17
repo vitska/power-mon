@@ -203,7 +203,8 @@ publishing, so a stale build directory cannot ship under the wrong number. Local
 carry whatever `version.txt` says; `build` in `ver` tells two of them apart.
 
 **The remote display has its own series.** It has its own version file
-(`remote/version.txt`), tagged `remote-vX.Y.Z` with `batmon-remote.bin` attached, and is
+(`remote/version.txt`), tagged `remote-vX.Y.Z` with one `batmon-remote-<board>.bin` per
+board attached, and is
 cut with `-Remote`:
 
 ```powershell

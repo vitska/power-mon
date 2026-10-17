@@ -9,7 +9,7 @@
 
       monitor  version.txt         tag vX.Y.Z          asset bat-monitor.bin
       remote   remote/version.txt  tag remote-vX.Y.Z   assets batmon-remote-<board>.bin,
-               one per board, and batmon-remote.bin (= cyd) for older apps
+               one per board
       app      android/app/build.gradle.kts (versionName; a bump also raises
                versionCode)       tag app-vX.Y.Z      asset battery-monitor-X.Y.Z.apk
 
@@ -78,9 +78,10 @@ $t = if ($App) {
         Label       = 'remote display'
         VersionFile = 'remote\version.txt'
         # One image per board (remote/main/board.h), each published as
-        # batmon-remote-<board>.bin; the app picks the one the display's `ver` names.
-        # The first is ALSO published as plain batmon-remote.bin, which is all an app
-        # from before boards looks for -- and what every remote before them ran.
+        # batmon-remote-<board>.bin; the app picks the one the display's `ver` names,
+        # and a remote too old to name one gets cyd's -- all it ever ran. No plain
+        # batmon-remote.bin any more: a second copy of one board's image under a name
+        # that fits every board is exactly how the wrong board gets updated.
         Boards      = @('cyd', 'cyd2usb', 'jc2432w328r', 'jc1732w319')
         Bin         = 'remote\build\cyd\batmon-remote.bin'
         Project     = 'batmon-remote'
@@ -93,7 +94,6 @@ $t = if ($App) {
                       "`n- ``batmon-remote-cyd2usb.bin``: ESP32-2432S028R, USB-C + micro-USB (ST7789)" +
                       "`n- ``batmon-remote-jc2432w328r.bin``: GUITION JC2432W328R" +
                       "`n- ``batmon-remote-jc1732w319.bin``: GUITION JC1732W319, 1.9in, no touch" +
-                      "`n- ``batmon-remote.bin``: the same as cyd, for apps older than per-board images" +
                       "`n`nThe power-mon app picks the right one by itself. Over USB: tools/flash.ps1 -Board <board>."
     }
 } else {
@@ -252,9 +252,8 @@ try {
             Copy-Item $built $named -Force
             $files += [pscustomobject]@{ Asset = "batmon-remote-$b.bin"; Path = $named }
         }
-        $legacy = Join-Path $dist 'batmon-remote.bin'
-        Copy-Item $files[0].Path $legacy -Force
-        $files += [pscustomobject]@{ Asset = 'batmon-remote.bin'; Path = $legacy }
+        # A stale copy from a release before this one would otherwise sit beside them.
+        Remove-Item (Join-Path $dist 'batmon-remote.bin') -ErrorAction SilentlyContinue
     } else {
         & (Join-Path $PSScriptRoot 'idf.ps1') @($t.BuildArgs)
         if ($LASTEXITCODE -ne 0) { Fail "Build failed." }
