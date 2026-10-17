@@ -68,8 +68,9 @@
 #define BOARD_LED_G         16
 #define BOARD_LED_B         17
 #define BOARD_LED_ON        0
-/* Lit at half brightness (PWM, led.c): full drive glares in a dim room. */
-#define BOARD_LED_DUTY_PCT  50
+/* Lit at a tenth of full brightness (PWM, led.c): full drive glares in a dim room,
+ * and half still lit the bench. */
+#define BOARD_LED_DUTY_PCT  10
 /* No touch bus of its own: the XPT2046 sits on the panel's SCLK/MOSI/MISO, which is
  * what frees GPIO 25 and 32 for the capacitive JC2432W328C's I2C controller. */
 #define BOARD_TOUCH_SHARED  1
