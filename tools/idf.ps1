@@ -33,7 +33,7 @@
 [CmdletBinding()]
 param(
     # The remote display's board (remote/main/board.h). Implies --project-dir remote.
-    [ValidateSet('cyd', 'cyd2usb', 'jc2432w328r')]
+    [ValidateSet('cyd', 'cyd2usb', 'jc2432w328r', 'jc1732w319')]
     [string]$Board,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$IdfArgs

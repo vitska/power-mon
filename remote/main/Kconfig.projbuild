@@ -15,6 +15,8 @@ menu "batmon remote display"
             bool "ESP32-2432S028R, USB-C + micro-USB (ST7789)  [cyd2usb]"
         config REMOTE_BOARD_JC2432W328R
             bool "GUITION JC2432W328R, resistive touch (ST7789)  [jc2432w328r]"
+        config REMOTE_BOARD_JC1732W319
+            bool "GUITION JC1732W319, 1.9in 170x320, no touch (ST7789)  [jc1732w319]"
     endchoice
 
     config REMOTE_ROTATE_180
@@ -38,6 +40,7 @@ menu "batmon remote display"
     endmenu
 
     menu "Touch calibration (XPT2046)"
+        depends on !REMOTE_BOARD_JC1732W319
         config REMOTE_TOUCH_X_MIN
             int "Raw X at the left edge"
             default 200

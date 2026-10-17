@@ -15,6 +15,7 @@
 #include "nvs_flash.h"
 
 #include "board.h"
+#include "console.h"
 #include "lcd.h"
 #include "led.h"
 #include "link.h"
@@ -63,5 +64,6 @@ void app_main(void)
     ESP_LOGI(TAG, "batmon-remote %s, board: %s", ver, BOARD_NAME);
 
     link_start();
+    console_start();
     xTaskCreate(ui_task, "ui", 6144, NULL, 3, NULL);
 }

@@ -29,7 +29,7 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 
-#include "board.h"
+#include "console.h"
 #include "ota.h"
 
 static const char *TAG = "rcon";
@@ -110,149 +110,19 @@ static void flush(void)
 
 /* --- commands ------------------------------------------------------------------------- */
 
-static bool parse_sha256(const char *hex, uint8_t out_sha[32])
-{
-    if (strlen(hex) != 64) return false;
-    for (int i = 0; i < 32; i++) {
-        unsigned v;
-        if (sscanf(hex + 2 * i, "%2x", &v) != 1) return false;
-        out_sha[i] = (uint8_t)v;
-    }
-    return true;
-}
-
-static int cmd_ver(void)
-{
-    uint8_t mac[6] = {0};
-    esp_read_mac(mac, ESP_MAC_BT);
-    char build[17];
-    esp_app_get_elf_sha256(build, sizeof(build));
-    /* protocol 3: the same framing and OTA commands as the monitor, which is all the
-     * app needs from us. `device remote` says which of the two it is talking to. */
-    out("protocol 3\n");
-    out("firmware %s\n", esp_app_get_description()->version);
-    out("build %s\n", build);
-    out("device remote\n");
-    /* Which image fits this display: the app picks the release asset by it. */
-    out("board %s\n", BOARD_NAME);
-    out("chip esp32\n");
-    out("mac %02X:%02X:%02X:%02X:%02X:%02X\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    return 0;
-}
-
-static int cmd_ota(int argc, char **argv)
-{
-    if (argc < 2 || strcmp(argv[1], "status") == 0) {
-        ota_status_t st;
-        ota_get_status(&st);
-        out("running=%s\n", st.running);
-        out("version=%s\n", st.version);
-        out("build=%s\n", st.build);
-        out("state=%s\n", st.pending ? "probation" : "valid");
-        if (st.pending && st.probation_left_s >= 0) out("probation_s=%d\n", st.probation_left_s);
-        out("rollback=%d\n", st.can_rollback ? 1 : 0);
-        out("boot=%s\n", st.boot);
-        out("spare=%s\n", st.spare);
-        out("spare.version=%s\n", st.spare_version[0] ? st.spare_version : "none");
-        out("session=%s\n", st.phase == OTA_RECEIVING ? "receiving" : "idle");
-        if (st.phase == OTA_RECEIVING) {
-            out("session.received=%lu\n", (unsigned long)st.received);
-            out("session.size=%lu\n", (unsigned long)st.size);
-        }
-        return 0;
-    }
-    if (strcmp(argv[1], "begin") == 0) {
-        uint8_t       sha[32];
-        char         *end  = NULL;
-        unsigned long size = argc >= 4 ? strtoul(argv[2], &end, 10) : 0;
-        if (argc < 4 || !end || *end || !size || !parse_sha256(argv[3], sha)) {
-            out("usage: ota begin <bytes> <sha256 as 64 hex digits>\n");
-            return 1;
-        }
-        const esp_err_t err = ota_begin((uint32_t)size, sha);
-        if (err == ESP_OK) {
-            out("spare slot erased; send %lu bytes to the OTA characteristic\n", size);
-            return 0;
-        }
-        if (err == ESP_ERR_OTA_ROLLBACK_INVALID_STATE) {
-            out("the running image is on probation -- 'ota confirm' or 'ota rollback' first\n");
-        } else if (err == ESP_ERR_NOT_FOUND) {
-            out("no spare app slot -- flash this remote once over USB (flash.ps1 -Remote)\n");
-        } else if (err == ESP_ERR_INVALID_SIZE) {
-            out("%lu bytes does not fit the spare slot\n", size);
-        } else {
-            out("cannot start: %s\n", esp_err_to_name(err));
-        }
-        return 1;
-    }
-    if (strcmp(argv[1], "end") == 0) {
-        char why[96];
-        if (ota_finish(why, sizeof(why)) != ESP_OK) {
-            out("%s\n", why);
-            return 1;
-        }
-        out("firmware %s written; 'reboot' to start it\n", why);
-        return 0;
-    }
-    if (strcmp(argv[1], "abort") == 0) {
-        ota_abort();
-        out("abandoned; the running image is untouched\n");
-        return 0;
-    }
-    if (strcmp(argv[1], "confirm") == 0) {
-        ota_status_t st;
-        ota_get_status(&st);
-        if (!st.pending) {
-            out("not on probation; nothing to confirm\n");
-            return 0;
-        }
-        if (ota_confirm() != ESP_OK) {
-            out("confirm failed\n");
-            return 1;
-        }
-        out("firmware %s confirmed; it stays\n", st.version);
-        return 0;
-    }
-    if (strcmp(argv[1], "rollback") == 0) {
-        if (ota_rollback() != ESP_OK) {
-            out("nothing to roll back to -- the other slot has no valid image\n");
-            return 1;
-        }
-        out("rolling back to the previous image; the link will drop\n");
-        return 0;
-    }
-    out("usage: ota [status | begin <bytes> <sha256> | end | abort | confirm | rollback]\n");
-    return 1;
-}
-
+/* Every command is the console's (console.c): the phone app's `ver` and `ota ...`, and
+ * the display's own settings, the same set the serial port takes. */
 static void exec_line(char *line)
 {
     s_out_len = 0;
     out("> %s\n", line);
 
-    char *argv[6];
+    char *argv[12];
     int   argc = 0;
-    for (char *tok = strtok(line, " "); tok && argc < 6; tok = strtok(NULL, " ")) {
+    for (char *tok = strtok(line, " "); tok && argc < 12; tok = strtok(NULL, " ")) {
         argv[argc++] = tok;
     }
-
-    int status = 0;
-    if (argc == 0) {
-        out("empty command\n");
-        status = -3;
-    } else if (strcmp(argv[0], "ver") == 0) {
-        status = cmd_ver();
-    } else if (strcmp(argv[0], "ota") == 0) {
-        status = cmd_ota(argc, argv);
-    } else if (strcmp(argv[0], "reboot") == 0) {
-        out("rebooting; the link will drop\n");
-        ota_reboot_after(500);
-    } else if (strcmp(argv[0], "help") == 0) {
-        out("batmon remote display. Commands: ver, ota [...], reboot, help\n");
-    } else {
-        out("unknown command -- try 'help'\n");
-        status = -2; /* what the app reads as "this firmware has no such command" */
-    }
+    const int status = console_exec(argc, argv, out);
     out("exit %d\n", status);
     s_out[s_out_len++] = 0x04;
     flush();

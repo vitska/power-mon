@@ -29,6 +29,8 @@
 #include "board.h"
 #include "lcd.h"
 
+#if BOARD_HAS_TOUCH
+
 static const char *TAG __attribute__((unused)) = "touch";
 
 #define Z_THRESHOLD 400  /* pressure below this is no touch */
@@ -146,3 +148,18 @@ bool touch_tap(int *x, int *y)
     *y = ty;
     return true;
 }
+
+#else
+
+/* A board without touch (board.h): nothing to read, and never a tap. Everything the
+ * touch screens did is on the console instead (console.c). */
+void touch_init(void) {}
+
+bool touch_tap(int *x, int *y)
+{
+    (void)x;
+    (void)y;
+    return false;
+}
+
+#endif

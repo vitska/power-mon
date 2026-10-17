@@ -49,7 +49,7 @@ param(
     [switch]$Remote,
     # Which board the remote display is (remote/main/board.h). Implies -Remote.
     # Left out, it is read off the board itself.
-    [ValidateSet('cyd', 'cyd2usb', 'jc2432w328r')]
+    [ValidateSet('cyd', 'cyd2usb', 'jc2432w328r', 'jc1732w319')]
     [string]$Board
 )
 
@@ -59,6 +59,7 @@ $boards = [ordered]@{
     'cyd'         = 'ESP32-2432S028R, single micro-USB (ILI9341)'
     'cyd2usb'     = 'ESP32-2432S028R, USB-C + micro-USB (ST7789)'
     'jc2432w328r' = 'GUITION JC2432W328R (ST7789, resistive)'
+    'jc1732w319'  = 'GUITION JC1732W319, 1.9in 170x320 (ST7789, no touch)'
 }
 if ($Board) { $Remote = $true }
 

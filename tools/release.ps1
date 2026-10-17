@@ -81,7 +81,7 @@ $t = if ($App) {
         # batmon-remote-<board>.bin; the app picks the one the display's `ver` names.
         # The first is ALSO published as plain batmon-remote.bin, which is all an app
         # from before boards looks for -- and what every remote before them ran.
-        Boards      = @('cyd', 'cyd2usb', 'jc2432w328r')
+        Boards      = @('cyd', 'cyd2usb', 'jc2432w328r', 'jc1732w319')
         Bin         = 'remote\build\cyd\batmon-remote.bin'
         Project     = 'batmon-remote'
         TagPrefix   = 'remote-v'
@@ -92,6 +92,7 @@ $t = if ($App) {
                       "`n`n- ``batmon-remote-cyd.bin``: ESP32-2432S028R, single micro-USB (ILI9341)" +
                       "`n- ``batmon-remote-cyd2usb.bin``: ESP32-2432S028R, USB-C + micro-USB (ST7789)" +
                       "`n- ``batmon-remote-jc2432w328r.bin``: GUITION JC2432W328R" +
+                      "`n- ``batmon-remote-jc1732w319.bin``: GUITION JC1732W319, 1.9in, no touch" +
                       "`n- ``batmon-remote.bin``: the same as cyd, for apps older than per-board images" +
                       "`n`nThe power-mon app picks the right one by itself. Over USB: tools/flash.ps1 -Board <board>."
     }

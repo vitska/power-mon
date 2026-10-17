@@ -58,8 +58,18 @@ static bool     s_full;              /* redraw everything on the next pass */
 static int      s_span_h;
 static int      s_span_full_h;       /* what the monitor's ring covers, from the last fetch */
 
+/* The console's request for the update screen (ui_update_mode()): -1 none, 0 leave,
+ * 1 open. Picked up by the loop, which owns every screen change. */
+static volatile int s_req_update = -1;
+
+void ui_update_mode(bool on)
+{
+    s_req_update = on ? 1 : 0;
+}
+
 /* --- small widgets --------------------------------------------------------------- */
 
+#if BOARD_HAS_TOUCH
 static bool hit(int tx, int ty, int x, int y, int w, int h)
 {
     return tx >= x && tx < x + w && ty >= y && ty < y + h;
@@ -73,6 +83,7 @@ static void button(int x, int y, int w, int h, const char *label, int scale, uin
     const int tw = lcd_text_w(label, scale), th = 8 * scale;
     lcd_text(x + (w - tw) / 2, y + (h - th) / 2, label, scale, fg, bg);
 }
+#endif
 
 /* A text field that redraws only when its content or colour changes. */
 typedef struct {
@@ -183,10 +194,26 @@ static int rssi_bars(int8_t dbm)
 /* The SoC gauge: ten bricks, one per 10 %. */
 #define SOC_BRICKS 10
 
+/*
+ * Below the readings, the monitor's history. On a 240-row panel that is the SoC graph.
+ * A 170-row panel (the JC1732W319) has 22 rows left there, too few for a curve worth
+ * reading, so it gets the MODE LINE instead: the same history, each column only the
+ * colour of the gauge's state at that time -- charging, discharging, full, resting,
+ * empty -- the full width of the screen. When the pack charged and when it worked is
+ * readable from it; how far is what the number above is for.
+ */
+#define UI_MODE_LINE (LCD_H < 240)
+#if UI_MODE_LINE
+#define GX 4
+#define GY 161
+#define GW 312
+#define GH 9
+#else
 #define GX 4
 #define GY 162
 #define GW 284
 #define GH 74
+#endif
 /* The gauge-state colour, the same one the mode label uses, from the monitor's
  * one-letter code (fg_state_code()). A point with no state draws plain green. */
 static uint16_t state_colour(char c)
@@ -314,6 +341,21 @@ static void draw_graph(void)
         }
     }
     const int rows = LCD_STRIP_PX / GW;
+#if UI_MODE_LINE
+    /* The mode line: a column's state colour top to bottom, the panel's colour where
+     * the monitor recorded nothing, and the hour divisions through it as gaps. */
+    for (int y0 = 0; y0 < GH; y0 += rows) {
+        const int h   = (y0 + rows > GH) ? GH - y0 : rows;
+        uint16_t *buf = lcd_strip();
+        for (int r = 0; r < h; r++) {
+            for (int c = 0; c < GW; c++) {
+                buf[r * GW + c] = vgrid[c] ? grid_px : ycol[c] >= 0 ? lcol[c] : bg_px;
+            }
+        }
+        lcd_blit_strip(GX, GY + y0, GW, h);
+    }
+    (void)fcol;
+#else
     for (int y0 = 0; y0 < GH; y0 += rows) {
         const int h = (y0 + rows > GH) ? GH - y0 : rows;
         /* Re-fetched every band: the buffers alternate, so the previous pointer now
@@ -356,11 +398,13 @@ static void draw_graph(void)
         }
         lcd_blit_strip(GX, GY + y0, GW, h);
     }
+#endif
     const char *msg = !h.supported ? "monitor firmware too old for history (< 0.9.0)"
                     : h.count == 0 ? "no history yet -- the monitor records one now and then"
                                    : NULL;
     if (msg) {
-        lcd_text(GX + (GW - lcd_text_w(msg, 1)) / 2, GY + GH / 2 - 4, msg, 1, C_GREY, bg);
+        const int my = GH >= 8 ? GY + GH / 2 - 4 : GY;
+        lcd_text(GX + (GW - lcd_text_w(msg, 1)) / 2, my, msg, 1, C_GREY, bg);
     }
 }
 
@@ -372,6 +416,7 @@ static void main_enter(void)
     lcd_fill(GX, GY, GW, GH, C_PANEL);
     lcd_text(6, 28, "STATE OF CHARGE", 1, C_GREY, C_BLACK);
     lcd_text(156, 64, "%", 3, C_WHITE, C_BLACK);
+#if !UI_MODE_LINE
     /* Every quarter, matching the grid lines drawn across the panel: the curve is read
      * against these, and with only 100/50/0 the two lines in between were unlabelled. */
     lcd_text(GX + GW + 4, GY, "100", 1, C_GREY, C_BLACK);
@@ -379,6 +424,7 @@ static void main_enter(void)
     lcd_text(GX + GW + 4, GY + GH / 2 - 4, "50", 1, C_GREY, C_BLACK);
     lcd_text(GX + GW + 4, GY + 3 * GH / 4 - 4, "25", 1, C_GREY, C_BLACK);
     lcd_text(GX + GW + 4, GY + GH - 8, "0", 1, C_GREY, C_BLACK);
+#endif
     draw_graph();
 }
 
@@ -688,12 +734,13 @@ static void main_draw(const link_model_t *m)
     /* Graph label, or why there is nothing to show; the environment on the right. */
     static field_t f_env;
     if (m->state == LINK_READY) {
+        const char *what = UI_MODE_LINE ? "MODES" : "SOC";
         if (s_span_h > 0) {
             /* The grid step belongs next to the span: five unlabelled verticals are a
              * decoration, and there is no room under a 74-pixel graph for tick marks. */
-            snprintf(b, sizeof(b), "SOC %dh /%dh", s_span_h, hour_step(s_span_h));
+            snprintf(b, sizeof(b), "%s %dh /%dh", what, s_span_h, hour_step(s_span_h));
         } else {
-            snprintf(b, sizeof(b), "SOC"); /* no history fetched yet: no span to name */
+            snprintf(b, sizeof(b), "%s", what); /* no history yet: no span to name */
         }
         field(&f_glabel, 4, 152, 96, 1, C_GREY, C_BLACK, b);
         char env[48] = "", part[16];
@@ -720,6 +767,13 @@ static void main_draw(const link_model_t *m)
         f_env.text[0] = '\x01'; /* force a redraw once the label shrinks back */
     }
 }
+
+/*
+ * Everything from here to the update screen is touch: the board picker, the keypads,
+ * Settings with its calibrations, and the battery log behind it. A board without
+ * touch (board.h) compiles none of it, and does the same from the console (console.c).
+ */
+#if BOARD_HAS_TOUCH
 
 /* --- the board picker -------------------------------------------------------------- */
 
@@ -1176,6 +1230,26 @@ static void battery_draw(const link_model_t *m)
              C_DIM, C_BLACK);
 }
 
+#else /* !BOARD_HAS_TOUCH */
+
+/* --- pairing, without a keypad ------------------------------------------------------ */
+
+/* The monitor shows six digits and asks for them; with nothing to tap them into, the
+ * screen says where they go instead. It clears itself once the console has sent them. */
+static void passkey_enter(const char *who)
+{
+    lcd_fill(0, 0, LCD_W, LCD_H, C_BLACK);
+    lcd_fill(0, 0, LCD_W, 22, C_HEADER);
+    lcd_text(6, 3, "PAIRING", 2, C_WHITE, C_HEADER);
+    lcd_text(6, 34, who, 2, C_WHITE, C_BLACK);
+    lcd_text(6, 60, "wants the six digits it shows on its screen.", 1, C_GREY, C_BLACK);
+    lcd_text(6, 76, "Type them on the serial console:", 1, C_GREY, C_BLACK);
+    lcd_text(6, 94, "passkey 123456", 2, C_YELLOW, C_BLACK);
+    lcd_text(6, 122, "or 'passkey cancel' to refuse.", 1, C_GREY, C_BLACK);
+}
+
+#endif /* BOARD_HAS_TOUCH */
+
 /* --- firmware update of the remote itself --------------------------------------------- */
 
 /*
@@ -1200,7 +1274,9 @@ static void update_draw(bool force)
         lcd_fill(0, 0, LCD_W, LCD_H, C_BLACK);
         lcd_fill(0, 0, LCD_W, 22, C_HEADER);
         lcd_text(6, 3, "FIRMWARE UPDATE", 2, C_WHITE, C_HEADER);
+#if BOARD_HAS_TOUCH
         button(240, 0, 80, 22, "BACK", 2, C_HEADER, C_WHITE);
+#endif
         bar_last = -2;
         btn_last = !o.pending;
     }
@@ -1238,20 +1314,24 @@ static void update_draw(bool force)
         bar_last = bar;
     }
 
+    /* The probation lines sit higher on a 170-row panel, which has no buttons under
+     * them: KEEP and ROLL BACK are `ota confirm` and `ota rollback` there. */
+    const int p1y = LCD_H < 240 ? 134 : 146, p2y = LCD_H < 240 ? 154 : 168;
     if (o.pending) {
-        field(&f_p1, 6, 146, 308, 2, C_YELLOW, C_BLACK, "ON PROBATION");
+        field(&f_p1, 6, p1y, 308, 2, C_YELLOW, C_BLACK, "ON PROBATION");
         if (o.probation_left_s >= 0) {
             snprintf(b, sizeof(b), "Rolls back in %d min %02d s unless kept.",
                      o.probation_left_s / 60, o.probation_left_s % 60);
         } else {
             snprintf(b, sizeof(b), "Rolls back at the next reset unless kept.");
         }
-        field(&f_p2, 6, 168, 308, 1, C_WHITE, C_BLACK, b);
+        field(&f_p2, 6, p2y, 308, 1, C_WHITE, C_BLACK, b);
     } else {
         snprintf(b, sizeof(b), "previous image: %s", o.spare_version[0] ? o.spare_version : "none");
-        field(&f_p1, 6, 146, 308, 2, C_GREY, C_BLACK, "");
-        field(&f_p2, 6, 168, 308, 1, C_GREY, C_BLACK, b);
+        field(&f_p1, 6, p1y, 308, 2, C_GREY, C_BLACK, "");
+        field(&f_p2, 6, p2y, 308, 1, C_GREY, C_BLACK, b);
     }
+#if BOARD_HAS_TOUCH
     if (force || btn_last != o.pending) {
         if (o.pending) {
             button(10, 196, 140, 40, "KEEP", 2, RGB(30, 90, 40), C_WHITE);
@@ -1262,8 +1342,12 @@ static void update_draw(bool force)
         }
         btn_last = o.pending;
     }
+#else
+    (void)btn_last;
+#endif
 }
 
+#if BOARD_HAS_TOUCH
 /* Returns true when the screen should be left. */
 static bool update_tap(int tx, int ty)
 {
@@ -1277,6 +1361,7 @@ static bool update_tap(int tx, int ty)
     }
     return false;
 }
+#endif
 
 /* --- the loop ---------------------------------------------------------------------- */
 
@@ -1295,6 +1380,7 @@ void ui_run(void)
 {
     link_model_t m;
     int64_t      next_list = 0;
+    (void)next_list; /* the board picker's; not compiled without touch */
 
     s_screen = SCR_MAIN;
     s_full   = true;
@@ -1311,6 +1397,14 @@ void ui_run(void)
         link_get(&m);
         const int64_t now = esp_timer_get_time();
         led_update(&m); /* on every screen, not only the dashboard's icon */
+
+        /* `update on|off` from the console. */
+        const int req = s_req_update;
+        if (req >= 0) {
+            s_req_update = -1;
+            if (req && s_screen != SCR_UPDATE)       go(SCR_UPDATE);
+            else if (!req && s_screen == SCR_UPDATE) go(SCR_MAIN);
+        }
 
         /* Pairing interrupts whatever is on screen, and ends back on the dashboard. */
         char who[24];
@@ -1357,11 +1451,13 @@ void ui_run(void)
                      (unsigned long)lh.age_s);
         }
 
-        int tx, ty;
+        int tx = 0, ty = 0;
         const bool tap = touch_tap(&tx, &ty);
+        (void)tap; /* never true on a board without touch */
 
         switch (s_screen) {
         case SCR_MAIN:
+#if BOARD_HAS_TOUCH
             if (tap && ty < 22) {
                 go(SCR_SETTINGS);
                 break;
@@ -1374,11 +1470,13 @@ void ui_run(void)
                                                    : full;
                 s_full = true; /* graph and its label */
             }
+#endif
             if (s_full) main_enter();
             main_draw(&m);
             s_full = false;
             break;
 
+#if BOARD_HAS_TOUCH
         case SCR_DEVICES:
             if (tap) {
                 if (hit(tx, ty, 240, 0, 80, 22)) {
@@ -1474,13 +1572,16 @@ void ui_run(void)
                 go(SCR_SETTINGS);
             }
             break;
+#endif
 
         case SCR_UPDATE: {
             static int64_t next_update_draw;
+#if BOARD_HAS_TOUCH
             if (tap && update_tap(tx, ty)) {
                 go(SCR_SETTINGS);
                 break;
             }
+#endif
             if (s_full || now >= next_update_draw) {
                 update_draw(s_full);
                 s_full           = false;
@@ -1489,6 +1590,7 @@ void ui_run(void)
             break;
         }
 
+#if BOARD_HAS_TOUCH
         case SCR_BATTERY: {
             /* Redrawn on entry and once a second: every figure comes from `config`,
              * which the link re-reads every five minutes, so there is nothing here that
@@ -1504,13 +1606,20 @@ void ui_run(void)
             }
             break;
         }
+#endif
 
         case SCR_PASSKEY:
             if (s_full) {
                 passkey_enter(who);
                 s_full = false;
             }
+#if BOARD_HAS_TOUCH
             if (tap) passkey_tap(tx, ty);
+#endif
+            break;
+
+        default:
+            go(SCR_MAIN); /* a touch-only screen, on a board without touch */
             break;
         }
 

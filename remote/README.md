@@ -2,7 +2,8 @@
 
 A touch display for the battery monitor, running on the **ESP32-2432S028** ("Cheap Yellow
 Display": classic ESP32, 2.8" 320×240 ILI9341 or ST7789, XPT2046 resistive touch) or the
-**GUITION JC2432W328R** (the same ESP32-WROOM-32, ST7789 and XPT2046, wired differently). It
+**GUITION JC2432W328R** (the same ESP32-WROOM-32, ST7789 and XPT2046, wired differently),
+or without touch on the **GUITION JC1732W319** (the same ESP32, a 1.9" 320×170 ST7789). It
 connects to a `batmon-*` board over BLE and shows what the phone app's Monitor tab shows,
 on a screen that can live next to the battery. A separate firmware from the monitor in the
 repository root: different chip, different BLE role, its own `version.txt`.
@@ -119,6 +120,44 @@ received, a longer one for every command sent. A steady blue flicker means a wor
 **Pairing keypad.** Appears by itself when the board asks for pairing: type the six digits
 the board shows on its OLED.
 
+### Without touch: the JC1732W319
+
+The 1.9" board has 170 rows and no touch, so none of the touch screens are compiled in.
+Everything they do is on the console (below).
+
+- **The dashboard is the same down to the readings.** Below them, the SoC graph is
+  replaced by the **mode line**, the full width of the screen. It shows the same history
+  as the graph, but each column only takes the colour of the gauge's state at that time:
+  green charging, orange discharging, cyan full, red empty, grey resting. Hour divisions
+  are gaps in it. The label above it reads `MODES 24h /6h`.
+- **Pairing** shows a screen saying where the digits go: `passkey 123456` on the console.
+- **Firmware update** opens with `update on` and closes with `update off`. KEEP and ROLL
+  BACK are `ota confirm` and `ota rollback`.
+
+## Console
+
+Every board has a console on its USB serial port (115200, `.\tools\monitor.ps1 -Port COMn`).
+The same commands also run over the remote's BLE console, the one the phone app uses for
+updates. On a touch board it is a second way to do what the screens do; on the JC1732W319
+it is the only way.
+
+| Command | Does |
+|---|---|
+| `status` | the link and the latest reading |
+| `battery` | the pack's black box, as the monitor keeps it |
+| `scan [seconds]` | lists the boards in range, numbered (default 5 s) |
+| `connect <n \| name \| address>` | uses that board and remembers it |
+| `forget` | drops the remembered board and every bond |
+| `passkey <digits>` / `passkey cancel` | answers or refuses the monitor's pairing request |
+| `monitor <command ...>` | runs a command on the monitor (CLI.md) and prints the last lines of its reply, e.g. `monitor cal zero i`. Calibration waits up to two minutes. |
+| `update on` / `update off` | firmware update mode: visible to the phone app |
+| `pin <gpio> <0\|1>` | drives a GPIO, for finding a board's wiring (refused on the flash and UART pins) |
+| `ver`, `ota [...]`, `reboot`, `help` | as on the monitor (CLI.md §6) |
+
+The calibrations behind `monitor cal ...` have the same preconditions as the Settings
+screen states: no load for `cal zero i`, VBUS tied to ground for `cal zero v`, a meter
+reading for `cal top i|v <value>`. The firmware cannot check any of them.
+
 ## BLE
 
 The remote is a BLE central speaking the monitor's console protocol (CLI.md), like the
@@ -165,6 +204,7 @@ The board is compiled in, so each one has its own build. `-Board` picks it:
 | `cyd` | ESP32-2432S028R, single micro-USB | ILI9341 | 21 | its own (SPI3) |
 | `cyd2usb` | ESP32-2432S028R, USB-C + micro-USB | ST7789 | 21 | its own (SPI3) |
 | `jc2432w328r` | GUITION JC2432W328R | ST7789 | 27 | shared with the panel (SPI2) |
+| `jc1732w319` | GUITION JC1732W319, 1.9" 320×170 | ST7789 | 21 | none |
 
 ```powershell
 .\tools\idf.ps1 -Board jc2432w328r build        # Docker, like the monitor
@@ -258,12 +298,16 @@ device, and installs it over BLE as described above.
 
 ## Board wiring (fixed on the PCB)
 
-| | ESP32-2432S028R (`cyd`, `cyd2usb`) | JC2432W328R (`jc2432w328r`) |
-|---|---|---|
-| Display (SPI2) | SCLK 14, MOSI 13, MISO 12, CS 15, DC 2 | the same |
-| Backlight | 21 | 27 |
-| Touch | SPI3: CLK 25, MOSI 32, MISO 39, CS 33 | on the display's SPI2, CS 33 |
-| RGB LED (common anode) | not used | red 4, green 16, blue 17 |
+| | ESP32-2432S028R (`cyd`, `cyd2usb`) | JC2432W328R (`jc2432w328r`) | JC1732W319 (`jc1732w319`) |
+|---|---|---|---|
+| Display (SPI2) | SCLK 14, MOSI 13, MISO 12, CS 15, DC 2 | the same | the same; 170 rows, 35 down in the controller |
+| Backlight | 21 | 27 | 21 |
+| Touch | SPI3: CLK 25, MOSI 32, MISO 39, CS 33 | on the display's SPI2, CS 33 | none |
+| RGB LED (common anode) | not used | red 4, green 16, blue 17 | none |
+
+No pin list for the JC1732W319 is published. Its headers break out every usable GPIO
+except 2, 13, 14 and 15, which is the GUITION panel bus. Its backlight was found with the
+console's `pin` command.
 
 IRQ (36) is not used on either board; the firmware reads the pressure instead.
 
@@ -275,6 +319,7 @@ IRQ (36) is not used on either board; the firmware reads the pressure instead.
 | `main/ui.c` | The three screens; every field redraws only when its text changes |
 | `main/lcd.c` | Panel init and drawing (rectangles, 5×7 text scaled, strip-rendered bitmaps). No framebuffer: 150 KB is too much of the ESP32's RAM beside the BLE stack |
 | `main/board.h` | What differs between the boards: panel controller, MADCTL, inversion, backlight pin, touch bus |
+| `main/console.c` | The console's commands, for the serial port and the BLE console alike |
 | `main/led.c` | The status LED, on boards that have one: red while disconnected, blue blinking with BLE traffic |
 | `main/touch.c` | XPT2046: pressure check, median of five conversions, taps on the press edge |
 | `main/rcon.c` | The peripheral side: advertising in update mode, the small console (`ver`, `ota`, `reboot`) and the OTA characteristic |

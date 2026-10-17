@@ -1,5 +1,6 @@
 /*
- * lcd.h — the 320x240 panel and the few drawing primitives the UI needs.
+ * lcd.h — the panel (320x240, or 320x170 on the JC1732W319: board.h) and the few
+ * drawing primitives the UI needs.
  *
  * No framebuffer: 150 KB of the original ESP32's ~300 KB of RAM is too much to give a
  * display when the BLE stack needs its share. Everything is drawn straight to the
@@ -10,8 +11,10 @@
 
 #include <stdint.h>
 
-#define LCD_W 320
-#define LCD_H 240
+#include "board.h"
+
+#define LCD_W BOARD_LCD_W
+#define LCD_H BOARD_LCD_H
 
 /* RGB565. */
 #define RGB(r, g, b) ((uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3)))

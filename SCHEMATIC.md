@@ -17,7 +17,7 @@ in.
 | | Board | Does |
 |---|---|---|
 | **Monitor** | Seeed XIAO ESP32-C6 | measures, counts, keeps the history and the pack's log; serves the console over USB and BLE |
-| **Remote display** | ESP32-2432S028 ("Cheap Yellow Display") or GUITION JC2432W328R | BLE client; its own firmware in `remote/` |
+| **Remote display** | ESP32-2432S028 ("Cheap Yellow Display"), GUITION JC2432W328R or JC1732W319 | BLE client; its own firmware in `remote/` |
 | **Phone** | any Android 8+ | BLE client; `android/` |
 
 Only the monitor touches the battery. The other two are read-only observers over BLE and
@@ -93,17 +93,17 @@ build. The two INA219 addresses are set by their A0/A1 straps — **position is 
 the address**, which is how the firmware knows which sensor is on which pole without
 being told (§2.10.2).
 
-### Remote display — ESP32-2432S028 or GUITION JC2432W328R
+### Remote display — ESP32-2432S028, GUITION JC2432W328R or JC1732W319
 
 Fixed by the board; nothing to wire. The board is a build-time choice
 (`remote/main/board.h`, `tools/idf.ps1 -Board`).
 
-| Function | ESP32-2432S028R (`cyd`, `cyd2usb`) | JC2432W328R (`jc2432w328r`) |
-|---|---|---|
-| Panel, SPI2 | ILI9341 (`cyd`) or ST7789 (`cyd2usb`): SCLK 14, MOSI 13, MISO 12, CS 15, DC 2 | ST7789, the same pins |
-| Panel reset | tied to EN | tied to EN |
-| Backlight | GPIO21, active high | GPIO27, active high |
-| Touch (XPT2046) | SPI3: CLK 25, MOSI 32, MISO 39, CS 33 | on the panel's SPI2, CS 33 |
+| Function | ESP32-2432S028R (`cyd`, `cyd2usb`) | JC2432W328R (`jc2432w328r`) | JC1732W319 (`jc1732w319`) |
+|---|---|---|---|
+| Panel, SPI2 | ILI9341 (`cyd`) or ST7789 (`cyd2usb`): SCLK 14, MOSI 13, MISO 12, CS 15, DC 2 | ST7789, the same pins | ST7789 320x170, the same pins |
+| Panel reset | tied to EN | tied to EN | tied to EN |
+| Backlight | GPIO21, active high | GPIO27, active high | GPIO21, active high |
+| Touch (XPT2046) | SPI3: CLK 25, MOSI 32, MISO 39, CS 33 | on the panel's SPI2, CS 33 | none |
 
 The panel runs at **40 MHz**, which is above the ILI9341's documented 10 MHz write
 timing. Every driver for these modules does it and it works; if a particular board shows

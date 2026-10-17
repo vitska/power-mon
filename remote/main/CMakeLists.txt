@@ -6,6 +6,7 @@ idf_component_register(
                 "ui.c"
                 "rcon.c"
                 "led.c"
+                "console.c"
                 # The OTA core is the monitor's, shared: chip-neutral, and it checks an
                 # image against this firmware's own project name.
                 "../../main/ota.c"

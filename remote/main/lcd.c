@@ -76,6 +76,10 @@ static void cmd(uint8_t c, const uint8_t *data, size_t n)
 
 static void set_window(int x, int y, int w, int h)
 {
+    /* Where the visible picture starts in the controller's memory: 0 on a panel that
+     * shows all of it, 35 rows down on the 170-row JC1732W319. */
+    x += BOARD_LCD_X_OFF;
+    y += BOARD_LCD_Y_OFF;
     const int x1 = x + w - 1, y1 = y + h - 1;
     const uint8_t ca[] = {x >> 8, x & 0xFF, x1 >> 8, x1 & 0xFF};
     const uint8_t ra[] = {y >> 8, y & 0xFF, y1 >> 8, y1 & 0xFF};
@@ -119,7 +123,7 @@ void lcd_init(void)
     const esp_lcd_panel_io_spi_config_t io = {
         .cs_gpio_num         = BOARD_LCD_CS,
         .dc_gpio_num         = BOARD_LCD_DC,
-        .spi_mode            = 0,
+        .spi_mode            = BOARD_LCD_SPI_MODE,
         .pclk_hz             = 40 * 1000 * 1000,
         .trans_queue_depth   = 4,
         .on_color_trans_done = on_color_done,
@@ -132,6 +136,19 @@ void lcd_init(void)
     s_tx[1] = heap_caps_malloc(LCD_STRIP_PX * 2, MALLOC_CAP_DMA);
     assert(s_tx[0] && s_tx[1]);
 
+#if BOARD_LCD_RST >= 0
+    /* A reset line of its own, rather than one tied to EN: hold it low, then let the
+     * controller come out of reset before the first command. */
+    gpio_config_t rst = {
+        .pin_bit_mask = 1ULL << BOARD_LCD_RST,
+        .mode         = GPIO_MODE_OUTPUT,
+    };
+    gpio_config(&rst);
+    gpio_set_level(BOARD_LCD_RST, 0);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    gpio_set_level(BOARD_LCD_RST, 1);
+    vTaskDelay(pdMS_TO_TICKS(120));
+#endif
     cmd(0x01, NULL, 0); /* SWRESET */
     vTaskDelay(pdMS_TO_TICKS(150));
     cmd(0x11, NULL, 0); /* SLPOUT */

@@ -6,29 +6,21 @@
  * Each board builds into its own build/<name>/ with its own sdkconfig.<name>, and
  * tools/flash.ps1 picks the build that matches the board it finds on the port.
  *
- * All of them are a classic ESP32-WROOM-32, a 320x240 SPI panel and an XPT2046
- * resistive touch controller. They differ in which controller drives the panel, where
- * its backlight is, and whether the touch controller has an SPI bus of its own.
- *
- *   cyd          ESP32-2432S028R, single micro-USB. ILI9341, backlight 21, touch on SPI3.
+ *   cyd          ESP32-2432S028R, single micro-USB. ILI9341 320x240, backlight 21,
+ *                XPT2046 touch on SPI3.
  *   cyd2usb      ESP32-2432S028R, USB-C next to the micro-USB. ST7789, otherwise the same.
  *   jc2432w328r  GUITION JC2432W328R. ST7789, backlight 27, touch SHARING the panel's
- *                SPI2 bus (CS 33). The panel pins are the CYD's.
+ *                SPI2 bus (CS 33), an RGB status LED. The panel pins are the CYD's.
+ *   jc1732w319   GUITION JC1732W319, the 1.9" "mini CYD": the same ESP32-WROOM-32 and
+ *                panel bus, an ST7789 IPS panel of 170x320, and NO touch -- so no touch
+ *                screens either, only the console (console.c).
+ *
+ * All four share the chip and the panel's SPI pins, so those are the defaults below;
+ * a board says only where it differs.
  */
 #pragma once
 
 #include "sdkconfig.h"
-
-/* The panel's bus is the same on every board: SPI2, reset tied to EN. */
-#define BOARD_LCD_SCLK 14
-#define BOARD_LCD_MOSI 13
-#define BOARD_LCD_MISO 12
-#define BOARD_LCD_CS   15
-#define BOARD_LCD_DC   2
-
-/* The touch controller's chip select is the same on every board too; what changes is
- * the bus it hangs off. */
-#define BOARD_TOUCH_CS 33
 
 #if CONFIG_REMOTE_BOARD_CYD
 
@@ -80,13 +72,73 @@
  * what frees GPIO 25 and 32 for the capacitive JC2432W328C's I2C controller. */
 #define BOARD_TOUCH_SHARED  1
 
+#elif CONFIG_REMOTE_BOARD_JC1732W319
+
+#define BOARD_NAME          "jc1732w319"
+#define BOARD_PANEL_ST7789  1
+/* A 240x320 controller showing 170 columns of it, 35 in from each side. Landscape
+ * (MV) turns those columns into rows, so the offset lands on Y: rows 35..204. 35 on
+ * both sides is also why rotating 180 degrees needs no other offset. IPS, so inverted;
+ * RGB order.
+ *
+ * The panel pins are GUITION's W3-series panel bus (the JC2432W328R's): the headers
+ * break out every other usable GPIO, and 2, 13, 14 and 15 are exactly the ones left.
+ * The backlight is 21, active high, as on the CYD -- found on the board with the
+ * console's `pin` command, as no pin list for it is published. Not the Sunton
+ * ESP32-1732S019, which is an ESP32-S3 on different pins. */
+#define BOARD_LCD_W         320
+#define BOARD_LCD_H         170
+#define BOARD_LCD_Y_OFF     35
+#define BOARD_MADCTL        0x60
+#define BOARD_INVERT        1
+#define BOARD_LCD_BL        21
+#define BOARD_HAS_TOUCH     0
+
 #else
 #error "no board selected: menuconfig -> batmon remote display -> Board"
 #endif
 
+/* --- the defaults: the ESP32-2432S028 family's ------------------------------------- */
+
+#ifndef BOARD_LCD_W
+#define BOARD_LCD_W         320
+#endif
+#ifndef BOARD_LCD_H
+#define BOARD_LCD_H         240
+#endif
+/* Where the visible picture starts in the controller's memory, in landscape. */
+#ifndef BOARD_LCD_X_OFF
+#define BOARD_LCD_X_OFF     0
+#endif
+#ifndef BOARD_LCD_Y_OFF
+#define BOARD_LCD_Y_OFF     0
+#endif
+/* The panel's bus: SPI2, reset tied to EN (-1: no reset pin to drive). */
+#ifndef BOARD_LCD_SCLK
+#define BOARD_LCD_SCLK      14
+#define BOARD_LCD_MOSI      13
+#define BOARD_LCD_MISO      12
+#define BOARD_LCD_CS        15
+#define BOARD_LCD_DC        2
+#endif
+#ifndef BOARD_LCD_RST
+#define BOARD_LCD_RST       -1
+#endif
+#ifndef BOARD_LCD_SPI_MODE
+#define BOARD_LCD_SPI_MODE  0
+#endif
+
+/* Touch: an XPT2046 on CS 33, on its own bus or the panel's (BOARD_TOUCH_SHARED). A
+ * board without touch has none of the screens that need it (ui.c), and is set up from
+ * the console instead. */
+#ifndef BOARD_HAS_TOUCH
+#define BOARD_HAS_TOUCH     1
+#endif
+#define BOARD_TOUCH_CS      33
+
 /* The status LED (led.c) is on only where a board says it has one. */
 #ifndef BOARD_HAS_RGB_LED
-#define BOARD_HAS_RGB_LED 0
+#define BOARD_HAS_RGB_LED   0
 #endif
 
 /* The panel overrides apply on top of the board's own settings. */
