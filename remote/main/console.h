@@ -16,7 +16,7 @@
  *   forget                     drop the remembered board and every bond
  *   passkey <six digits>       answer a pairing request; `passkey cancel` refuses it
  *   monitor <command ...>      run a console command on the monitor (CLI.md), e.g.
- *                              `monitor cal zero i`; prints its last lines of reply
+ *                              `monitor cal zero i`; prints its reply (the last 16 lines)
  *   update on | off            firmware update mode: visible to the phone app
  *   ota [...]                  the OTA session, as on the monitor (CLI.md §6)
  *   reboot

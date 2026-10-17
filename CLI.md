@@ -357,9 +357,9 @@ already integrals. Only the report averages. The gauge integrates every sample w
 the stream rates are, and the `ms` field is the time of the newest sample in the period.
 
 **Changed in firmware 0.12.0:** records were the latest sample, and the defaults were
-100 / 500 / 1000 ms. A board whose saved settings still hold exactly those old defaults
-moves to the new ones when it first boots the new firmware. Any other rate was someone's
-choice and stays.
+100 / 500 / 1000 ms. On a board whose saved settings come from before then, each group
+still at its old default moves to its new one on the first boot of 0.12.1 or later. Any
+other rate was someone's choice and stays, and a group switched off stays off.
 
 **Diagnostics is emitted on change as well as on its period.** A range step or the
 saturation flag flipping is exactly what invalidates the fast group's numbers, so

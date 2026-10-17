@@ -187,6 +187,9 @@ static int cmd_status(console_out_t out)
     if (m.have_est && m.t_empty_s >= 0) out("empty in %ld min\n", (long)(m.t_empty_s / 60));
     if (m.have_est && m.t_full_s >= 0)  out("full in  %ld min\n", (long)(m.t_full_s / 60));
     if (m.note[0]) out("note     %s\n", m.note);
+    /* A count, not a rate: two readings some seconds apart give the true one. */
+    out("packets  %lu received, %lu sent\n", (unsigned long)m.rx_packets,
+        (unsigned long)m.tx_packets);
     rcon_status_t r;
     rcon_status(&r);
     out("update   %s\n", r.connected ? "a phone is connected" : r.advertising ? "visible to the app" : "off");
@@ -310,7 +313,9 @@ static int cmd_monitor(int argc, char **argv, console_out_t out)
         return 1;
     }
     out("running '%s' on the monitor...\n", cmd);
-    link_cmd_t c;
+    /* Static: 1.3 KB is a third of this task's stack, and link_command() lets only
+     * one command run at a time, so only one caller is ever in here past it. */
+    static link_cmd_t c;
     for (int waited = 0;; waited += 200) {
         vTaskDelay(pdMS_TO_TICKS(200));
         link_command_status(&c);
@@ -324,7 +329,7 @@ static int cmd_monitor(int argc, char **argv, console_out_t out)
         out("no answer: timed out, or the link dropped\n");
         return 1;
     }
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < LINK_REPLY_LINES; i++) {
         if (c.reply[i][0]) out("%s\n", c.reply[i]);
     }
     out("monitor: exit %d\n", c.exit);

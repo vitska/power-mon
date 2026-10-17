@@ -958,7 +958,7 @@ static void settings_status(const link_model_t *m, bool force)
         } else {
             snprintf(l0, sizeof(l0), "'%.30s': %s", c.cmd, c.exit == 0 ? "done" : "REFUSED");
             /* The last line that says something: the refusal reason or "Saved". */
-            for (int i = 2; i >= 0; i--) {
+            for (int i = LINK_REPLY_LINES - 1; i >= 0; i--) {
                 if (c.reply[i][0]) {
                     snprintf(l1, sizeof(l1), "%.52s", c.reply[i]);
                     break;

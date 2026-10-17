@@ -149,7 +149,7 @@ it is the only way.
 | `connect <n \| name \| address>` | uses that board and remembers it |
 | `forget` | drops the remembered board and every bond |
 | `passkey <digits>` / `passkey cancel` | answers or refuses the monitor's pairing request |
-| `monitor <command ...>` | runs a command on the monitor (CLI.md) and prints the last lines of its reply, e.g. `monitor cal zero i`. Calibration waits up to two minutes. |
+| `monitor <command ...>` | runs a command on the monitor (CLI.md) and prints its reply (up to its last 16 lines), e.g. `monitor cal zero i`. Calibration waits up to two minutes. |
 | `update on` / `update off` | firmware update mode: visible to the phone app |
 | `pin <gpio> <0\|1>` | drives a GPIO, for finding a board's wiring (refused on the flash and UART pins) |
 | `ver`, `ota [...]`, `reboot`, `help` | as on the monitor (CLI.md §6) |

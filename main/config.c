@@ -346,20 +346,21 @@ static void read_all(nvs_handle_t h)
     if (nvs_get_u32(h, K_RDIAG,  &u32) == ESP_OK) s_cfg.rate_diag_ms = u32;
     if (nvs_get_u32(h, K_RENV,   &u32) == ESP_OK) s_cfg.rate_env_ms = u32;
     /*
-     * Stream rates saved before records became period means (rates version 1) were
-     * the old factory 100/500/1000 ms in almost every case -- nobody chose them, a
-     * calibration saved them along with everything else. Those move to the current
-     * defaults; any other stored rate was someone's choice and stays. From version 2
-     * on, whatever is stored is kept as it is.
+     * Stream rates saved before records became period means (rates version 1) are
+     * mostly the old factory defaults -- nobody chose them, a calibration saved them
+     * along with everything else. Each group still at ITS old default moves to the
+     * current one; any other value was someone's choice and stays (a group switched
+     * off stays off). Per group, not all three together: a board with diag switched
+     * off but fast and calc never touched is the common case, seen on the first board
+     * this ran on. From version 2 on, whatever is stored is kept as it is.
      */
-    if (nvs_get_u8(h, K_RVER, &u8) != ESP_OK && s_cfg.rate_fast_ms == 100 &&
-        s_cfg.rate_calc_ms == 500 && s_cfg.rate_diag_ms == 1000) {
-        s_cfg.rate_fast_ms = CONFIG_BATMON_STREAM_FAST_MS;
-        s_cfg.rate_calc_ms = CONFIG_BATMON_STREAM_CALC_MS;
-        s_cfg.rate_diag_ms = CONFIG_BATMON_STREAM_DIAG_MS;
-        ESP_LOGI(TAG, "stream rates: the old defaults, moved to %d/%d/%d ms",
-                 CONFIG_BATMON_STREAM_FAST_MS, CONFIG_BATMON_STREAM_CALC_MS,
-                 CONFIG_BATMON_STREAM_DIAG_MS);
+    if (nvs_get_u8(h, K_RVER, &u8) != ESP_OK) {
+        if (s_cfg.rate_fast_ms == 100)  s_cfg.rate_fast_ms = CONFIG_BATMON_STREAM_FAST_MS;
+        if (s_cfg.rate_calc_ms == 500)  s_cfg.rate_calc_ms = CONFIG_BATMON_STREAM_CALC_MS;
+        if (s_cfg.rate_diag_ms == 1000) s_cfg.rate_diag_ms = CONFIG_BATMON_STREAM_DIAG_MS;
+        ESP_LOGI(TAG, "stream rates from before period means: now %lu/%lu/%lu ms",
+                 (unsigned long)s_cfg.rate_fast_ms, (unsigned long)s_cfg.rate_calc_ms,
+                 (unsigned long)s_cfg.rate_diag_ms);
     }
     if (nvs_get_u32(h, K_HPER,   &u32) == ESP_OK) s_cfg.hist_period_s = u32;
 

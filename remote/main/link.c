@@ -265,8 +265,10 @@ static void on_line(char *line)
         unlock();
         return;
     }
-    /* Other records (d) and headers: skip, as CLI.md asks of any client. */
-    if (line[0] == 'd' && line[1] == ',') return;
+    /* Every other record (d, l, and whatever a newer monitor adds) and headers: skip,
+     * as CLI.md asks of any client. Prefix-and-comma, not a list of letters: an `l`
+     * once slipped through here into a command's reply. */
+    if (line[0] >= 'a' && line[0] <= 'z' && line[1] == ',') return;
     if (line[0] == '#') return;
     if (!s.pending) return; /* greeting and anything unsolicited */
 
@@ -277,8 +279,10 @@ static void on_line(char *line)
         if (strncmp(line, "exit ", 5) == 0) {
             s.user_res.exit = atoi(line + 5);
         } else if (line[0] && strncmp(line, "> ", 2) != 0) {
-            memmove(s.user_res.reply[0], s.user_res.reply[1], sizeof(s.user_res.reply[0]) * 2);
-            snprintf(s.user_res.reply[2], sizeof(s.user_res.reply[2]), "%s", line);
+            memmove(s.user_res.reply[0], s.user_res.reply[1],
+                    sizeof(s.user_res.reply[0]) * (LINK_REPLY_LINES - 1));
+            snprintf(s.user_res.reply[LINK_REPLY_LINES - 1],
+                     sizeof(s.user_res.reply[0]), "%s", line);
         }
         unlock();
         return;

@@ -137,6 +137,8 @@ void link_history(link_hist_t *out);
 
 /* --- console commands from the UI (calibration) ------------------------------------ */
 
+#define LINK_REPLY_LINES 16
+
 typedef struct {
     bool    busy;         /* sent, waiting for its terminator */
     bool    done;         /* finished; the fields below describe it */
@@ -145,7 +147,9 @@ typedef struct {
     char    cmd[48];
     int64_t started_us;
     int     timeout_ms;
-    char    reply[3][56]; /* the last lines of output, oldest first, "" if unused */
+    /* The last lines of output, oldest first, "" if unused: enough for `stream` or a
+     * calibration's report whole, which the console prints (`monitor ...`). */
+    char    reply[LINK_REPLY_LINES][80];
 } link_cmd_t;
 
 /** Queues one console command, run after anything already in flight. False when the
