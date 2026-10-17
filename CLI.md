@@ -216,9 +216,9 @@ protocol=3
 firmware=0.8.0
 stream.on=1
 stream.csv=1
-stream.fast_ms=100
-stream.calc_ms=500
-stream.diag_ms=1000
+stream.fast_ms=1000
+stream.calc_ms=2000
+stream.diag_ms=5000
 stream.env_ms=10000
 shunt.loc=single
 shunt.roles=resolved
@@ -341,16 +341,31 @@ sending current at the temperature rate loses the event you were watching for.
 
 | group | prefix | default | contents |
 |---|---|---|---|
-| fast | `f` | **100 ms (10 Hz)** | voltage, current — the measurement itself |
-| calculated | `c` | **500 ms (2 Hz)** | power, SoC, charge, state, OCV, Peukert |
-| diagnostics | `d` | **1000 ms + on change** | raw shunt drop, active range, saturation |
+| fast | `f` | **1000 ms** | voltage, current — the period's means |
+| calculated | `c` | **2000 ms** | power (the period's mean), SoC, charge, state, OCV, Peukert |
+| diagnostics | `d` | **5000 ms + on change** | raw shunt drop (the period's mean), active range, saturation |
 | environmental | `e` | **10 000 ms** | temperature, humidity, pressure |
+
+**A record reports its period, not an instant.** Voltage, current, power and the shunt
+drop are the **mean of every accepted sample since that group's previous record**: at
+the default 1 s, about seven conversions. The latest single sample would be one seventh
+of what was measured, and a load pulsing at a few hertz would read as whichever phase
+the deadline happened to land on. `sat` is 1 if the period saturated at any point, which
+a mean would hide; `pga` is the range at the end of the period. SoC, charge, state, OCV,
+Peukert and the estimates are the gauge's state at the moment of the record: they are
+already integrals. Only the report averages. The gauge integrates every sample whatever
+the stream rates are, and the `ms` field is the time of the newest sample in the period.
+
+**Changed in firmware 0.12.0:** records were the latest sample, and the defaults were
+100 / 500 / 1000 ms. A board whose saved settings still hold exactly those old defaults
+moves to the new ones when it first boots the new firmware. Any other rate was someone's
+choice and stays.
 
 **Diagnostics is emitted on change as well as on its period.** A range step or the
 saturation flag flipping is exactly what invalidates the fast group's numbers, so
 waiting up to a second to hear about it would mean a second of readings already
 believed. Measured: a `d` record appears within 400 ms of a range change, carrying the
-new range — so 1 s is a cheap floor rather than the latency that matters.
+new range — so 5 s is a cheap floor rather than the latency that matters.
 
 ```
 stream csv                enable, CSV grouped records, re-emit headers
@@ -364,7 +379,7 @@ stream                    show the current state
 ```
 
 A group set to `off` (0 ms) stops without disturbing the others — a client that only
-wants temperature need not receive 10 Hz of current to get it.
+wants temperature need not receive current every second to get it.
 
 ### Records
 
@@ -407,15 +422,16 @@ protocol bump — that is the point of prefixing them, and a client that skips u
 ones keeps working across firmware it has never seen. Only a change to an *existing*
 record's fields bumps the version.
 
-Records are **never duplicated**: a group emits only when the underlying sample is new.
-Ask for 10 Hz from a 7.3 Hz sensor and you get 7.3 Hz of distinct records rather than
-10 Hz with repeats — so a client may derive the true rate from the `ms` field and trust
-it.
+Records are **never duplicated**: a group emits only when at least one new sample has
+arrived since its last record. Ask for 10 Hz from a 7.3 Hz sensor and you get 7.3 Hz of
+distinct records, each the mean of one sample, rather than 10 Hz with repeats — so a
+client may derive the true rate from the `ms` field and trust it.
 
 ### The sample-rate ceiling
 
-The fast group cannot outrun the ADC. Both channels convert sequentially, so the pair
-rate is what matters:
+The fast group cannot outrun the ADC. At the default 1 s that does not matter: each record
+is the mean of the seven or so conversions in it. Below the conversion time it does.
+Both channels convert sequentially, so the pair rate is what matters:
 
 | profile | averaging | pair | ceiling |
 |---|---|---|---|

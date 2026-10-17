@@ -63,7 +63,7 @@ humidity and pressure on the line above it. **Tap the graph** to change the span
   a static red carries no more urgency across a room than a static green.
 - Values turn grey when no telemetry has arrived for 5 seconds.
 - **Communications, top right.** A Bluetooth icon, always blue, flashes white on every
-  notification received and yellow on every command sent. At 10 Hz telemetry it flickers
+  notification received and yellow on every command sent. With telemetry streaming it flickers
   steadily, and when it stops, the data has stopped. The link's state itself is the
   status text's colour instead (blue while searching, yellow while connecting or in
   setup, orange while pairing or with no data, green or cyan when it is working).

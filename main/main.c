@@ -193,6 +193,57 @@ static void emit_headers(app_ctx_t *ctx)
     if (config()->rate_env_ms)  stream_emit("#e,ms,temp_c,humid_pct,press_hpa");
 }
 
+/*
+ * WHAT A RECORD REPORTS: the mean of every accepted sample since that group's previous
+ * record, not the one sample that happened to be latest when the deadline came round.
+ *
+ * At a 1 s period the sensor converts seven times between records, and the latest of
+ * them is one seventh of what was measured -- a load that pulses at a few hertz reads
+ * as whichever phase the deadline lands on. The mean is what the period actually did,
+ * and what the coulomb counter integrated over it.
+ *
+ * Only the REPORT changes. The gauge, the statistics window and the history see every
+ * sample as they arrive, exactly as before (sampler_task()). Each group keeps its own
+ * accumulator, so a 1 s group and a 5 s one each average over their own period, and a
+ * group with no new sample since its last record stays silent rather than repeating a
+ * measurement a client would count twice.
+ */
+typedef struct {
+    int64_t  v_uv, i_ua, p_uw, sh_uv; /* sums */
+    uint32_t n;
+    bool     sat;                     /* saturated at any point in the period */
+    int64_t  t_us;                    /* the newest sample's time: the period's end */
+} stream_acc_t;
+
+static void acc_add(stream_acc_t *a, const power_sample_t *s)
+{
+    a->v_uv  += s->v_pack_uv;
+    a->i_ua  += s->i_ua;
+    a->p_uw  += s->p_uw;
+    a->sh_uv += s->v_shunt_uv;
+    a->sat   |= s->saturated;
+    a->t_us   = s->t_us;
+    a->n++;
+}
+
+/* The period's means, as a sample, for the emitters below; the range is the latest
+ * (a change of range is reported the moment it happens anyway). Empties the
+ * accumulator for the next period. */
+static power_sample_t acc_take(stream_acc_t *a, const power_sample_t *latest)
+{
+    power_sample_t m = *latest;
+    if (a->n) {
+        m.v_pack_uv  = (uint32_t)(a->v_uv / a->n);
+        m.i_ua       = (int32_t)(a->i_ua / a->n);
+        m.p_uw       = (int32_t)(a->p_uw / a->n);
+        m.v_shunt_uv = (int32_t)(a->sh_uv / a->n);
+        m.saturated  = a->sat;
+        m.t_us       = a->t_us;
+    }
+    *a = (stream_acc_t){0};
+    return m;
+}
+
 static void emit_fast(const power_sample_t *s)
 {
     char line[96], bv[24], bi[24];
@@ -318,11 +369,11 @@ static void sampler_task(void *arg)
     int64_t next_fast_us = esp_timer_get_time();
     int64_t next_calc_us = next_fast_us;
     int64_t next_env_us  = next_fast_us;
-    /* Last sample actually emitted, so a group never sends the same measurement twice.
-     * Without this, asking for 10 Hz from a 7.3 Hz sensor produces duplicate records
-     * that a client would count as real samples. */
-    int64_t last_fast_t  = 0;
-    int64_t last_calc_t  = 0;
+    /* What each group has measured since its last record (stream_acc_t). An empty one
+     * is also what stops a group sending the same measurement twice: asking for 10 Hz
+     * from a 7.3 Hz sensor would otherwise produce duplicate records that a client
+     * counts as real samples. */
+    stream_acc_t acc_fast = {0}, acc_calc = {0}, acc_diag = {0};
     int64_t next_diag_us = next_fast_us;
     /* Previous range and saturation, so a change can be reported the instant it
      * happens rather than at the next periodic slot. */
@@ -353,6 +404,10 @@ static void sampler_task(void *arg)
             /* The gauge sees every accepted sample and nothing else -- a rejected
              * read must never reach the integrator (DESIGN.md §5.2). */
             fg_update(&s);
+            /* And so does the stream, as the means it reports. */
+            acc_add(&acc_fast, &s);
+            acc_add(&acc_calc, &s);
+            acc_add(&acc_diag, &s);
             if (soc_history_due(s.t_us)) {
                 fg_status_t st;
                 fg_get(&st);
@@ -416,17 +471,17 @@ static void sampler_task(void *arg)
 
                 /* Each group keeps its own deadline. A slow group cannot delay a fast
                  * one, and a group disabled with 0 simply never becomes due. */
-                if (config()->rate_fast_ms && now >= next_fast_us &&
-                    values()->last.t_us != last_fast_t) {
+                if (config()->rate_fast_ms && now >= next_fast_us && acc_fast.n) {
                     next_fast_us = now + (int64_t)config()->rate_fast_ms * 1000;
-                    last_fast_t  = values()->last.t_us;
-                    emit_fast(&values()->last);
+                    const power_sample_t m = acc_take(&acc_fast, &values()->last);
+                    emit_fast(&m);
                 }
-                if (config()->rate_calc_ms && now >= next_calc_us &&
-                    values()->last.t_us != last_calc_t) {
+                if (config()->rate_calc_ms && now >= next_calc_us && acc_calc.n) {
                     next_calc_us = now + (int64_t)config()->rate_calc_ms * 1000;
-                    last_calc_t  = values()->last.t_us;
-                    emit_calc(&values()->last);
+                    /* Power as the period's mean; SoC, charge and the estimates are
+                     * the gauge's state now, which is already an integral. */
+                    const power_sample_t m = acc_take(&acc_calc, &values()->last);
+                    emit_calc(&m);
                     emit_learn();
                 }
                 if (config()->rate_diag_ms) {
@@ -436,12 +491,15 @@ static void sampler_task(void *arg)
                     const bool changed = diag_primed &&
                                          (values()->last.pga != last_pga ||
                                           values()->last.saturated != last_sat);
-                    if (changed || now >= next_diag_us) {
+                    if ((changed || now >= next_diag_us) && acc_diag.n) {
                         next_diag_us = now + (int64_t)config()->rate_diag_ms * 1000;
                         last_pga     = values()->last.pga;
                         last_sat     = values()->last.saturated;
                         diag_primed  = true;
-                        emit_diag(&values()->last);
+                        /* The shunt drop as the period's mean; `sat` if the period
+                         * saturated at all, which a mean would otherwise hide. */
+                        const power_sample_t m = acc_take(&acc_diag, &values()->last);
+                        emit_diag(&m);
                     } else if (!diag_primed) {
                         last_pga    = values()->last.pga;
                         last_sat    = values()->last.saturated;
@@ -452,12 +510,23 @@ static void sampler_task(void *arg)
                     next_env_us = now + (int64_t)config()->rate_env_ms * 1000;
                     emit_env(ctx, now);
                 }
-            } else if (config()->rate_calc_ms && now >= next_calc_us) {
+            } else if (config()->rate_calc_ms && now >= next_calc_us && acc_calc.n) {
                 /* Text mode stays one line per tick, at the calculated group's rate:
-                 * it is for a person reading, and 10 Hz of scrolling is unreadable. */
+                 * it is for a person reading, and 10 Hz of scrolling is unreadable.
+                 * The same means as the CSV records. */
                 next_calc_us = now + (int64_t)config()->rate_calc_ms * 1000;
-                print_sample_line(&values()->last, history_window());
+                const power_sample_t m = acc_take(&acc_calc, &values()->last);
+                print_sample_line(&m, history_window());
             }
+            /* A group switched off (rate 0), or not used in text mode, owes nothing:
+             * when it comes back, its first record covers its own period. */
+            if (!config()->stream_csv || !config()->rate_fast_ms) acc_fast = (stream_acc_t){0};
+            if (!config()->stream_csv || !config()->rate_diag_ms) acc_diag = (stream_acc_t){0};
+            if (!config()->rate_calc_ms)                          acc_calc = (stream_acc_t){0};
+        } else {
+            /* Not streaming: nothing is reported, so nothing is owed. The first record
+             * after `stream on` then covers its own period, not everything since boot. */
+            acc_fast = acc_calc = acc_diag = (stream_acc_t){0};
         }
 
         /* 20 ms, not 100: a 10 Hz group needs the loop to come round considerably

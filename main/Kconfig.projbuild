@@ -222,29 +222,36 @@ menu "bat-monitor"
 
         config BATMON_STREAM_FAST_MS
             int "Fast group period (ms) -- voltage and current"
-            default 100
+            default 1000
             range 0 60000
             help
-                100 ms is 10 Hz, the rate the request asks for. The INA219 in the
-                default continuous profile converts every 136 ms (128x hardware
-                averaging), so the achieved rate is ~7.3 Hz until you run
-                'profile fast', which drops to 64x averaging for ~14.7 Hz at the
-                cost of about 40% more noise per sample.
+                Each record is the MEAN of every sample since the previous one, not
+                the latest sample (main.c, stream_acc_t). The INA219 in the default
+                continuous profile converts every 136 ms (128x hardware averaging),
+                ~7.3 Hz, so a 1 s record averages about seven conversions. The gauge
+                integrates every sample whatever this is set to. Below ~137 ms a
+                record holds one sample and some periods none ('profile fast' gives
+                ~14.7 Hz at about 40% more noise per sample).
 
         config BATMON_STREAM_CALC_MS
             int "Calculated group period (ms) -- power, SoC, charge"
-            default 500
+            default 2000
             range 0 60000
+            help
+                Power is the period's mean, like the fast group's voltage and
+                current. SoC, charge and the estimates are the gauge's state at the
+                moment of the record: already integrals, nothing to average.
 
         config BATMON_STREAM_DIAG_MS
             int "Diagnostics group period (ms) -- shunt drop, range, saturation"
-            default 1000
+            default 5000
             range 0 60000
             help
                 Low by default because these barely move. A range change or the
                 saturation flag flipping is emitted immediately regardless of this
-                period, so 1 s costs almost nothing and never delays the news that
-                matters.
+                period, so 5 s costs almost nothing and never delays the news that
+                matters. The shunt drop is the period's mean; `sat` is 1 if the
+                period saturated at all.
 
         config BATMON_STREAM_ENV_MS
             int "Environmental group period (ms) -- temperature, humidity, pressure"

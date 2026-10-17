@@ -384,22 +384,26 @@ prefixed record types:
 
 | group | prefix | default | contents |
 |---|---|---|---|
-| fast | `f` | 100 ms (10 Hz) | voltage, current |
-| calculated | `c` | 500 ms (2 Hz) | power, SoC, charge, state, OCV, Peukert |
-| diagnostics | `d` | 1 s **and on change** | raw shunt drop, range, saturation |
+| fast | `f` | 1 s | voltage, current |
+| calculated | `c` | 2 s | power, SoC, charge, state, OCV, Peukert |
+| diagnostics | `d` | 5 s **and on change** | raw shunt drop, range, saturation |
 | environmental | `e` | 10 s | temperature, humidity, pressure |
+
+Voltage, current, power and the shunt drop are the **mean over the record's period**, not
+the latest sample: a 1 s `f` record averages the ~7 conversions in that second. The gauge
+still integrates every sample; only the report averages.
 
 ```
 stream csv                 grouped records, headers re-emitted
-stream fast 100            10 Hz voltage and current
-stream calc 500            2 Hz derived values
-stream diag 1000           1 s diagnostics, plus immediately on any change
+stream fast 1000           voltage and current, each second's mean
+stream calc 2000           derived values every 2 s
+stream diag 5000           5 s diagnostics, plus immediately on any change
 stream env 10000           10 s environmental; also sets the sensor read cadence
 stream env off             disable one group without touching the others
 ```
 
-Records are never duplicated — a group emits only when its underlying sample is new — so
-the true rate can be derived from the timestamps and trusted.
+Records are never duplicated — a group emits only when a new sample has arrived since its
+last record — so the true rate can be derived from the timestamps and trusted.
 
 **A genuine 10 Hz needs `profile fast`.** Both ADC channels convert sequentially, so the
 default 128× averaging caps the pair rate at 7.3 Hz; 64× averaging doubles it to 14.6 Hz
