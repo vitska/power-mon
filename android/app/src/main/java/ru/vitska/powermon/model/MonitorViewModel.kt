@@ -511,11 +511,19 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Asks GitHub for the newest release. Off the main thread; errors land in [firmware]. */
-    fun checkLatest() = viewModelScope.launch {
+    fun checkLatest(): Job = viewModelScope.launch {
         _fw.value = _fw.value.copy(checking = true, error = null)
         val target = _fw.value.target
         val board = _fw.value.board
         val result = runCatching { withContext(Dispatchers.IO) { FirmwareReleases.latest(target, board) } }
+        if (_fw.value.target != target || _fw.value.board != board) {
+            // The device said which board it is while this was out: the answer is for
+            // another image (the plain one, asked for before `ver` came back). Drop it
+            // and ask again for the board that is actually there.
+            _fw.value = _fw.value.copy(checking = false)
+            checkLatest()
+            return@launch
+        }
         _fw.value = _fw.value.copy(
             checking = false,
             checked = result.isSuccess,
