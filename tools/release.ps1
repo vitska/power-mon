@@ -82,7 +82,7 @@ $t = if ($App) {
         # and a remote too old to name one gets cyd's -- all it ever ran. No plain
         # batmon-remote.bin any more: a second copy of one board's image under a name
         # that fits every board is exactly how the wrong board gets updated.
-        Boards      = @('cyd', 'cyd2usb', 'jc2432w328r', 'jc1732w319')
+        Boards      = @('cyd', 'cydips', 'cyd2usb', 'jc2432w328r', 'jc1732w319')
         Bin         = 'remote\build\cyd\batmon-remote.bin'
         Project     = 'batmon-remote'
         TagPrefix   = 'remote-v'
@@ -91,6 +91,7 @@ $t = if ($App) {
         Latest      = $false
         Blurb       = 'Remote display firmware, one image per board:' +
                       "`n`n- ``batmon-remote-cyd.bin``: ESP32-2432S028R, single micro-USB (ILI9341)" +
+                      "`n- ``batmon-remote-cydips.bin``: ESP32-2432S028R, 2.8in IPS panel" +
                       "`n- ``batmon-remote-cyd2usb.bin``: ESP32-2432S028R, USB-C + micro-USB (ST7789)" +
                       "`n- ``batmon-remote-jc2432w328r.bin``: GUITION JC2432W328R" +
                       "`n- ``batmon-remote-jc1732w319.bin``: GUITION JC1732W319, 1.9in, no touch" +

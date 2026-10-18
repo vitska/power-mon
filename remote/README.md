@@ -113,7 +113,7 @@ no live progress, just the elapsed time against the expected duration.
 saved and connected. Tap one to switch to it; it is remembered. **FORGET** (tap twice)
 drops the saved board and every pairing bond. **BACK** returns to Settings.
 
-**Status LED** (JC2432W328R), at a tenth of full brightness (PWM, 10 % duty: full drive glares). **Red** while there is no connection to the monitor. **Blue**
+**Status LED** (JC2432W328R and the IPS CYD), at a tenth of full brightness (PWM, 10 % duty: full drive glares). **Red** while there is no connection to the monitor. **Blue**
 blinks with Bluetooth traffic, like the header's icon: a short blink for every notification
 received, a longer one for every command sent. A steady blue flicker means a working link.
 
@@ -228,6 +228,7 @@ The board is compiled in, so each one has its own build. `-Board` picks it:
 | `-Board` | Board | Panel | Backlight | Touch bus |
 |---|---|---|---|---|
 | `cyd` | ESP32-2432S028R, single micro-USB | ILI9341 | 21 | its own (SPI3) |
+| `cydips` | ESP32-2432S028R, 2.8" IPS panel | IPS: picture flipped top to bottom, BGR order | 21 | its own (SPI3) |
 | `cyd2usb` | ESP32-2432S028R, USB-C + micro-USB | ST7789 | 21 | its own (SPI3) |
 | `jc2432w328r` | GUITION JC2432W328R | ST7789 | 27 | shared with the panel (SPI2) |
 | `jc1732w319` | GUITION JC1732W319, 1.9" 320×170 | ST7789 | 21 | none |
@@ -242,6 +243,10 @@ The board is compiled in, so each one has its own build. `-Board` picks it:
 - **Each board builds separately**, into `remote/build/<board>/`, with its settings in
   `remote/sdkconfig.<board>`. A board's fragment, `boards/<board>.defaults`, picks it.
   `--project-dir remote` without `-Board` builds `cyd`.
+- **The image is named for its board**, `remote/build/<board>/batmon-remote-<board>.bin`,
+  the name a release publishes it under, beside the plain `batmon-remote.bin` the build
+  itself writes. Inside, every image carries its board name in a tag after the app
+  descriptor, which is what the remote, the app and `flash.ps1` check.
 - **`flash.ps1` reads the board off the device, every time.** It resets the board and
   reads `board: <name>` from the boot log of the remote firmware already on it. Without
   `-Board` that is the board flashed. With `-Board` it is the guard: a device that says it
@@ -334,12 +339,12 @@ device, and installs it over BLE as described above.
 
 ## Board wiring (fixed on the PCB)
 
-| | ESP32-2432S028R (`cyd`, `cyd2usb`) | JC2432W328R (`jc2432w328r`) | JC1732W319 (`jc1732w319`) |
+| | ESP32-2432S028R (`cyd`, `cydips`, `cyd2usb`) | JC2432W328R (`jc2432w328r`) | JC1732W319 (`jc1732w319`) |
 |---|---|---|---|
 | Display (SPI2) | SCLK 14, MOSI 13, MISO 12, CS 15, DC 2 | the same | the same; 170 rows, 35 down in the controller |
 | Backlight | 21 | 27 | 21 |
 | Touch | SPI3: CLK 25, MOSI 32, MISO 39, CS 33 | on the display's SPI2, CS 33 | none |
-| RGB LED (common anode) | not used | red 4, green 16, blue 17 | none |
+| RGB LED (common anode) | `cydips`: red 4, green 16, blue 17; not used on the others | red 4, green 16, blue 17 | none |
 
 No pin list for the JC1732W319 is published. Its headers break out every usable GPIO
 except 2, 13, 14 and 15, which is the GUITION panel bus. Its backlight was found with the

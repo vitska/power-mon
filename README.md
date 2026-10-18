@@ -3,7 +3,7 @@
 Battery monitor for the Seeed XIAO ESP32-C6 with dual INA219 shunt sensors.
 Coulomb-counting fuel gauge with voltage re-anchoring for eight battery chemistries, OLED
 readout, and the whole console reachable over BLE. The monitor has two clients: an
-Android app, and a remote display on one of four ESP32 display boards. Full design:
+Android app, and a remote display on one of five ESP32 display boards. Full design:
 [DESIGN.md](DESIGN.md).
 
 **Current state: running on hardware.** Firmware updates reach the board over BLE from the
@@ -18,7 +18,7 @@ Verified against a 12 V / 44 A·h flooded lead-acid battery.
 | [CAPACITY.md](CAPACITY.md) | how the gauge measures the pack's real capacity, and when |
 | [CLI.md](CLI.md) | command and protocol reference, sufficient to write a client |
 | [android/README.md](android/README.md) | the phone app, **Battery monitor**: monitor, configure, console, firmware updates. The APK is on the `app-v…` GitHub releases |
-| [remote/README.md](remote/README.md) | the remote display, a second firmware for four ESP32 display boards: screens, console, boards, updates |
+| [remote/README.md](remote/README.md) | the remote display, a second firmware for five ESP32 display boards: screens, console, boards, updates |
 
 ## Milestones
 
@@ -77,7 +77,7 @@ Verified against a 12 V / 44 A·h flooded lead-acid battery.
 
   Tapping a board connects to it straight away, and a dropped link reconnects on its own.
 - **Remote display** (`remote/`): a screen next to the battery that connects over BLE, on
-  one of four boards -- the ESP32-2432S028 ("Cheap Yellow Display", two panel variants),
+  one of five boards -- the ESP32-2432S028 ("Cheap Yellow Display", three panel variants),
   the GUITION JC2432W328R, or the 1.9" GUITION JC1732W319 without touch.
   - It shows SoC as a ten-brick gauge and large digits, voltage, current, power, mode,
     time to empty/full, the pack's set and measured capacity, temperature, humidity

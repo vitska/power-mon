@@ -871,7 +871,7 @@ another:
 - **The Android app**, [`android/`](android/README.md). It uses every surface: `ver` and
   `config` on connect, the CSV stream, every setter, calibration with confirmation
   dialogs, and the firmware update of §6.
-- **The remote display**, [`remote/`](remote/README.md), a BLE central on one of four
+- **The remote display**, [`remote/`](remote/README.md), a BLE central on one of five
   ESP32 display boards. It sends `ver`, `config`, `hist` and `stream csv`, parses `f`, `c`
   and `e`, and skips every other record. It runs calibration, and any other command a
   person types on its console (`monitor <command>`). It pairs by passkey entry when the

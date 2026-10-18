@@ -1,0 +1,2 @@
+# ESP32-2432S028R with a 2.8in IPS panel: the CYD, flipped and inverted, RGB LED.
+CONFIG_REMOTE_BOARD_CYDIPS=y

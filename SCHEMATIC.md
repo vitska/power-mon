@@ -98,14 +98,14 @@ being told (§2.10.2).
 Fixed by the board; nothing to wire. The board is a build-time choice
 (`remote/main/board.h`, `tools/idf.ps1 -Board`).
 
-| Function | ESP32-2432S028R (`cyd`, `cyd2usb`) | JC2432W328R (`jc2432w328r`) | JC1732W319 (`jc1732w319`) |
+| Function | ESP32-2432S028R (`cyd`, `cydips`, `cyd2usb`) | JC2432W328R (`jc2432w328r`) | JC1732W319 (`jc1732w319`) |
 |---|---|---|---|
-| Panel, SPI2 | ILI9341 (`cyd`) or ST7789 (`cyd2usb`): SCLK 14, MOSI 13, MISO 12, CS 15, DC 2 | ST7789, the same pins | ST7789 320x170, the same pins |
+| Panel, SPI2 | ILI9341 (`cyd`), IPS (`cydips`: flipped top to bottom, BGR) or ST7789 (`cyd2usb`): SCLK 14, MOSI 13, MISO 12, CS 15, DC 2 | ST7789, the same pins | ST7789 320x170, the same pins |
 | Panel reset | tied to EN | tied to EN | tied to EN |
 | Backlight | GPIO21, active high | GPIO27, active high | GPIO21, active high |
 | Touch (XPT2046) | SPI3: CLK 25, MOSI 32, MISO 39, CS 33 | on the panel's SPI2, CS 33 | none |
 | Touch axes (raw) | X 200 left → 3700 right, Y 240 top → 3800 bottom | both reversed: X 3700 → 550, Y 3400 → 650 | — |
-| RGB LED, common anode | not used | red 4, green 16, blue 17 (PWM, 10 %) | none |
+| RGB LED, common anode | red 4, green 16, blue 17 on `cydips` (PWM, 10 %); not used on the others | red 4, green 16, blue 17 (PWM, 10 %) | none |
 
 The touch calibration is in `remote/main/board.h` with the rest of each board's wiring,
 measured on the board with the remote's console (`touch log on`, then the corners).

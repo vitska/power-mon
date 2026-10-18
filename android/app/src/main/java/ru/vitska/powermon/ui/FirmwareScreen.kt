@@ -200,9 +200,9 @@ fun FirmwareScreen(vm: MonitorViewModel) {
         Section("From a file") {
             Text(
                 if (fw.target == FirmwareTarget.REMOTE) {
-                    "Flash a batmon-remote.bin built locally (remote/build/" +
-                        "${fw.board ?: "<board>"}/batmon-remote.bin). Its version, chip " +
-                        "and board are checked before anything is sent."
+                    "Flash a remote image built locally (remote/build/" +
+                        "${fw.board ?: "<board>"}/batmon-remote-${fw.board ?: "<board>"}.bin). " +
+                        "Its version, chip and board are checked before anything is sent."
                 } else {
                     "Flash a bat-monitor.bin built locally (build/bat-monitor.bin). Its version " +
                         "and chip are checked before anything is sent."

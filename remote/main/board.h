@@ -8,6 +8,9 @@
  *
  *   cyd          ESP32-2432S028R, single micro-USB. ILI9341 320x240, backlight 21,
  *                XPT2046 touch on SPI3.
+ *   cydips       ESP32-2432S028R with a 2.8" IPS panel: the CYD, but the picture (and
+ *                touch with it) flipped top to bottom, red and blue swapped, and the RGB
+ *                LED in use.
  *   cyd2usb      ESP32-2432S028R, USB-C next to the micro-USB. ST7789, otherwise the same.
  *   jc2432w328r  GUITION JC2432W328R. ST7789, backlight 27, touch SHARING the panel's
  *                SPI2 bus (CS 33), an RGB status LED. The panel pins are the CYD's.
@@ -38,6 +41,37 @@
 #define BOARD_TOUCH_SCLK    25
 #define BOARD_TOUCH_MOSI    32
 #define BOARD_TOUCH_MISO    39
+
+#elif CONFIG_REMOTE_BOARD_CYDIPS
+
+#define BOARD_NAME          "cydips"
+#define BOARD_PANEL_ST7789  0
+/* The ESP32-2432S028R with a 2.8" IPS panel: the CYD's board, pins and all, but its
+ * panel is the CYD's flipped top to bottom, with red and blue swapped. MV and BGR: 0x28,
+ * where the CYD has MV and MX, 0x60. No inversion. Found on the board by elimination:
+ * 0x60 upside down, 0xE0 turned 180 degrees, 0xA0 mirrored, and blue showing as orange
+ * until the BGR bit. */
+#define BOARD_MADCTL        0x28
+#define BOARD_INVERT        0
+/* The picture flipped top to bottom from the CYD's, so touch is too: the CYD's
+ * calibration with Y reversed. */
+#define BOARD_TOUCH_X_MIN   200
+#define BOARD_TOUCH_X_MAX   3700
+#define BOARD_TOUCH_Y_MIN   3800
+#define BOARD_TOUCH_Y_MAX   240
+#define BOARD_TOUCH_SWAP_XY 0
+#define BOARD_LCD_BL        21
+#define BOARD_TOUCH_SHARED  0
+#define BOARD_TOUCH_SCLK    25
+#define BOARD_TOUCH_MOSI    32
+#define BOARD_TOUCH_MISO    39
+/* The CYD's RGB LED, beside the TF slot: common anode, red 4, green 16, blue 17. */
+#define BOARD_HAS_RGB_LED   1
+#define BOARD_LED_R         4
+#define BOARD_LED_G         16
+#define BOARD_LED_B         17
+#define BOARD_LED_ON        0
+#define BOARD_LED_DUTY_PCT  10
 
 #elif CONFIG_REMOTE_BOARD_CYD2USB
 

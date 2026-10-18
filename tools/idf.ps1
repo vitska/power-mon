@@ -34,7 +34,7 @@
 [CmdletBinding(PositionalBinding = $false)]
 param(
     # The remote display's board (remote/main/board.h). Implies --project-dir remote.
-    [ValidateSet('cyd', 'cyd2usb', 'jc2432w328r', 'jc1732w319')]
+    [ValidateSet('cyd', 'cydips', 'cyd2usb', 'jc2432w328r', 'jc1732w319')]
     [string]$Board,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$IdfArgs
@@ -151,6 +151,15 @@ if ($IdfArgs -contains 'build') {
     $flash  = if ($remote) { ".\tools\flash.ps1 -Board $Board" } else { '.\tools\flash.ps1' }
     $path   = Join-Path $proj $bin
     if (Test-Path $path) {
+        if ($remote) {
+            # Also under a name that says which board it is for -- the name a release
+            # publishes it under. A file copied to a phone for "From a file", or kept
+            # beside four others, cannot then be taken for another board's. The tag
+            # inside the image says the same, and is what the guards check.
+            $named = "remote\build\$Board\batmon-remote-$Board.bin"
+            Copy-Item $path (Join-Path $proj $named) -Force
+            $bin = $named
+        }
         $kb = [math]::Round((Get-Item $path).Length / 1KB)
         Write-Host "==> $bin  ($kb KB)" -ForegroundColor Green
         Write-Host "==> flash with:  $flash" -ForegroundColor Green

@@ -11,6 +11,8 @@ menu "batmon remote display"
 
         config REMOTE_BOARD_CYD
             bool "ESP32-2432S028R, single micro-USB (ILI9341)  [cyd]"
+        config REMOTE_BOARD_CYDIPS
+            bool "ESP32-2432S028R, 2.8in IPS panel  [cydips]"
         config REMOTE_BOARD_CYD2USB
             bool "ESP32-2432S028R, USB-C + micro-USB (ST7789)  [cyd2usb]"
         config REMOTE_BOARD_JC2432W328R

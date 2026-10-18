@@ -1467,9 +1467,9 @@ The JBD service above is not implemented yet. Everything today speaks the NUS co
   share one serialised write path, because Android refuses a second GATT write while one
   is in flight. It dials the chosen board directly and redials after any drop, rather
   than scanning first: a board picked from a list is already known.
-- **Remote display** (`remote/`), a second firmware for four ESP32 display boards, the
-  board a build-time choice (`remote/main/board.h`): the ESP32-2432S028 in its ILI9341 and
-  ST7789 variants, the GUITION JC2432W328R, and the 1.9" GUITION JC1732W319, which has no
+- **Remote display** (`remote/`), a second firmware for five ESP32 display boards, the
+  board a build-time choice (`remote/main/board.h`): the ESP32-2432S028 in its ILI9341,
+  IPS and ST7789 variants, the GUITION JC2432W328R, and the 1.9" GUITION JC1732W319, which has no
   touch. All are a classic ESP32 driving an SPI panel. It is a NimBLE central. Its IO
   capability is keyboard-only, and against the monitor's display-only one that makes LE
   Secure Connections use passkey entry: the monitor shows six digits and the remote's
